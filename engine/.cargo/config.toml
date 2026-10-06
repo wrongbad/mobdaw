@@ -1,0 +1,5 @@
+# Wasm SIMD is baseline in every current browser. This lets LLVM auto-vectorize the DSP loops.
+# NOTE: cargo finds this file relative to the *current directory*, not --manifest-path, so the
+# root `npm run build:wasm` also passes `--config engine/.cargo/config.toml` explicitly.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

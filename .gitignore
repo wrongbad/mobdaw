@@ -3,3 +3,5 @@ data/
 dist/
 .env
 *.log
+engine/target/
+client/src/audio/wasm/

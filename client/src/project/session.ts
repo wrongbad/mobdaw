@@ -18,8 +18,9 @@ export function openSession(projectId: string, me: Me) {
   awareness.setLocalStateField('user', user)
   // Local edits have origin null (tracked by default); remote updates carry the provider as origin.
   const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
+  const synced = new Promise<void>((resolve) => (provider.synced ? resolve() : provider.on('synced', () => resolve())))
   return {
-    projectId, doc, provider, awareness, undo, user,
+    projectId, doc, provider, awareness, undo, user, synced,
     setLocal: (patch: Partial<Omit<AwarenessState, 'user'>>) => {
       for (const [k, v] of Object.entries(patch)) awareness.setLocalStateField(k, v)
     },

@@ -2,29 +2,31 @@ import { addSample, type SampleMeta, type UploadUrlRequest } from '@mobdaw/share
 import { createSHA256 } from 'hash-wasm'
 import type * as Y from 'yjs'
 import { api, ApiError } from './api'
-import { getCtx } from './audio/engine'
+import { getCtx } from './audio/context'
 
 const mem = new Map<string, AudioBuffer>()
 const inflight = new Map<string, Promise<AudioBuffer>>()
 const CACHE = 'mobdaw-samples'
 const key = (hash: string) => new Request(`/sample/${hash}`)
-
-export const peekBuffer = (hash: string) => mem.get(hash)
+const memKey = (hash: string, rate: number) => `${rate}:${hash}`
 
 async function cacheOpen() {
   return typeof caches !== 'undefined' ? caches.open(CACHE).catch(() => null) : null
 }
 
-async function decode(bytes: ArrayBuffer, hash: string) {
-  const buf = await getCtx().decodeAudioData(bytes)
-  mem.set(hash, buf)
+// decodeAudioData resamples to the context's rate, so decoding on the project-rate context
+// yields buffers at the project rate (temporary path until the milestone-3 import pipeline).
+async function decode(bytes: ArrayBuffer, hash: string, rate: number) {
+  const buf = await getCtx(rate).decodeAudioData(bytes)
+  mem.set(memKey(hash, rate), buf)
   return buf
 }
 
-export function getSampleBuffer(projectId: string, hash: string): Promise<AudioBuffer> {
-  const hit = mem.get(hash)
+export function getSampleBuffer(projectId: string, hash: string, rate: number): Promise<AudioBuffer> {
+  const mk = memKey(hash, rate)
+  const hit = mem.get(mk)
   if (hit) return Promise.resolve(hit)
-  let p = inflight.get(hash)
+  let p = inflight.get(mk)
   if (!p) {
     p = (async () => {
       const cache = await cacheOpen()
@@ -35,9 +37,9 @@ export function getSampleBuffer(projectId: string, hash: string): Promise<AudioB
         if (!res.ok) throw new Error(`sample ${hash.slice(0, 8)}: HTTP ${res.status}`)
         await cache?.put(key(hash), res.clone()).catch(() => {})
       }
-      return decode(await res.arrayBuffer(), hash)
-    })().finally(() => inflight.delete(hash))
-    inflight.set(hash, p)
+      return decode(await res.arrayBuffer(), hash, rate)
+    })().finally(() => inflight.delete(mk))
+    inflight.set(mk, p)
   }
   return p
 }

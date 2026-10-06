@@ -2,13 +2,20 @@
   "name": "mobdaw",
   "private": true,
   "type": "module",
-  "workspaces": ["shared", "server", "client"],
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
   "scripts": {
+    "predev": "npm run build:wasm",
     "dev": "concurrently -n server,client -c blue,green \"npm run dev -w @mobdaw/server\" \"npm run dev -w @mobdaw/client --if-present\"",
     "build": "npm run build -w @mobdaw/client --if-present",
-    "test": "npm test -w @mobdaw/server && npm test -w @mobdaw/client --if-present",
+    "test": "npm run test:dsp && npm run build:wasm && npm test -w @mobdaw/server && npm test -w @mobdaw/client --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "admin": "npm run admin -w @mobdaw/server --"
+    "admin": "npm run admin -w @mobdaw/server --",
+    "build:wasm": "PATH=\"$HOME/.cargo/bin:$PATH\" cargo build --release --target wasm32-unknown-unknown -p engine --manifest-path engine/Cargo.toml --config engine/.cargo/config.toml && mkdir -p client/src/audio/wasm && cp engine/target/wasm32-unknown-unknown/release/engine.wasm client/src/audio/wasm/engine.wasm",
+    "test:dsp": "PATH=\"$HOME/.cargo/bin:$PATH\" cargo test --manifest-path engine/Cargo.toml --workspace -- --nocapture"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",

@@ -1,29 +1,44 @@
-// Yjs document schema for a project. Times are in seconds.
-//   meta    Y.Map  { bpm }
-//   tracks  Y.Map  trackId -> Y.Map { id, name, order, gain, muted }
-//   clips   Y.Map  clipId  -> Y.Map { id, trackId, sampleHash, start, offset, duration, gain }
-//   samples Y.Map  hash    -> plain object SampleMeta
+// Yjs document schema v2 (docs/engine.md §3). Every map is flat and keyed by id; children
+// reference their parent by id; positions are integer samples at meta.sampleRate.
+//   meta    Y.Map  { schemaVersion, sampleRate, guideBpm? }
+//   tracks  Y.Map  id -> Y.Map Track
+//   clips   Y.Map  id -> Y.Map AudioClip | MidiClip
+//   notes   Y.Map  id -> Y.Map Note
+//   devices Y.Map  id -> Y.Map Device (params: nested Y.Map paramId -> number)
+//   lanes, points  automation (types only for now)
+//   samples Y.Map  hash -> plain object SampleMeta
 import * as Y from 'yjs'
+import { DEVICES } from './devices.ts'
 
-export type Track = { id: string; name: string; order: number; gain: number; muted: boolean }
-export type Clip = {
-  id: string
-  trackId: string
-  sampleHash: string
-  start: number
-  offset: number
-  duration: number
-  gain: number
+export const SCHEMA_VERSION = 2
+export const DEFAULT_SAMPLE_RATE = 48000
+export const DEFAULT_PPQ = 960
+export const DEFAULT_MIDI_BPM = 120
+
+export type TrackKind = 'audio' | 'midi'
+export type Track = { id: string; name: string; kind: TrackKind; order: number; gain: number; pan: number; muted: boolean; soloed: boolean }
+/** 0 equal-power, 1 linear, 2 s-curve */
+export type FadeShape = 0 | 1 | 2
+export type AudioClip = {
+  id: string; trackId: string; kind: 'audio'
+  start: number; length: number; sourceHash: string; sourceOffset: number
+  gain: number; fadeIn: number; fadeOut: number; fadeShape: FadeShape
 }
+export type MidiClip = { id: string; trackId: string; kind: 'midi'; start: number; bpm: number; ppq: number; lengthTicks: number }
+export type Clip = AudioClip | MidiClip
+export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number }
+export type Device = { id: string; trackId: string; type: number; order: number; bypass: boolean; params: Record<string, number> }
+export type Lane = { id: string; trackId: string; deviceId: string; paramId: number }
+export type Point = { id: string; laneId: string; pos: number; value: number; curve: 'linear' | 'hold' }
 export type SampleMeta = { hash: string; name: string; duration: number; size: number; mime: string }
 
 export type AwarenessState = {
   user: { email: string; name: string; color: string }
   playhead?: number | null
   selection?: string[]
+  /** In-progress parameter drag; collaborators apply it as a transient override. */
+  dragging?: { deviceId: string; paramId: number; value: number } | null
 }
-
-export const DEFAULT_BPM = 120
 
 export const docName = (projectId: string) => `project:${projectId}`
 
@@ -40,25 +55,34 @@ export function userColor(email: string): string {
   return `hsl(${h % 360} 65% 62%)`
 }
 
+type YM = Y.Map<unknown>
 export const metaMap = (doc: Y.Doc) => doc.getMap<unknown>('meta')
-export const tracksMap = (doc: Y.Doc) => doc.getMap<Y.Map<unknown>>('tracks')
-export const clipsMap = (doc: Y.Doc) => doc.getMap<Y.Map<unknown>>('clips')
+export const tracksMap = (doc: Y.Doc) => doc.getMap<YM>('tracks')
+export const clipsMap = (doc: Y.Doc) => doc.getMap<YM>('clips')
+export const notesMap = (doc: Y.Doc) => doc.getMap<YM>('notes')
+export const devicesMap = (doc: Y.Doc) => doc.getMap<YM>('devices')
+export const lanesMap = (doc: Y.Doc) => doc.getMap<YM>('lanes')
+export const pointsMap = (doc: Y.Doc) => doc.getMap<YM>('points')
 export const samplesMap = (doc: Y.Doc) => doc.getMap<SampleMeta>('samples')
 
 /** Types to pass to `new Y.UndoManager(undoScope(doc), { trackedOrigins })`. */
-export const undoScope = (doc: Y.Doc) => [metaMap(doc), tracksMap(doc), clipsMap(doc)]
+export const undoScope = (doc: Y.Doc) => [
+  metaMap(doc), tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), lanesMap(doc), pointsMap(doc),
+]
 
-const toObj = <T>(m: Y.Map<unknown>) => m.toJSON() as T
-
-export function getTracks(doc: Y.Doc): Track[] {
-  return [...tracksMap(doc).values()].map((m) => toObj<Track>(m)).sort((a, b) => a.order - b.order)
-}
-export function getClips(doc: Y.Doc): Clip[] {
-  return [...clipsMap(doc).values()].map((m) => toObj<Clip>(m))
-}
+const all = <T>(m: Y.Map<YM>) => [...m.values()].map((v) => v.toJSON() as T)
+export const getTracks = (doc: Y.Doc) => all<Track>(tracksMap(doc)).sort((a, b) => a.order - b.order)
+export const getClips = (doc: Y.Doc) => all<Clip>(clipsMap(doc)).filter((c) => c.kind === 'audio' || c.kind === 'midi')
+export const getNotes = (doc: Y.Doc) => all<Note>(notesMap(doc))
+export const getDevices = (doc: Y.Doc) => all<Device>(devicesMap(doc)).sort((a, b) => a.order - b.order)
 export const getSamples = (doc: Y.Doc): Record<string, SampleMeta> => samplesMap(doc).toJSON()
-export const getBpm = (doc: Y.Doc): number => (metaMap(doc).get('bpm') as number | undefined) ?? DEFAULT_BPM
-export const setBpm = (doc: Y.Doc, bpm: number) => metaMap(doc).set('bpm', bpm)
+export const getSampleRate = (doc: Y.Doc): number => (metaMap(doc).get('sampleRate') as number | undefined) ?? DEFAULT_SAMPLE_RATE
+
+/** MIDI tick -> sample offset within the clip (docs/engine.md §2). */
+export const ticksToSamples = (ticks: number, bpm: number, ppq: number, rate: number) =>
+  Math.round((ticks * 60 * rate) / (bpm * ppq))
+export const clipLength = (c: Clip, rate: number) =>
+  c.kind === 'audio' ? c.length : ticksToSamples(c.lengthTicks, c.bpm, c.ppq, rate)
 
 /** Fractional order value that sorts between `before` and `after` (either may be undefined). */
 export function orderBetween(before?: number, after?: number): number {
@@ -68,57 +92,161 @@ export function orderBetween(before?: number, after?: number): number {
   return (before + after) / 2
 }
 
-export function addTrack(doc: Y.Doc, name: string, order?: number): string {
-  const id = newId()
-  const tracks = getTracks(doc)
-  const t: Track = { id, name, order: order ?? orderBetween(tracks.at(-1)?.order), gain: 1, muted: false }
-  doc.transact(() => tracksMap(doc).set(id, new Y.Map(Object.entries(t))))
-  return id
+const toMap = (o: object) => new Y.Map<unknown>(Object.entries(o))
+const patchMap = (doc: Y.Doc, m: YM | undefined, patch: object) => {
+  if (m) doc.transact(() => Object.entries(patch).forEach(([k, v]) => m.set(k, v)))
 }
 
-export function updateTrack(doc: Y.Doc, id: string, patch: Partial<Omit<Track, 'id'>>) {
-  const m = tracksMap(doc).get(id)
-  if (!m) return
-  doc.transact(() => Object.entries(patch).forEach(([k, v]) => m.set(k, v)))
+// --- tracks
+export function addTrack(doc: Y.Doc, name: string, kind: TrackKind = 'audio', order?: number): string {
+  const id = newId()
+  const t: Track = { id, name, kind, order: order ?? orderBetween(getTracks(doc).at(-1)?.order), gain: 1, pan: 0, muted: false, soloed: false }
+  doc.transact(() => tracksMap(doc).set(id, toMap(t)))
+  return id
 }
+export const updateTrack = (doc: Y.Doc, id: string, patch: Partial<Omit<Track, 'id'>>) => patchMap(doc, tracksMap(doc).get(id), patch)
 
 export function deleteTrack(doc: Y.Doc, id: string) {
   doc.transact(() => {
-    for (const c of getClips(doc)) if (c.trackId === id) clipsMap(doc).delete(c.id)
+    for (const c of getClips(doc)) if (c.trackId === id) deleteClip(doc, c.id)
+    for (const d of getDevices(doc)) if (d.trackId === id) deleteDevice(doc, d.id)
     tracksMap(doc).delete(id)
   })
 }
 
+// --- clips
+export function addAudioClip(
+  doc: Y.Doc,
+  c: Pick<AudioClip, 'trackId' | 'sourceHash' | 'start' | 'length'> & Partial<Omit<AudioClip, 'id' | 'kind'>>,
+): string {
+  const id = newId()
+  const clip: AudioClip = { sourceOffset: 0, gain: 1, fadeIn: 0, fadeOut: 0, fadeShape: 0, ...c, id, kind: 'audio' }
+  doc.transact(() => clipsMap(doc).set(id, toMap(clip)))
+  return id
+}
+
+export function addMidiClip(doc: Y.Doc, c: Pick<MidiClip, 'trackId' | 'start'> & Partial<Omit<MidiClip, 'id' | 'kind'>>): string {
+  const id = newId()
+  const ppq = c.ppq ?? DEFAULT_PPQ
+  const clip: MidiClip = { bpm: DEFAULT_MIDI_BPM, ppq, lengthTicks: 16 * ppq, ...c, id, kind: 'midi' }
+  doc.transact(() => clipsMap(doc).set(id, toMap(clip)))
+  return id
+}
+
+export const updateClip = (doc: Y.Doc, id: string, patch: Partial<Omit<AudioClip, 'id' | 'kind'> & Omit<MidiClip, 'id' | 'kind'>>) =>
+  patchMap(doc, clipsMap(doc).get(id), patch)
+
+export function deleteClip(doc: Y.Doc, id: string) {
+  doc.transact(() => {
+    for (const n of getNotes(doc)) if (n.clipId === id) notesMap(doc).delete(n.id)
+    clipsMap(doc).delete(id)
+  })
+}
+
+/** Split an audio clip at timeline sample `at`; returns the new (right-hand) clip id, or null. */
+export function splitClip(doc: Y.Doc, id: string, at: number): string | null {
+  const c = clipsMap(doc).get(id)?.toJSON() as Clip | undefined
+  if (c?.kind !== 'audio' || at <= c.start || at >= c.start + c.length) return null
+  const left = at - c.start
+  let right = ''
+  doc.transact(() => {
+    right = addAudioClip(doc, { ...c, start: at, length: c.length - left, sourceOffset: c.sourceOffset + left, fadeIn: 0 })
+    updateClip(doc, id, { length: left, fadeOut: 0 })
+  })
+  return right
+}
+
+// --- notes
+export function addNote(doc: Y.Doc, n: Omit<Note, 'id'>): string {
+  const id = newId()
+  doc.transact(() => notesMap(doc).set(id, toMap({ ...n, id })))
+  return id
+}
+export const updateNote = (doc: Y.Doc, id: string, patch: Partial<Omit<Note, 'id'>>) => patchMap(doc, notesMap(doc).get(id), patch)
+export const deleteNote = (doc: Y.Doc, id: string) => doc.transact(() => notesMap(doc).delete(id))
+
+// --- devices
+/** Append a device to a track's chain with default params. */
+export function addDevice(doc: Y.Doc, trackId: string, type: number): string {
+  const id = newId()
+  const order = orderBetween(getDevices(doc).filter((d) => d.trackId === trackId).at(-1)?.order)
+  doc.transact(() => {
+    const m = toMap({ id, trackId, type, order, bypass: false })
+    const params = new Y.Map<number>()
+    for (const p of DEVICES[type]?.params ?? []) params.set(String(p.id), p.def)
+    m.set('params', params)
+    devicesMap(doc).set(id, m)
+  })
+  return id
+}
+export const updateDevice = (doc: Y.Doc, id: string, patch: Partial<Pick<Device, 'order' | 'bypass'>>) =>
+  patchMap(doc, devicesMap(doc).get(id), patch)
+export function setParam(doc: Y.Doc, deviceId: string, paramId: number, value: number) {
+  const params = devicesMap(doc).get(deviceId)?.get('params') as Y.Map<number> | undefined
+  params?.set(String(paramId), value)
+}
+export function deleteDevice(doc: Y.Doc, id: string) {
+  doc.transact(() => {
+    for (const l of all<Lane>(lanesMap(doc))) if (l.deviceId === id) deleteLane(doc, l.id)
+    devicesMap(doc).delete(id)
+  })
+}
+export function deleteLane(doc: Y.Doc, id: string) {
+  doc.transact(() => {
+    for (const p of all<Point>(pointsMap(doc))) if (p.laneId === id) pointsMap(doc).delete(p.id)
+    lanesMap(doc).delete(id)
+  })
+}
+
+// --- samples
 export function addSample(doc: Y.Doc, s: SampleMeta) {
   samplesMap(doc).set(s.hash, s)
 }
 
-export function addClip(
-  doc: Y.Doc,
-  c: Pick<Clip, 'trackId' | 'sampleHash' | 'start' | 'duration'> & Partial<Pick<Clip, 'offset' | 'gain'>>,
-): string {
-  const id = newId()
-  const clip: Clip = { id, offset: 0, gain: 1, ...c }
-  doc.transact(() => clipsMap(doc).set(id, new Y.Map(Object.entries(clip))))
-  return id
+/**
+ * Delete entities whose parent no longer exists (left by concurrent edits, e.g. A adds a
+ * note while B deletes its clip). Cheap enough to run opportunistically before an edit.
+ */
+export function sweepOrphans(doc: Y.Doc) {
+  doc.transact(() => {
+    const tracks = tracksMap(doc), clips = clipsMap(doc)
+    for (const c of getClips(doc)) if (!tracks.has(c.trackId)) deleteClip(doc, c.id)
+    for (const d of getDevices(doc)) if (!tracks.has(d.trackId)) deleteDevice(doc, d.id)
+    for (const n of getNotes(doc)) if (!clips.has(n.clipId)) notesMap(doc).delete(n.id)
+    for (const l of all<Lane>(lanesMap(doc))) if (!devicesMap(doc).has(l.deviceId)) deleteLane(doc, l.id)
+  })
 }
 
-export function updateClip(doc: Y.Doc, id: string, patch: Partial<Omit<Clip, 'id'>>) {
-  const m = clipsMap(doc).get(id)
-  if (!m) return
-  doc.transact(() => Object.entries(patch).forEach(([k, v]) => m.set(k, v)))
-}
-
-/** Move a clip in time and optionally to another track. */
-export function moveClip(doc: Y.Doc, id: string, start: number, trackId?: string) {
-  updateClip(doc, id, trackId ? { start, trackId } : { start })
-}
-
-/** Change the clip's duration (right-edge trim) and optionally its source offset. */
-export function trimClip(doc: Y.Doc, id: string, duration: number, offset?: number) {
-  updateClip(doc, id, offset == null ? { duration } : { duration, offset })
-}
-
-export function deleteClip(doc: Y.Doc, id: string) {
-  clipsMap(doc).delete(id)
+// --- migration
+/**
+ * v1 (seconds, no kind) -> v2 (samples). Runs when meta.schemaVersion is absent. Every write
+ * is a pure function of the old values, so concurrent clients running it converge to the
+ * same state. Origin 'migrate' keeps it out of the undo stack.
+ */
+export function migrateToV2(doc: Y.Doc) {
+  const meta = metaMap(doc)
+  if (meta.get('schemaVersion') != null) return
+  const sr = DEFAULT_SAMPLE_RATE
+  const smp = (sec: unknown) => Math.round(Number(sec) * sr)
+  doc.transact(() => {
+    meta.set('sampleRate', sr)
+    for (const t of tracksMap(doc).values()) {
+      if (t.get('kind') == null) t.set('kind', 'audio')
+      if (t.get('pan') == null) t.set('pan', 0)
+      if (t.get('soloed') == null) t.set('soloed', false)
+    }
+    for (const c of clipsMap(doc).values()) {
+      if (c.get('kind') != null) continue
+      c.set('kind', 'audio')
+      c.set('sourceHash', c.get('sampleHash'))
+      c.set('start', smp(c.get('start')))
+      c.set('length', smp(c.get('duration')))
+      c.set('sourceOffset', smp(c.get('offset')))
+      c.set('fadeIn', 0)
+      c.set('fadeOut', 0)
+      c.set('fadeShape', 0)
+      for (const k of ['sampleHash', 'duration', 'offset']) c.delete(k)
+    }
+    meta.set('schemaVersion', SCHEMA_VERSION)
+  }, 'migrate')
 }

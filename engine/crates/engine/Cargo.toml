@@ -1,0 +1,13 @@
+[package]
+name = "engine"
+description = "Real-time engine compiled to engine.wasm (plain extern \"C\" API, no wasm-bindgen)."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+# cdylib -> engine.wasm. rlib lets `cargo test` link the crate natively.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dsp = { path = "../dsp" }

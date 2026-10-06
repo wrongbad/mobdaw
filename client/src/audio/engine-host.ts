@@ -1,0 +1,69 @@
+// Main-thread side of the wasm engine: loads engine.wasm and the worklet processor, and
+// exposes the raw call surface of docs/engine-api.md plus the M1 test voice's params.
+import wasmUrl from './wasm/engine.wasm?url'
+import processorUrl from './engine-processor.ts?worker&url'
+
+/** Test-voice param ids; must match engine/crates/engine/src/test_voice.rs. */
+export const P = { gate: 0, freq: 1, rolloff: 2, cutoff: 3, damping: 4, gain: 5 } as const
+
+// We ship the raw wasm *bytes* to the worklet (processorOptions are structured-cloned) and
+// compile there with `new WebAssembly.Module(bytes)`. Cloning a compiled Module into a
+// worklet is less portable than cloning bytes.
+let wasmBytes: Promise<ArrayBuffer> | null = null
+const loadWasm = () => (wasmBytes ??= fetch(wasmUrl).then((r) => {
+  if (!r.ok) throw new Error(`engine.wasm: HTTP ${r.status}`)
+  return r.arrayBuffer()
+}))
+
+const modulesAdded = new WeakMap<BaseAudioContext, Promise<void>>()
+const addProcessor = (ctx: AudioContext) => {
+  let p = modulesAdded.get(ctx)
+  if (!p) modulesAdded.set(ctx, (p = ctx.audioWorklet.addModule(processorUrl)))
+  return p
+}
+
+export class EngineHost {
+  private constructor(readonly node: AudioWorkletNode) {}
+
+  /** Create the engine node (not yet connected). Rejects with a readable error on failure. */
+  static async create(ctx: AudioContext): Promise<EngineHost> {
+    const [bytes] = await Promise.all([loadWasm(), addProcessor(ctx)])
+    // Each node gets its own copy of the bytes (cloned, not transferred, so we can reuse them).
+    const node = new AudioWorkletNode(ctx, 'mobdaw-engine', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      processorOptions: { wasmBytes: bytes },
+    })
+    await new Promise<void>((resolve, reject) => {
+      node.port.onmessage = (ev) => ev.data?.type === 'ready' && resolve()
+      node.onprocessorerror = () => reject(new Error('engine processor failed to start (see console)'))
+    })
+    node.onprocessorerror = (e) => console.error('engine processor error', e)
+    const host = new EngineHost(node)
+    node.port.onmessage = (ev) => ev.data?.type === 'pos' && host.onpos?.(ev.data)
+    return host
+  }
+
+  /** Called with the processor's {type:'pos'} messages. */
+  onpos: ((m: { pos: number; playing: boolean }) => void) | null = null
+
+  /** Call `exports[fn](enginePtr, ...args)` in the worklet; calls apply in order. */
+  call(fn: string, args: number[] = []) {
+    this.node.port.postMessage({ type: 'call', fn, args })
+  }
+
+  /** Hand decoded planar PCM to the engine; the buffers are transferred, not copied. */
+  source(h: number, channels: Float32Array[], frames: number) {
+    this.node.port.postMessage({ type: 'source', h, channels, frames }, channels.map((c) => c.buffer))
+  }
+
+  setParam(id: number, value: number) {
+    this.node.port.postMessage({ type: 'param', id, value })
+  }
+
+  dispose() {
+    this.node.disconnect()
+    this.node.port.close()
+  }
+}

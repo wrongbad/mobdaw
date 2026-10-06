@@ -39,7 +39,7 @@ main.center { margin: auto; text-align: center; }
 .corner, .head { width: 140px; flex: none; position: sticky; left: 0; z-index: 2; background: var(--bg); }
 .ruler-body { position: relative; height: 100%; }
 .tick { position: absolute; top: 4px; padding-left: 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
-.lane { display: flex; height: 72px; border-bottom: 1px solid var(--line); }
+
 .head { padding: 8px 12px; border-right: 1px solid var(--line); }
 .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
 .rename { width: 100%; padding: 0 4px; }
@@ -64,3 +64,40 @@ main.center { margin: auto; text-align: center; }
 .members .row { margin: 6px 0 0; }
 .hint { padding: 48px 12px; text-align: center; font-size: 13px; }
 .clip.unplayable { opacity: 0.55; border-style: dashed; }
+
+/* lanes: header, clip row, FX chain, note editor */
+.lane { border-bottom: 1px solid var(--line); }
+.lane-row { display: flex; height: 72px; }
+.head .name { padding-right: 14px; }
+.head .del { position: absolute; top: 0; right: 0; margin: 0; padding: 0 5px; width: 18px; height: 18px; line-height: 16px; border-radius: 0; border-width: 0 0 1px 1px; font-size: 13px; color: var(--dim); }
+.head .del:hover { color: #ff7a7a; }
+.clip.midi { background: #2f4a3f; border-color: #3f7a60; }
+.clip.midi.sel { background: #386052; border-color: var(--accent); }
+.clip .mark { position: absolute; height: 2px; background: #9fe0c0; pointer-events: none; }
+.fx { position: sticky; left: 140px; width: calc(100vw - 160px); display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; align-items: flex-start; }
+.fx[hidden] { display: none; }
+.card { width: 200px; padding: 6px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+.card.bypassed { opacity: 0.55; }
+.card-head { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+.card button, .note-ed button, .add-fx { padding: 0 6px; font-size: 11px; line-height: 18px; }
+.card button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.card .prm { display: grid; grid-template-columns: 62px 1fr 56px; gap: 6px; align-items: center; }
+.card .prm input, .card .prm select { padding: 0; min-width: 0; accent-color: var(--accent); }
+.card .prm select { grid-column: 2 / 4; padding: 1px 4px; }
+.card .out { text-align: right; font-size: 11px; }
+.add-fx { color: var(--dim); }
+.popover { position: fixed; z-index: 10; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
+.popover button { border: 0; text-align: left; background: none; padding: 4px 12px; }
+.popover button:hover { background: var(--line); }
+.ctl button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.note-ed { position: sticky; left: 140px; width: calc(100vw - 160px); padding: 0 8px 8px; }
+.ne-head { display: flex; gap: 12px; align-items: center; padding: 4px 0; font-size: 12px; }
+.ne-head input { width: 64px; padding: 1px 4px; }
+.ne-scroll { height: 200px; overflow: auto; border: 1px solid var(--line); background: var(--panel); }
+.ne-grid { position: relative; cursor: crosshair;
+  background-image: linear-gradient(to right, #555 1px, transparent 1px), linear-gradient(to right, #333 1px, transparent 1px), linear-gradient(to bottom, #262629 1px, transparent 1px);
+  background-size: 192px 100%, 48px 100%, 100% 10px; }
+.ne-c { position: absolute; left: 2px; font-size: 9px; color: var(--dim); pointer-events: none; transform: translateY(-1px); }
+.note { position: absolute; height: 9px; background: #5f8f7a; border-radius: 2px; cursor: grab; }
+.note.sel { background: var(--accent); }
+.note::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }

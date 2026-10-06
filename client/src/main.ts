@@ -8,6 +8,7 @@ import { projectsPage } from './pages/projects'
 import { adminPage } from './pages/admin'
 import { notInvitedPage } from './pages/notInvited'
 import { projectPage } from './project/page'
+import { engineTestPage } from './pages/engineTest'
 import type { Me } from '@mobdaw/shared'
 
 async function getMe(): Promise<Me | null> {
@@ -43,4 +44,5 @@ route(/^\/invite\/([^/]+)$/, ([token]) => void invitePage(token, getMe))
 route(/^\/projects$/, guarded((me) => projectsPage(me)))
 route(/^\/admin$/, guarded((me) => adminPage(me), { admin: true }))
 route(/^\/project\/([^/]+)$/, guarded((me, [id]) => projectPage(me, id)))
+route(/^\/engine-test$/, guarded((me) => engineTestPage(me))) // dev tool, linked from nowhere
 start('/projects')

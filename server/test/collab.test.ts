@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { addClip, addTrack, getClips, getTracks } from '@mobdaw/shared'
+import { addAudioClip, addTrack, getClips, getTracks } from '@mobdaw/shared'
 import { ADMIN, connect, login, startTest, until, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
@@ -38,7 +38,7 @@ describe('collab', () => {
     const b = connect(t.port, projectId, alice.token!)
     await until(() => a.provider.synced && b.provider.synced)
     const tid = addTrack(a.doc, 'Drums')
-    addClip(a.doc, { trackId: tid, sampleHash: 'h'.repeat(64), start: 1, duration: 2 })
+    addAudioClip(a.doc, { trackId: tid, sourceHash: 'h'.repeat(64), start: 48000, length: 96000 })
     await until(() => getClips(b.doc).length === 1)
     expect(getTracks(b.doc)[0].name).toBe('Drums')
     addTrack(b.doc, 'Bass')

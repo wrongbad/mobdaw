@@ -1,7 +1,6 @@
 import type { Me } from '@mobdaw/shared'
 import { api } from '../api'
 import { h, mount } from '../dom'
-import { engine } from '../audio/engine'
 import { mountTimeline } from '../ui/timeline'
 import { openSession } from './session'
 
@@ -31,7 +30,6 @@ export function projectPage(me: Me, id: string) {
     h('a', { href: '#/projects' }, 'back'))))
   return () => {
     dead = true
-    engine.stop()
     cleanup()
   }
 }

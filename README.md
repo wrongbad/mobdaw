@@ -3,6 +3,9 @@
 A collaborative web DAW: invite-only, real-time editing of the same project. See `docs/spec.md`.
 
 ## Quick start
+Prerequisites: Node 24, and Rust via [rustup](https://rustup.rs) with the wasm target
+(`rustup target add wasm32-unknown-unknown`). The audio engine (`engine/`, see `docs/engine.md`)
+is compiled to wasm by `npm run build:wasm`, which `npm run dev` and the client build run first.
 ```
 npm install
 cp .env.example .env    # set ADMIN_EMAILS=you@x.com
@@ -15,7 +18,9 @@ The API and the `/collab` WebSocket share one port (8787); Vite proxies both in 
 
 ## Scripts
 - `npm run dev` runs the server (watch mode) and the client dev server.
-- `npm test` / `npm run typecheck`
+- `npm test` (Rust `dsp` tests, then server tests) / `npm run typecheck`
+- `npm run build:wasm` builds `engine/` to `client/src/audio/wasm/engine.wasm` (gitignored);
+  `npm run test:dsp` runs the Rust tests alone. Dev playground: `#/engine-test` (not linked).
 - `npm run admin -- create-invite [--days N]`, `list-invites`, `add-user <email>`,
   `tree` (users, owned projects with members/roles, libraries, totals),
   `audit [--fix]` (reconcile storage with the DB: leaked objects, broken rows, unreferenced
@@ -24,7 +29,7 @@ The API and the `/collab` WebSocket share one port (8787); Vite proxies both in 
 
 ## Layout
 `shared/` Yjs schema helpers + API types (consumed as TS source) · `server/` Hono API +
-Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `deploy/` Caddy, systemd, AWS notes.
+Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Rust workspace (`dsp` lib, `engine` wasm) · `deploy/` Caddy, systemd, AWS notes.
 
 ## Notes
 - `node:sqlite` is built into Node 24; it may print an ExperimentalWarning.
