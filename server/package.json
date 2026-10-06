@@ -1,0 +1,32 @@
+{
+  "name": "@mobdaw/server",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../.env --watch --import tsx src/main.ts",
+    "start": "node --env-file-if-exists=../.env --import tsx src/main.ts",
+    "admin": "node --env-file-if-exists=../.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@mobdaw/shared": "*",
+    "@hocuspocus/server": "latest",
+    "@hocuspocus/extension-database": "latest",
+    "@hono/node-server": "^1.13.0",
+    "hono": "^4.6.0",
+    "google-auth-library": "^9.0.0",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/s3-request-presigner": "^3.600.0",
+    "yjs": "^13.6.0",
+    "tsx": "^4.19.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@hocuspocus/provider": "latest",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.0",
+    "vitest": "^3.0.0"
+  }
+}

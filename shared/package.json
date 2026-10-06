@@ -1,0 +1,9 @@
+{
+  "name": "@mobdaw/shared",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "exports": { ".": "./src/index.ts", "./schema": "./src/schema.ts", "./api": "./src/api.ts" },
+  "scripts": { "typecheck": "tsc -p . --noEmit" },
+  "dependencies": { "yjs": "^13.6.0" }
+}

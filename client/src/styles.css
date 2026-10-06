@@ -1,0 +1,66 @@
+:root {
+  --bg: #141416; --panel: #1b1b1e; --line: #2a2a2e; --fg: #d8d8dc; --dim: #85858c; --accent: #7aa2ff;
+  color-scheme: dark;
+  font: 14px/1.4 system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
+#app { height: 100%; display: flex; flex-direction: column; }
+a { color: var(--accent); text-decoration: none; cursor: pointer; }
+.dim { color: var(--dim); }
+.grow { flex: 1; }
+.error { color: #ff7a7a; }
+input, select, button {
+  font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 10px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+nav { display: flex; gap: 20px; align-items: center; padding: 14px 24px; }
+main { width: 100%; max-width: 640px; margin: 0 auto; padding: 24px; }
+main.center { margin: auto; text-align: center; }
+.card { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.card form { display: flex; flex-direction: column; gap: 10px; min-width: 260px; }
+.row { display: flex; gap: 10px; margin-bottom: 16px; }
+.row input { flex: 1; }
+.list { list-style: none; padding: 0; margin: 0; }
+.list li { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--line); }
+
+/* timeline */
+.timeline { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.bar { display: flex; gap: 16px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.bar[data-status="disconnected"] strong::after { content: ' (offline)'; color: var(--dim); font-weight: normal; }
+.time { font-variant-numeric: tabular-nums; color: var(--dim); }
+.presence { display: flex; gap: 6px; }
+.dot { width: 22px; height: 22px; border-radius: 50%; font-size: 10px; color: #111; display: grid; place-items: center; }
+.scroll { flex: 1; overflow: auto; min-height: 0; }
+.content { position: relative; min-width: 100%; }
+.ruler { display: flex; height: 24px; position: sticky; top: 0; z-index: 3; background: var(--bg); border-bottom: 1px solid var(--line); cursor: pointer; }
+.corner, .head { width: 140px; flex: none; position: sticky; left: 0; z-index: 2; background: var(--bg); }
+.ruler-body { position: relative; height: 100%; }
+.tick { position: absolute; top: 4px; padding-left: 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
+.lane { display: flex; height: 72px; border-bottom: 1px solid var(--line); }
+.head { padding: 8px 12px; border-right: 1px solid var(--line); }
+.name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
+.rename { width: 100%; padding: 0 4px; }
+.ctl { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.ctl button { padding: 0 6px; font-size: 11px; line-height: 18px; color: var(--dim); }
+.ctl button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.ctl input[type=range] { flex: 1; min-width: 0; padding: 0; accent-color: var(--accent); }
+.lane-body { position: relative; flex: none; height: 100%; }
+.clip {
+  position: absolute; top: 8px; bottom: 8px; border-radius: 6px; padding: 4px 8px; overflow: hidden;
+  white-space: nowrap; font-size: 12px; background: #2d3a5c; border: 1px solid #3f5287; cursor: grab; user-select: none;
+}
+.clip::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+.clip.sel { border-color: var(--accent); background: #364a78; }
+.add-track { display: block; padding: 10px 12px; font-size: 12px; color: var(--dim); position: sticky; left: 0; width: 140px; }
+.overlay { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.playhead, .remote-head { position: absolute; top: 0; bottom: 0; width: 1px; }
+.playhead { background: var(--fg); }
+.remote-head { opacity: .8; }
+:disabled { opacity: 0.4; cursor: default; }
+.members { flex-basis: 100%; font-size: 13px; }
+.members .row { margin: 6px 0 0; }
+.hint { padding: 48px 12px; text-align: center; font-size: 13px; }
+.clip.unplayable { opacity: 0.55; border-style: dashed; }

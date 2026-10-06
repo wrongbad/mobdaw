@@ -1,0 +1,16 @@
+# DOMAIN comes from the environment (e.g. DOMAIN=daw.example.com in Caddy's env).
+{$DOMAIN} {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy localhost:8787
+	}
+	handle /collab* {
+		reverse_proxy localhost:8787
+	}
+	handle {
+		root * /opt/mobdaw/client/dist
+		try_files {path} /index.html
+		file_server
+	}
+}
