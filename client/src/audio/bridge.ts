@@ -3,8 +3,8 @@
 // by id: present and parented -> upsert, otherwise -> remove. Command order never matters.
 import * as Y from 'yjs'
 import {
-  clipsMap, devicesMap, getClips, getDevices, getNotes, notesMap, samplesMap, tracksMap,
-  type AudioClip, type Clip, type Device, type MidiClip, type Note, type SampleMeta, type Track,
+  clipsMap, devicesMap, getClips, getDevices, getLoopers, getNotes, getPads, loopersMap, notesMap, padsMap, samplesMap, tracksMap,
+  type AudioClip, type Clip, type Device, type Looper, type MidiClip, type Pad, type Note, type SampleMeta, type Track,
 } from '@mobdaw/shared'
 
 export interface EngineSink {
@@ -16,23 +16,73 @@ export interface EngineSink {
 export type SourceLoader = (hash: string, meta: SampleMeta) => Promise<Float32Array[] | null>
 export type Drag = { deviceId: string; paramId: number; value: number }
 
-type Kind = 'track' | 'clip' | 'note' | 'device'
+/**
+ * A transport's position, as the main thread knows it: the engine reports now and then, and in
+ * between the position is extrapolated from the clock. The timeline and every preview use one.
+ */
+export class Clock {
+  private pos = 0
+  private playing = false
+  private posAt = 0
+  constructor(private rate: number, private now: () => number) {}
+  /** Start at `from` (default: where it stopped); returns the start position. */
+  play(from = this.pos) {
+    this.pos = from
+    this.playing = true
+    this.posAt = this.now()
+    return from
+  }
+  stop() {
+    this.pos = this.position()
+    this.playing = false
+  }
+  seek(pos: number) {
+    this.pos = pos
+    this.posAt = this.now()
+  }
+  /** An engine position report. */
+  report(m: { pos: number; playing: boolean }) {
+    this.pos = m.pos
+    this.playing = m.playing
+    this.posAt = this.now()
+  }
+  get isPlaying() {
+    return this.playing
+  }
+  position() {
+    return this.playing ? this.pos + ((this.now() - this.posAt) / 1000) * this.rate : this.pos
+  }
+}
+
+/** `source`: the soundscape's source audio straight through; `loops`: its loopers, continuously. */
+export type PreviewMode = 'source' | 'loops'
+export type PreviewTransport = {
+  readonly playing: boolean
+  position(): number
+  play(from?: number): void
+  stop(): void
+  seek(pos: number): void
+}
+
+type Kind = 'track' | 'clip' | 'note' | 'device' | 'looper' | 'pad'
 const key = (d: string, p: number) => `${d}:${p}`
 type Dirty = { all: boolean; fields: boolean; params: Set<string> }
 const ALL: Dirty = { all: true, fields: true, params: new Set() }
 
 export class Bridge {
   private handles: Record<Kind | 'source', Map<string, number>> = {
-    track: new Map(), clip: new Map(), note: new Map(), device: new Map(), source: new Map(),
+    track: new Map(), clip: new Map(), note: new Map(), device: new Map(), looper: new Map(), pad: new Map(), source: new Map(),
   }
   private next = 1 // never reused, shared by all kinds (unique per kind is all the contract needs)
   private requested = new Set<string>()
   private wanted = new Set<string>()
   private overrides = new Map<string, number>()
   private unobserve: (() => void)[] = []
-  private pos = 0
-  private playing = false
-  private posAt = 0
+  private clock: Clock
+  private previews = new Map<string, { h: number; clock: Clock }>()
+  private previewClocks = new Map<number, Clock>()
+  private heads = new Map<number, number>()
+  private headsAt = -Infinity
 
   constructor(
     private doc: Y.Doc,
@@ -50,7 +100,10 @@ export class Bridge {
     watch(clipsMap(doc), dirtyIds('clip'))
     watch(notesMap(doc), dirtyIds('note'))
     watch(devicesMap(doc), dirtyIds('device'))
+    watch(loopersMap(doc), dirtyIds('looper'))
+    watch(padsMap(doc), dirtyIds('pad'))
     watch(samplesMap(doc), () => [...this.wanted].forEach((h) => this.wantSource(h)))
+    this.clock = new Clock(rate, now)
     this.syncAll()
   }
 
@@ -59,34 +112,72 @@ export class Bridge {
   }
 
   // --- transport
-  play(from = this.pos) {
-    this.pos = from
-    this.playing = true
-    this.posAt = this.now()
-    this.sink.call('engine_play', from)
+  play(from?: number) {
+    this.sink.call('engine_play', this.clock.play(from))
   }
   stop() {
-    this.pos = this.position()
-    this.playing = false
+    this.clock.stop()
     this.sink.call('engine_stop')
   }
   seek(pos: number) {
-    this.pos = pos
-    this.posAt = this.now()
+    this.clock.seek(pos)
     this.sink.call('engine_seek', pos)
   }
   /** Engine -> main: {type:'pos'} message. */
   onPos(m: { pos: number; playing: boolean }) {
-    this.pos = m.pos
-    this.playing = m.playing
-    this.posAt = this.now()
+    this.clock.report(m)
   }
   get isPlaying() {
-    return this.playing
+    return this.clock.isPlaying
   }
   /** Transport position in samples, extrapolated between engine reports. */
   position() {
-    return this.playing ? this.pos + ((this.now() - this.posAt) / 1000) * this.rate : this.pos
+    return this.clock.position()
+  }
+
+  // --- previews: private transports on a soundscape track, independent of the timeline
+  preview(trackId: string, mode: PreviewMode): PreviewTransport {
+    const key = `${trackId}:${mode}`
+    let p = this.previews.get(key)
+    if (!p) {
+      const h = this.next++
+      p = { h, clock: new Clock(this.rate, this.now) }
+      this.previews.set(key, p)
+      this.previewClocks.set(h, p.clock)
+      this.sink.call('engine_preview_upsert', h, this.handle('track', trackId), mode === 'loops' ? 1 : 0)
+    }
+    const { h, clock } = p
+    return {
+      get playing() { return clock.isPlaying },
+      position: () => clock.position(),
+      play: (from) => this.sink.call('engine_preview_play', h, clock.play(from)),
+      stop: () => (clock.stop(), this.sink.call('engine_preview_stop', h)),
+      seek: (pos) => (clock.seek(pos), this.sink.call('engine_preview_seek', h, pos)),
+    }
+  }
+  /** Engine -> main: {type:'preview'} message. */
+  onPreviewPos(m: { h: number; pos: number; playing: boolean }) {
+    this.previewClocks.get(m.h)?.report(m)
+  }
+  /** Engine -> main: {type:'loopers'} message: the read heads (handle, source sample) of the sounding loopers. */
+  onLooperHeads(m: { heads: [number, number][] }) {
+    this.heads = new Map(m.heads)
+    this.headsAt = this.now()
+  }
+  /** Where a looper's read head is on the source tape (samples), or null while it isn't sounding. */
+  looperHead(id: string): number | null {
+    const h = this.handles.looper.get(id)
+    if (h == null || this.now() - this.headsAt > 250) return null // (stale: the engine stopped reporting)
+    return this.heads.get(h) ?? null
+  }
+  /** A removed track takes its previews with it (the engine handle would dangle). */
+  private dropPreviews(trackId: string) {
+    for (const [key, p] of this.previews) {
+      if (!key.startsWith(`${trackId}:`)) continue
+      this.sink.call('engine_preview_remove', p.h)
+      this.previews.delete(key)
+      this.previewClocks.delete(p.h)
+    }
   }
 
   // --- live params
@@ -122,6 +213,8 @@ export class Bridge {
     for (const c of getClips(this.doc)) this.upsertClip(c)
     for (const n of getNotes(this.doc)) this.upsertNote(n)
     for (const d of getDevices(this.doc)) this.upsertDevice(d, ALL)
+    for (const l of getLoopers(this.doc)) this.upsertLooper(l)
+    for (const p of getPads(this.doc)) this.upsertPad(p)
   }
 
   private reconcile(kind: Kind, evs: Y.YEvent<any>[]) {
@@ -141,7 +234,7 @@ export class Bridge {
   }
 
   private map(kind: Kind) {
-    return { track: tracksMap, clip: clipsMap, note: notesMap, device: devicesMap }[kind](this.doc)
+    return { track: tracksMap, clip: clipsMap, note: notesMap, device: devicesMap, looper: loopersMap, pad: padsMap }[kind](this.doc)
   }
 
   private upsertById(kind: Kind, id: string, d: Dirty = ALL): boolean {
@@ -151,6 +244,8 @@ export class Bridge {
       if (kind === 'track') ok = this.upsertTrack(v as Track)
       else if (kind === 'clip') ok = this.upsertClip(v as Clip)
       else if (kind === 'note') ok = this.upsertNote(v as Note)
+      else if (kind === 'looper') ok = this.upsertLooper(v as Looper)
+      else if (kind === 'pad') ok = this.upsertPad(v as Pad)
       else ok = this.upsertDevice(v as Device, d)
     }
     if (!ok) this.remove(kind, id)
@@ -161,6 +256,8 @@ export class Bridge {
     if (kind === 'track') {
       for (const c of getClips(this.doc)) if (c.trackId === id) this.upsertById('clip', c.id) && this.touchChildren('clip', c.id)
       for (const d of getDevices(this.doc)) if (d.trackId === id) this.upsertById('device', d.id)
+      for (const l of getLoopers(this.doc)) if (l.trackId === id) this.upsertById('looper', l.id)
+      for (const p of getPads(this.doc)) if (p.trackId === id) this.upsertById('pad', p.id)
     } else if (kind === 'clip') {
       for (const n of getNotes(this.doc)) if (n.clipId === id) this.upsertById('note', n.id)
     }
@@ -176,13 +273,15 @@ export class Bridge {
     const h = this.handles[kind].get(id)
     if (h == null) return
     this.handles[kind].delete(id)
-    const fn = { track: 'engine_track_remove', clip: 'engine_clip_remove', note: 'engine_note_remove', device: 'engine_device_remove' }[kind]
+    if (kind === 'track') this.dropPreviews(id)
+    const fn = { track: 'engine_track_remove', clip: 'engine_clip_remove', note: 'engine_note_remove', device: 'engine_device_remove', looper: 'engine_looper_remove', pad: 'engine_pad_remove' }[kind]
     this.sink.call(fn, h)
   }
 
   private upsertTrack(t: Track): boolean {
-    if (t.kind !== 'audio' && t.kind !== 'midi') return false
-    this.sink.call('engine_track_upsert', this.handle('track', t.id), t.kind === 'midi' ? 1 : 0, t.gain, t.pan, +t.muted, +t.soloed)
+    const code = { audio: 0, midi: 1, soundscape: 2 }[t.kind]
+    if (code == null) return false
+    this.sink.call('engine_track_upsert', this.handle('track', t.id), code, t.gain, t.pan, +t.muted, +t.soloed)
     return true
   }
 
@@ -199,6 +298,20 @@ export class Bridge {
       this.sink.call('engine_clip_audio_upsert', h, track, this.handle('source', a.sourceHash), a.start, a.length,
         a.sourceOffset, a.gain, a.fadeIn, a.fadeOut, a.fadeShape)
     } else return false
+    return true
+  }
+
+  private upsertLooper(l: Looper): boolean {
+    if (!tracksMap(this.doc).has(l.trackId)) return false
+    const h = this.handle('looper', l.id)
+    this.sink.call('engine_looper_upsert', h, this.handle('track', l.trackId), l.speed, l.start, l.length)
+    this.sink.call('engine_looper_mix', h, l.gain ?? 1, +(l.muted ?? false))
+    return true
+  }
+
+  private upsertPad(p: Pad): boolean {
+    if (!tracksMap(this.doc).has(p.trackId)) return false // orphan
+    this.sink.call('engine_pad_upsert', this.handle('pad', p.id), this.handle('track', p.trackId), p.start, p.length)
     return true
   }
 

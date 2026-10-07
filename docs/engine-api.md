@@ -65,6 +65,74 @@ engine_track_remove(e, h)       // also stops rendering its clips/devices (bridg
 - **Signal flow:** clips (audio) or instrument output (midi) → device chain in `order` →
   gain/pan → master sum.
 
+## Soundscape tracks
+```
+engine_track_upsert(..., kind = 2, ...)          // kind 2 = soundscape track
+engine_looper_upsert(e, h, track: u32, speed: f64, start: f64, length: f64)
+engine_looper_mix(e, h, gain: f32, muted: u32)  // level 0..2 (ramped), mute flag
+engine_looper_head(e, h) -> f64                 // read head on the source tape (samples), -1 while not sounding
+engine_looper_remove(e, h)
+engine_pad_upsert(e, h, track: u32, start: f64, length: f64)
+engine_pad_remove(e, h)
+```
+A soundscape track has two separate time worlds:
+- **Source time.** The track's audio clips are *not* played linearly. They form a **source
+  tape** (the sum of the clips with their gain, fades and offsets) read at arbitrary positions.
+  Clip `start`s are positions on that tape, unrelated to the timeline. Each track has 4 loopers
+  (slots); the engine doesn't care how many. A looper's `start`/`length` are its loop region **in
+  source time**; `length < 64` means no region (silent). `speed` is clamped to 0.1..4 (NaN
+  becomes 1).
+- **Timeline.** A **pad** is a free-time gate block (integer samples, no grid) that switches
+  *all* of a soundscape track's loopers on over `[start, start+length)` of the timeline. (Granular
+  per-looper scheduling is meant to come later, via automation.) A looper is silent unless a pad
+  of its track covers the current position. Pads may overlap: the latest-starting pad covering a
+  sample wins, and a later pad retriggers the loops. Pads on unknown tracks are stored but inactive.
+
+**Stateful playback, live speed.** Each looper has a read head with a *phase* (source samples into
+its region) that advances by the current speed every output sample and wraps at the region length;
+the output is the source tape at `region_start + phase`. A new `speed` takes effect immediately,
+but the speed in use glides toward it with a one-pole filter in the log2 domain (time constant
+150 ms), so changes are free of clicks and the read head never jumps. The loops **restart from the
+region start** (phase 0, speed snapped to its target) when a pad opens or retriggers, and on any
+jump of the timeline (play, seek). Reproducing exactly what was heard live when the transport is
+restarted is deliberately out of scope for now; it is meant to come from recorded automation.
+Each pad also fades the loops in and out over 5 ms at its edges.
+
+**Interpolation.** wade's `variable_resampler` (5th-order analog Chebyshev-I low-pass, 2 dB ripple,
+cutoff 1 rad per sample of the slower rate, Taylor-3 stepping), ported in `dsp::resampler`. The
+filter state is only a cache: after any jump (trigger, region edit, loop wrap) it is rebuilt by
+warming up over ~96 input samples (times `max(1, speed)`).
+
+**Seam.** For the first 10 ms (output time) after each loop wrap the output is an equal-power
+crossfade between the restarted loop and the audio continuing past the region end. (The first pass
+after a trigger starts clean: there is no earlier pass to fade from.)
+
+Editing a looper's region while it plays keeps the phase (folded into the new length) and re-reads
+from the new position; that is a jump, so expect a click. The 4 loopers are summed before the
+track's device chain.
+
+### Previews (private transports)
+```
+engine_preview_upsert(e, h, track: u32, mode: u32 /*0 source, 1 loops*/)
+engine_preview_remove(e, h)
+engine_preview_play(e, h, from_pos: f64)
+engine_preview_stop(e, h)
+engine_preview_seek(e, h, pos: f64)
+engine_preview_position(e, h) -> f64
+engine_preview_is_playing(e, h) -> u32
+```
+A preview is a transport of its own on a soundscape track, independent of the timeline transport
+and of other previews, so a soundscape can be auditioned without touching the main playhead.
+- **mode 0, source:** the track's source tape played straight through, 1:1, from the preview
+  position (source time).
+- **mode 1, loops:** every looper that has a region sounds continuously, no pads needed. Starting or
+  seeking the preview triggers the loops from their region starts, like a pad.
+- Both fade in over 5 ms at every (re)start or seek. The output goes into the track's scratch, so
+  its device chain, gain, pan, mute and solo apply. Previews on unknown or non-soundscape tracks
+  advance silently.
+- Handles are per kind like the others. The worklet reports `{ type: 'preview', h, pos, playing }`
+  (see below) for every preview that is playing.
+
 ## Audio clips
 ```
 engine_clip_audio_upsert(e, h, track: u32, source: u32, start: f64, length: f64,
@@ -158,3 +226,6 @@ engine_param_set(e, device: u32, param: u32, value: f32)   // smoothed per engin
 ## Processor → main
 `{ type: 'pos', pos: number, playing: boolean }`, sent about 30 times a second while
 playing, and once after stop or seek.
+
+`{ type: 'preview', h: number, pos: number, playing: boolean }`: the same for each preview, about 30
+times a second while it plays, and once after it is played, stopped or seeked.

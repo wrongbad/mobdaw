@@ -34,18 +34,27 @@ impl AudioClip {
         let block_end = block_start + l.len() as i64;
         let t0 = block_start.max(self.start);
         let t1 = block_end.min(self.start + self.length);
-        let (sl, sr) = (src.left(), src.right());
         for t in t0..t1 {
-            let k = t - self.start;
-            let frame = self.source_offset + k;
-            if frame < 0 || frame >= src.frames() as i64 {
-                continue;
-            }
-            let g = clip_edge_gain(k, self.length, self.fade_in, self.fade_out, self.shape) * self.gain;
+            let (a, b) = self.sample_at(src, t);
             let i = (t - block_start) as usize;
-            l[i] += sl[frame as usize] * g;
-            r[i] += sr[frame as usize] * g;
+            l[i] += a;
+            r[i] += b;
         }
+    }
+
+    /// This clip's stereo output at timeline sample `t` (silence outside the clip or source).
+    /// The looper tracks use it to read a track's audio at arbitrary positions.
+    pub fn sample_at(&self, src: &Source, t: i64) -> (f32, f32) {
+        let k = t - self.start;
+        if k < 0 || k >= self.length {
+            return (0.0, 0.0);
+        }
+        let frame = self.source_offset + k;
+        if frame < 0 || frame >= src.frames() as i64 {
+            return (0.0, 0.0);
+        }
+        let g = clip_edge_gain(k, self.length, self.fade_in, self.fade_out, self.shape) * self.gain;
+        (src.left()[frame as usize] * g, src.right()[frame as usize] * g)
     }
 }
 

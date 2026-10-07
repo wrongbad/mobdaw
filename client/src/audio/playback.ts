@@ -1,6 +1,6 @@
 // Glue for one open project: the wasm engine host + the doc bridge + transport.
 import type * as Y from 'yjs'
-import { Bridge, type Drag } from './bridge'
+import { Bridge, type Drag, type PreviewMode, type PreviewTransport } from './bridge'
 import { getCtx } from './context'
 import { EngineHost } from './engine-host'
 import { getSampleBuffer, playable } from '../samples'
@@ -12,6 +12,8 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number) {
   const hostP = EngineHost.create(ctx).then((h) => {
     h.node.connect(ctx.destination)
     h.onpos = (m) => bridge.onPos(m)
+    h.onpreview = (m) => bridge.onPreviewPos(m)
+    h.onloopers = (m) => bridge.onLooperHeads(m)
     return h
   })
   hostP.catch((e) => console.error('engine failed to start:', e))
@@ -38,7 +40,23 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number) {
       bridge.play(from)
     },
     stop: () => bridge.stop(),
+    /** A private transport on a soundscape track (its source tape, or its loops). */
+    preview(trackId: string, mode: PreviewMode): PreviewTransport {
+      const p = bridge.preview(trackId, mode)
+      return {
+        get playing() { return p.playing },
+        position: () => p.position(),
+        play(from?: number) {
+          void ctx.resume()
+          p.play(from)
+        },
+        stop: () => p.stop(),
+        seek: (pos: number) => p.seek(pos),
+      }
+    },
     seek: (pos: number) => bridge.seek(pos),
+    /** A looper's read head on the source tape (samples), or null while it isn't sounding. */
+    looperHead: (id: string) => bridge.looperHead(id),
     live: (deviceId: string, paramId: number, v: number) => bridge.live(deviceId, paramId, v),
     setOverrides: (d: Drag[]) => bridge.setOverrides(d),
     destroy() {

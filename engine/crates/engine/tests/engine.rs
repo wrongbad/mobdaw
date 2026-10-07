@@ -450,3 +450,270 @@ fn m1_test_voice_is_silent_then_audible_and_only_mixed_while_gated() {
     let (l, _) = render(&mut e, 128);
     assert!(l.iter().all(|&x| x == 0.0));
 }
+
+// ---- soundscape tracks -----------------------------------------------------------------------
+
+/// Track kind 2 with a 1-second 440 Hz source clip at source time 0 (handles: track 1, source 1,
+/// clip 1). Loopers need a pad (gate) to sound; `pad_on` adds one over the whole timeline.
+fn soundscape_engine(kind: u32) -> Engine {
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&sine(440.0, 48_000)]);
+    e.track_upsert(1, kind, 1.0, -1.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    e
+}
+
+fn pad_on(e: &mut Engine, id: u32, start: i64, length: i64) {
+    e.pad_upsert(900 + id, 1, start, length); // all loopers of track 1
+}
+
+#[test]
+fn soundscape_does_not_play_its_source_linearly_and_needs_a_pad() {
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, 1.0, 10_000, 6_000);
+    e.play(0);
+    assert!(render(&mut e, 4000).0.iter().all(|&x| x == 0.0), "a looper without a pad is silent");
+    let mut plain = soundscape_engine(0);
+    plain.play(0);
+    assert!(rms(&render(&mut plain, 4000).0) > 0.1, "the same clip on an audio track plays");
+}
+
+#[test]
+fn a_pad_gates_its_looper_with_short_fades_and_restarts_the_loop_at_the_region_start() {
+    // Source: a slow ramp, so the output value says exactly where in the source we are.
+    let ramp: Vec<f32> = (0..48_000).map(|i| 0.25 + i as f32 * 1e-5).collect();
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&ramp]);
+    e.track_upsert(1, 2, 1.0, -1.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    let (start, len) = (10_000i64, 5_000i64);
+    e.looper_upsert(1, 1, 1.0, start, len);
+    let (gs, gl) = (33_333i64, 12_000i64); // an arbitrary, unaligned pad
+    pad_on(&mut e, 1, gs, gl);
+    e.play(0);
+    let (l, _) = render(&mut e, 50_000);
+    assert!(l[..gs as usize].iter().all(|&x| x == 0.0), "silent before the pad");
+    assert!(l[(gs + gl) as usize..].iter().all(|&x| x == 0.0), "silent after the pad");
+    assert!(l[gs as usize].abs() < 1e-3, "the pad fades in");
+    // gs + k plays source start + (k mod len): the loop restarts at the region start.
+    // (past the 10 ms seam crossfade, which overshoots on this perfectly correlated ramp)
+    for k in [600i64, 1500, 4000, 5700, 9000] {
+        let want = 0.25 + (start + k % len) as f32 * 1e-5;
+        let got = l[(gs + k) as usize];
+        assert!((got - want).abs() < 2e-3, "k={k}: {got} vs {want}");
+    }
+}
+
+#[test]
+fn a_pad_turns_every_looper_of_its_track_on_and_overlapping_pads_retrigger() {
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, 1.0, 0, 8_000);
+    e.looper_upsert(2, 1, 2.0, 8_000, 8_000);
+    pad_on(&mut e, 1, 5_000, 4_000);
+    pad_on(&mut e, 2, 20_000, 3_000);
+    e.pad_upsert(950, 1, 7_000, 4_000); // overlaps the first pad
+    // a second soundscape with its own looper and no pads stays silent
+    e.track_upsert(2, 2, 1.0, -1.0, false, false);
+    e.looper_upsert(3, 2, 1.0, 0, 8_000);
+    e.play(0);
+    let (l, _) = render(&mut e, 30_000);
+    let live = |a: usize, b: usize| rms(&l[a..b]) > 0.05;
+    assert!(!live(0, 4_900) && live(5_500, 6_900) && live(8_000, 10_500), "pads 1+overlap");
+    assert!(!live(11_500, 19_900) && live(20_500, 22_800) && !live(23_100, 30_000), "pad 2");
+    assert!(l.iter().all(|x| x.is_finite()));
+    // Both loopers sound under one pad: more energy than a single looper alone.
+    let mut one = soundscape_engine(2);
+    one.looper_upsert(1, 1, 1.0, 0, 8_000);
+    pad_on(&mut one, 1, 5_000, 4_000);
+    one.play(0);
+    let (solo, _) = render(&mut one, 10_000);
+    assert!(rms(&l[6_000..8_000]) > 1.1 * rms(&solo[6_000..8_000]), "second looper adds to the first");
+}
+
+/// Track kind 2 whose source is a slow ramp, so the output says where in the source the loops read.
+fn ramp_scape() -> Engine {
+    let ramp: Vec<f32> = (0..48_000).map(|i| 0.25 + i as f32 * 1e-5).collect();
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&ramp]);
+    e.track_upsert(1, 2, 1.0, -1.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    e
+}
+
+#[test]
+fn a_seek_into_a_pad_restarts_the_loops_from_their_region_start() {
+    let mut e = ramp_scape();
+    e.looper_upsert(1, 1, 1.0, 10_000, 5_000);
+    pad_on(&mut e, 1, 1_000, 200_000);
+    e.play(0);
+    render(&mut e, 12_345);
+    e.seek(50_000); // mid-pad
+    let (l, _) = render(&mut e, 800);
+    let want = 0.25 + (10_000 + 700) as f32 * 1e-5;
+    assert!((l[700] - want).abs() < 2e-3, "{} vs {want}", l[700]);
+}
+
+#[test]
+fn a_looper_speed_change_is_live_and_smooth() {
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, 1.0, 0, 40_000);
+    pad_on(&mut e, 1, 0, 400_000);
+    e.play(0);
+    let (a, _) = render(&mut e, 20_480);
+    e.looper_upsert(1, 1, 2.0, 0, 40_000); // as if the slider moved
+    let (b, _) = render(&mut e, 2_400);
+    let (c, _) = render(&mut e, 40_000);
+    let (d, _) = render(&mut e, 12_000);
+    let zc = |x: &[f32]| x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+    assert!(zc(&b) >= zc(&a[a.len() - 2_400..]) + 2, "audible within 50 ms");
+    let ratio = zc(&d) as f64 / zc(&a[a.len() - 12_000..]) as f64;
+    println!("speed 1 -> 2: ratio after 0.8 s {ratio:.2}");
+    assert!((1.9..2.1).contains(&ratio), "{ratio}");
+    let worst = [&a, &b, &c, &d].iter().flat_map(|x| x.windows(2)).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 0.2, "click while the speed changed: {worst}");
+}
+
+#[test]
+fn looper_speed_changes_the_pitch_and_is_clamped() {
+    let mut zc = Vec::new();
+    for speed in [1.0, 2.0] {
+        let mut e = soundscape_engine(2);
+        e.looper_upsert(1, 1, speed, 0, 40_000);
+        pad_on(&mut e, 1, 0, 100_000);
+        e.play(0);
+        let (l, _) = render(&mut e, 12_000);
+        zc.push(l[2000..].windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count());
+    }
+    let ratio = zc[1] as f64 / zc[0] as f64;
+    println!("zero crossings 1x: {}, 2x: {} (ratio {ratio:.2})", zc[0], zc[1]);
+    assert!((1.9..2.1).contains(&ratio));
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, f64::NAN, 0, 40_000);
+    e.looper_upsert(2, 1, 100.0, 0, 40_000);
+    pad_on(&mut e, 1, 0, 100_000);
+    pad_on(&mut e, 2, 0, 100_000);
+    e.play(0);
+    let (l, r) = render(&mut e, 2000);
+    assert!(l.iter().chain(&r).all(|x| x.is_finite()));
+}
+
+// ---- previews: private transports on a soundscape ----------------------------------------------
+
+#[test]
+fn source_preview_plays_the_tape_straight_through_on_its_own_transport() {
+    let ramp: Vec<f32> = (0..48_000).map(|i| 0.25 + i as f32 * 1e-5).collect();
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&ramp]);
+    e.track_upsert(1, 2, 1.0, -1.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 5_000, 20_000, 1_000, 1.0, 0.0, 0.0, 0); // tape: source frames 1000.. at 5000..
+    e.preview_upsert(7, 1, 0);
+    // The main transport is stopped and stays untouched.
+    e.preview_play(7, 8_000);
+    let (l, _) = render(&mut e, 2_000);
+    assert!(!e.is_playing() && e.position() == 0, "main transport must not move");
+    assert_eq!(e.preview_position(7), 10_000);
+    assert!(e.preview_is_playing(7));
+    assert!(l[0].abs() < 1e-3, "5 ms fade-in");
+    for k in [400usize, 1000, 1999] {
+        let want = 0.25 + (1_000 + (8_000 + k - 5_000)) as f32 * 1e-5; // tape position 8000+k -> source frame
+        assert!((l[k] - want).abs() < 1e-5, "k={k}: {} vs {want}", l[k]);
+    }
+    // seek while playing, then stop
+    e.preview_seek(7, 6_000);
+    let (l, _) = render(&mut e, 600);
+    assert!((l[500] - (0.25 + (1_000 + 1_000 + 500) as f32 * 1e-5)).abs() < 1e-5);
+    e.preview_stop(7);
+    assert!(render(&mut e, 256).0.iter().all(|&x| x == 0.0), "stopped preview is silent");
+    assert_eq!(e.preview_position(7), 6_600);
+}
+
+#[test]
+fn loops_preview_plays_every_looper_without_pads_and_restarts_on_play_and_seek() {
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, 1.0, 10_000, 6_000);
+    e.looper_upsert(2, 1, 2.0, 20_000, 6_000);
+    e.preview_upsert(5, 1, 1);
+    e.preview_play(5, 0);
+    let (a, _) = render(&mut e, 30_000);
+    assert!(rms(&a[2000..]) > 0.1, "loops sound with no pad and the main transport stopped");
+    assert!(!e.is_playing());
+    // play and seek are triggers: the loops start from the region start again
+    let mut r = ramp_scape();
+    r.looper_upsert(1, 1, 1.0, 10_000, 5_000);
+    r.preview_upsert(5, 1, 1);
+    r.preview_play(5, 7);
+    render(&mut r, 3_000);
+    r.preview_seek(5, 123_456);
+    let (l, _) = render(&mut r, 800);
+    assert!((l[700] - (0.25 + 10_700.0 * 1e-5)).abs() < 2e-3, "{}", l[700]);
+}
+
+#[test]
+fn previews_and_the_main_transport_do_not_disturb_each_other() {
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, 1.0, 10_000, 6_000);
+    pad_on(&mut e, 1, 0, 100_000);
+    e.preview_upsert(5, 1, 1);
+    e.preview_upsert(6, 1, 0);
+    // Reference: the pads alone.
+    e.play(0);
+    let (alone, _) = render(&mut e, 6_000);
+    // Now the same with both previews running too: pad voice state must be unaffected, so the
+    // difference is exactly what the previews add, and nothing else.
+    let mut g = soundscape_engine(2);
+    g.looper_upsert(1, 1, 1.0, 10_000, 6_000);
+    pad_on(&mut g, 1, 0, 100_000);
+    g.preview_upsert(5, 1, 1);
+    g.preview_upsert(6, 1, 0);
+    let mut only_previews = soundscape_engine(2);
+    only_previews.looper_upsert(1, 1, 1.0, 10_000, 6_000);
+    only_previews.preview_upsert(5, 1, 1);
+    only_previews.preview_upsert(6, 1, 0);
+    only_previews.preview_play(5, 0);
+    only_previews.preview_play(6, 3_000);
+    let (pv, _) = render(&mut only_previews, 6_000);
+    g.preview_play(5, 0);
+    g.preview_play(6, 3_000);
+    g.play(0);
+    let (all, _) = render(&mut g, 6_000);
+    let worst = (0..6_000).map(|k| (all[k] - (alone[k] + pv[k])).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 1e-5, "transports interfere: {worst}");
+    assert_eq!(g.position(), 6_000);
+    assert_eq!(g.preview_position(5), 6_000);
+    assert_eq!(g.preview_position(6), 9_000);
+}
+
+#[test]
+fn a_looper_reports_its_read_head_only_while_it_sounds() {
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, 1.0, 10_000, 6_000);
+    pad_on(&mut e, 1, 1_000, 4_000);
+    assert_eq!(e.looper_head(1), -1.0, "idle before playing");
+    e.play(0);
+    render(&mut e, 1_000);
+    assert_eq!(e.looper_head(1), -1.0, "no pad on yet");
+    render(&mut e, 1_500);
+    let h = e.looper_head(1);
+    assert!((10_000.0..16_000.0).contains(&h) && (h - 11_500.0).abs() < 130.0, "head {h} ~ region start + 1500");
+    render(&mut e, 4_000);
+    assert_eq!(e.looper_head(1), -1.0, "pad ended");
+}
+
+#[test]
+fn a_looper_mutes_and_scales_with_a_ramp_instead_of_a_click() {
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, 1.0, 0, 20_000);
+    pad_on(&mut e, 1, 0, 40_000);
+    e.play(0);
+    let full = rms(&render(&mut e, 8_000).0[4_000..]);
+    e.looper_mix(1, 0.5, false);
+    let half = rms(&render(&mut e, 8_000).0[4_000..]);
+    assert!((half / full - 0.5).abs() < 0.05, "half gain: {half} vs {full}");
+    e.looper_mix(1, 0.5, true);
+    let (l, _) = render(&mut e, 2_000);
+    assert!(l[..128].iter().any(|&x| x != 0.0), "the mute ramps");
+    assert!(l[128..].iter().all(|&x| x == 0.0), "then it is silent");
+    e.looper_mix(1, 0.5, false);
+    render(&mut e, 128);
+    assert!(rms(&render(&mut e, 2_000).0) > 0.1, "and unmutes");
+}

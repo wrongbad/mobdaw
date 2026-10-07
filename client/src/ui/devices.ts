@@ -1,6 +1,7 @@
 // FX chain cards: title, bypass, remove and param controls for one device.
 import { DEVICES, paramToPos, paramToValue, type Device, type ParamDef } from '@mobdaw/shared'
 import { h } from '../dom'
+import { deleteMenu } from './popover'
 
 export type CardDeps = {
   readOnly: boolean
@@ -52,9 +53,10 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     return { p, input, out }
   })
 
-  const el = h('div', { className: 'card' },
-    h('div', { className: 'card-head' }, h('strong', {}, def?.name ?? `device ${dev.type}`), h('span', { className: 'grow' }), bypass, remove),
+  const el = h('div', { className: 'dev' },
+    h('div', { className: 'dev-head' }, h('strong', {}, def?.name ?? `device ${dev.type}`), h('span', { className: 'grow' }), bypass, def?.instrument ? null : remove),
     ...rows.map((r) => h('label', { className: 'prm' }, h('span', { className: 'dim' }, r.p.name), r.input, r.out)))
+  if (!def?.instrument) deleteMenu(el, 'Delete device', () => deps.remove(id), () => !deps.readOnly)
 
   /** `remote`: in-progress values from other users' drags, keyed by param id. */
   function update(d: Device, remote: Map<number, number>) {

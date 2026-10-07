@@ -1,3 +1,4 @@
+import '@fontsource/pirata-one'
 import './styles.css'
 import { api, ApiError } from './api'
 import { go, route, start } from './router'

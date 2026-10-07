@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  addAudioClip, addDevice, addMidiClip, addNote, addSample, addTrack, clipsMap, deleteClip, deleteDevice, deleteTrack,
-  getClips, getSampleRate, getTracks, migrateToV2, notesMap, setParam, splitClip, sweepOrphans, tracksMap,
-  updateClip, updateNote, updateTrack, type SampleMeta,
+  addAudioClip, addDevice, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
+  getClips, getLoopers, getSampleRate, getTracks, migrateToV2, notesMap, setParam, splitClip, sweepOrphans, tracksMap,
+  updateClip, updateLooper, updateNote, updateTrack, type SampleMeta,
 } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 
@@ -192,5 +192,65 @@ describe('schema v2', () => {
     deleteTrack(doc, t)
     expect(txs).toBe(1)
     expect([tracksMap(doc).size, clipsMap(doc).size, notesMap(doc).size, doc.getMap('devices').size]).toEqual([0, 0, 0, 0])
+  })
+
+  it('soundscape tracks: kind 2, loopers add/remove, pads, updates and cleanup', () => {
+    const { doc, take, calls } = setup()
+    const t = addTrack(doc, 'scape', 'soundscape')
+    expect(getLoopers(doc).map((l) => l.slot)).toEqual([0]) // starts with one
+    for (let i = 0; i < 3; i++) addNextLooper(doc, t)
+    const loopers = getLoopers(doc)
+    expect(loopers.map((l) => l.slot)).toEqual([0, 1, 2, 3])
+    deleteLooper(doc, loopers[2].id)
+    addNextLooper(doc, t) // refills the freed slot
+    expect(getLoopers(doc).map((l) => l.slot)).toEqual([0, 1, 2, 3])
+    expect(calls.find((c) => c[0] === 'engine_track_upsert')![2]).toBe(2)
+    expect(new Set(calls.filter((c) => c[0] === 'engine_looper_upsert').map((c) => c[1])).size).toBe(5) // 4 live + 1 removed (idempotent repeats are fine)
+    expect(calls.filter((c) => c[0] === 'engine_looper_mix').every((c) => c[2] === 1 && c[3] === 0)).toBe(true) // full level, unmuted
+    take()
+    updateLooper(doc, loopers[0].id, { gain: 0.4, muted: true })
+    expect(take().filter((c) => c[0] === 'engine_looper_mix').map((c) => c.slice(2))).toEqual([[0.4, 1]])
+    updateLooper(doc, loopers[1].id, { speed: 2.5, start: 48000, length: 96000 })
+    const up = take().filter((c) => c[0] === 'engine_looper_upsert')
+    expect(up).toHaveLength(1)
+    expect(up[0].slice(3)).toEqual([2.5, 48000, 96000]) // speed, start, length
+    const pad = addPad(doc, t, 96000, 48000)
+    const pc = take().filter((c) => c[0] === 'engine_pad_upsert')
+    expect(pc[0].slice(3)).toEqual([96000, 48000]) // start, length (after the pad and track handles)
+    updatePad(doc, pad, { start: 100000 })
+    expect(take().filter((c) => c[0] === 'engine_pad_upsert')).toHaveLength(1)
+    deletePad(doc, pad)
+    expect(take().filter((c) => c[0] === 'engine_pad_remove')).toHaveLength(1)
+    addPad(doc, t, 0, 10)
+    take()
+    deleteTrack(doc, t)
+    expect(take().filter((c) => c[0] === 'engine_looper_remove')).toHaveLength(4)
+    expect(getPads(doc)).toHaveLength(0)
+    expect(getLoopers(doc)).toHaveLength(0)
+  })
+
+  it('previews: private transport and handle per (track, mode), reported separately, dropped with the track', () => {
+    const { doc, bridge, take } = setup()
+    const t = addTrack(doc, 'scape', 'soundscape')
+    take()
+    const src = bridge.preview(t, 'source')
+    const loops = bridge.preview(t, 'loops')
+    expect(bridge.preview(t, 'source').position()).toBe(src.position()) // cached, not recreated
+    const ups = take().filter((c) => c[0] === 'engine_preview_upsert')
+    expect(ups).toHaveLength(2)
+    expect(ups.map((c) => c[3])).toEqual([0, 1]) // source, loops
+    const [hs, hl] = ups.map((c) => c[1])
+    expect(hs).not.toBe(hl)
+
+    src.play(48000)
+    expect(take()).toEqual([['engine_preview_play', hs, 48000]])
+    bridge.onPreviewPos({ h: hs, pos: 50000, playing: true })
+    expect([src.playing, src.position()]).toEqual([true, 50000]) // (clock is frozen at 0 in tests)
+    expect([loops.playing, bridge.isPlaying]).toEqual([false, false]) // nothing else moved
+    src.stop()
+    expect(take()).toEqual([['engine_preview_stop', hs]])
+
+    deleteTrack(doc, t)
+    expect(take().filter((c) => c[0] === 'engine_preview_remove').map((c) => c[1]).sort()).toEqual([hs, hl].sort())
   })
 })

@@ -64,6 +64,23 @@ fn process_never_allocates_across_a_busy_scene() {
             e.note_upsert(t * 1000 + 500 + n, 600 + t, (n * 25) as f64, 300.0, 40 + n % 40, 0.8);
         }
     }
+    for t in 30..32u32 {
+        // soundscape tracks: 4 loopers each, with pads, speeds and regions that wrap often
+        e.track_upsert(t, 2, 1.0, 0.0, false, false);
+        e.clip_audio_upsert(700 + t, t, 1, 0, 90_000, 0, 1.0, 0.0, 0.0, 0);
+        for k in 0..4u32 {
+            e.looper_upsert(800 + t * 10 + k, t, 0.25 + k as f64, 5000 * k as i64, 3000 + 1000 * k as i64);
+        }
+    }
+    for t in 30..32u32 {
+        for g in 0..6u32 {
+            e.pad_upsert(5000 + t * 10 + g, t, (g * 12_000) as i64 + 1000 * t as i64, 7_000);
+        }
+    }
+    e.preview_upsert(950, 30, 0);
+    e.preview_upsert(951, 31, 1);
+    e.preview_play(950, 1000);
+    e.preview_play(951, 0);
     e.set_param(engine::PARAM_GATE, 1.0); // M1 test voice too
     e.play(0);
 
@@ -83,6 +100,8 @@ fn process_never_allocates_across_a_busy_scene() {
             30 => e.seek((block as i64 * 53) % 90_000),
             40 => e.track_upsert(3, 0, 0.3, 0.5, block % 2 == 0, block % 3 == 0),
             50 => e.param_set(423, 6, 1.5),
+            80 => e.preview_seek(950, (block as i64 * 17) % 40_000),
+            70 => e.looper_upsert(1100, 30, 1.0 + (block % 5) as f64 * 0.3, 1000, 4000),
             60 => {
                 e.stop();
                 e.play((block as i64 * 31) % 50_000);

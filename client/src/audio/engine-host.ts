@@ -41,12 +41,21 @@ export class EngineHost {
     })
     node.onprocessorerror = (e) => console.error('engine processor error', e)
     const host = new EngineHost(node)
-    node.port.onmessage = (ev) => ev.data?.type === 'pos' && host.onpos?.(ev.data)
+    node.port.onmessage = (ev) => {
+      if (ev.data?.type === 'pos') host.onpos?.(ev.data)
+      else if (ev.data?.type === 'preview') host.onpreview?.(ev.data)
+      else if (ev.data?.type === 'loopers') host.onloopers?.(ev.data)
+    }
     return host
   }
 
   /** Called with the processor's {type:'pos'} messages. */
   onpos: ((m: { pos: number; playing: boolean }) => void) | null = null
+  /** Called with the processor's {type:'preview'} messages (one per playing preview). */
+  onpreview: ((m: { h: number; pos: number; playing: boolean }) => void) | null = null
+
+  /** Called with the processor's {type:'loopers'} messages: `[handle, source sample]` per sounding looper. */
+  onloopers: ((m: { heads: [number, number][] }) => void) | null = null
 
   /** Call `exports[fn](enginePtr, ...args)` in the worklet; calls apply in order. */
   call(fn: string, args: number[] = []) {

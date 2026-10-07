@@ -2,9 +2,12 @@
 //! Everything here is unit-tested natively with `cargo test -p dsp`.
 
 pub mod adsr;
+pub mod analog;
 pub mod fade;
 pub mod finnwave;
+pub mod looper;
 pub mod pan;
+pub mod resampler;
 pub mod smooth;
 pub mod svf;
 pub mod synth;
@@ -13,6 +16,8 @@ pub mod util;
 pub use adsr::Adsr;
 pub use fade::FadeShape;
 pub use finnwave::Finnwave;
+pub use looper::{LoopParams, LoopVoice};
+pub use resampler::Resampler;
 pub use smooth::Ramp;
 pub use svf::Svf;
 pub use synth::Synth;

@@ -16,6 +16,7 @@ pub mod device;
 pub mod engine;
 pub mod handle_map;
 pub mod source;
+pub mod transport;
 mod test_voice;
 
 pub use engine::{Engine, BLOCK};
@@ -135,6 +136,94 @@ pub unsafe extern "C" fn engine_track_upsert(
 #[no_mangle]
 pub unsafe extern "C" fn engine_track_remove(e: *mut Engine, h: u32) {
     (*e).track_remove(h);
+}
+
+/// Create or update a loop slot on a looper track (track kind 2). `start`/`length` are the
+/// loop region in timeline samples; `length < 64` means no region.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_looper_upsert(e: *mut Engine, h: u32, track: u32, speed: f64, start: f64, length: f64) {
+    (*e).looper_upsert(h, track, speed, start as i64, length as i64);
+}
+
+/// A looper's level (linear, 0..2) and mute flag (non-zero = muted).
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_looper_mix(e: *mut Engine, h: u32, gain: f32, muted: u32) {
+    (*e).looper_mix(h, gain, muted != 0);
+}
+
+/// The looper's read head on the source tape (samples), or -1 while it isn't sounding.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_looper_head(e: *mut Engine, h: u32) -> f64 {
+    (*e).looper_head(h)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_looper_remove(e: *mut Engine, h: u32) {
+    (*e).looper_remove(h);
+}
+
+/// A pad (gate block): all of `track`'s loopers sound over `[start, start+length)` of the timeline.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_pad_upsert(e: *mut Engine, h: u32, track: u32, start: f64, length: f64) {
+    (*e).pad_upsert(h, track, start as i64, length as i64);
+}
+
+/// Create (or retarget) a preview transport on a soundscape track. `mode` 0 plays the source
+/// tape straight through, 1 plays the loopers continuously (no pads). Its position is private to
+/// it: the timeline transport is untouched.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed (same for every preview call below).
+#[no_mangle]
+pub unsafe extern "C" fn engine_preview_upsert(e: *mut Engine, h: u32, track: u32, mode: u32) {
+    (*e).preview_upsert(h, track, mode);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_preview_remove(e: *mut Engine, h: u32) {
+    (*e).preview_remove(h);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_preview_play(e: *mut Engine, h: u32, from_pos: f64) {
+    (*e).preview_play(h, from_pos as i64);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_preview_stop(e: *mut Engine, h: u32) {
+    (*e).preview_stop(h);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_preview_seek(e: *mut Engine, h: u32, pos: f64) {
+    (*e).preview_seek(h, pos as i64);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_preview_position(e: *mut Engine, h: u32) -> f64 {
+    (*e).preview_position(h) as f64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_preview_is_playing(e: *mut Engine, h: u32) -> u32 {
+    (*e).preview_is_playing(h) as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_pad_remove(e: *mut Engine, h: u32) {
+    (*e).pad_remove(h);
 }
 
 #[no_mangle]

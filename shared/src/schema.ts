@@ -4,9 +4,12 @@
 //   tracks  Y.Map  id -> Y.Map Track
 //   clips   Y.Map  id -> Y.Map AudioClip | MidiClip
 //   notes   Y.Map  id -> Y.Map Note
+//   loopers Y.Map  id -> Y.Map Looper (1 to start per 'soundscape' track, add/remove freely; region in *source* time, length 0 = unset)
+//   pads    Y.Map  id -> Y.Map Pad (a free-time gate block on the soundscape's timeline: all its loopers on)
 //   devices Y.Map  id -> Y.Map Device (params: nested Y.Map paramId -> number)
 //   lanes, points  automation (types only for now)
 //   samples Y.Map  hash -> plain object SampleMeta
+//   chat    Y.Array of plain ChatMessage, append-only; outside the undo scope
 import * as Y from 'yjs'
 import { DEVICES } from './devices.ts'
 
@@ -15,7 +18,14 @@ export const DEFAULT_SAMPLE_RATE = 48000
 export const DEFAULT_PPQ = 960
 export const DEFAULT_MIDI_BPM = 120
 
-export type TrackKind = 'audio' | 'midi'
+/**
+ * 'soundscape': its audio clips are a *source* lane in their own time world, read by its loopers;
+ * pads on the main timeline switch the loopers on. The clips are never played linearly.
+ */
+export type TrackKind = 'audio' | 'midi' | 'soundscape'
+export const LOOPERS_PER_TRACK = 1
+export const LOOP_SPEED_MIN = 0.1
+export const LOOP_SPEED_MAX = 4
 export type Track = { id: string; name: string; kind: TrackKind; order: number; gain: number; pan: number; muted: boolean; soloed: boolean }
 /** 0 equal-power, 1 linear, 2 s-curve */
 export type FadeShape = 0 | 1 | 2
@@ -28,8 +38,14 @@ export type MidiClip = { id: string; trackId: string; kind: 'midi'; start: numbe
 export type Clip = AudioClip | MidiClip
 export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number }
 export type Device = { id: string; trackId: string; type: number; order: number; bypass: boolean; params: Record<string, number> }
+/** Loop region in source time (samples of the track's source clips); `length` 0 means unset. */
+/** `gain` (0..1) and `muted` are absent on loopers saved before they existed: read them with `?? 1` / `?? false`. */
+export type Looper = { id: string; trackId: string; slot: number; speed: number; start: number; length: number; gain?: number; muted?: boolean }
+/** All of the soundscape's loopers are on over `[start, start+length)` of the timeline (samples). Each pad restarts the loops. */
+export type Pad = { id: string; trackId: string; start: number; length: number }
 export type Lane = { id: string; trackId: string; deviceId: string; paramId: number }
 export type Point = { id: string; laneId: string; pos: number; value: number; curve: 'linear' | 'hold' }
+export type ChatMessage = { id: string; email: string; name: string; color: string; text: string; ts: number }
 export type SampleMeta = { hash: string; name: string; duration: number; size: number; mime: string }
 
 export type AwarenessState = {
@@ -60,20 +76,25 @@ export const metaMap = (doc: Y.Doc) => doc.getMap<unknown>('meta')
 export const tracksMap = (doc: Y.Doc) => doc.getMap<YM>('tracks')
 export const clipsMap = (doc: Y.Doc) => doc.getMap<YM>('clips')
 export const notesMap = (doc: Y.Doc) => doc.getMap<YM>('notes')
+export const loopersMap = (doc: Y.Doc) => doc.getMap<YM>('loopers')
+export const padsMap = (doc: Y.Doc) => doc.getMap<YM>('pads')
 export const devicesMap = (doc: Y.Doc) => doc.getMap<YM>('devices')
 export const lanesMap = (doc: Y.Doc) => doc.getMap<YM>('lanes')
 export const pointsMap = (doc: Y.Doc) => doc.getMap<YM>('points')
 export const samplesMap = (doc: Y.Doc) => doc.getMap<SampleMeta>('samples')
+export const chatLog = (doc: Y.Doc) => doc.getArray<ChatMessage>('chat')
 
 /** Types to pass to `new Y.UndoManager(undoScope(doc), { trackedOrigins })`. */
 export const undoScope = (doc: Y.Doc) => [
-  metaMap(doc), tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), lanesMap(doc), pointsMap(doc),
+  metaMap(doc), tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), loopersMap(doc), padsMap(doc), lanesMap(doc), pointsMap(doc),
 ]
 
 const all = <T>(m: Y.Map<YM>) => [...m.values()].map((v) => v.toJSON() as T)
 export const getTracks = (doc: Y.Doc) => all<Track>(tracksMap(doc)).sort((a, b) => a.order - b.order)
 export const getClips = (doc: Y.Doc) => all<Clip>(clipsMap(doc)).filter((c) => c.kind === 'audio' || c.kind === 'midi')
 export const getNotes = (doc: Y.Doc) => all<Note>(notesMap(doc))
+export const getPads = (doc: Y.Doc) => all<Pad>(padsMap(doc)).sort((a, b) => a.start - b.start)
+export const getLoopers = (doc: Y.Doc) => all<Looper>(loopersMap(doc)).sort((a, b) => a.slot - b.slot)
 export const getDevices = (doc: Y.Doc) => all<Device>(devicesMap(doc)).sort((a, b) => a.order - b.order)
 export const getSamples = (doc: Y.Doc): Record<string, SampleMeta> => samplesMap(doc).toJSON()
 export const getSampleRate = (doc: Y.Doc): number => (metaMap(doc).get('sampleRate') as number | undefined) ?? DEFAULT_SAMPLE_RATE
@@ -101,7 +122,10 @@ const patchMap = (doc: Y.Doc, m: YM | undefined, patch: object) => {
 export function addTrack(doc: Y.Doc, name: string, kind: TrackKind = 'audio', order?: number): string {
   const id = newId()
   const t: Track = { id, name, kind, order: order ?? orderBetween(getTracks(doc).at(-1)?.order), gain: 1, pan: 0, muted: false, soloed: false }
-  doc.transact(() => tracksMap(doc).set(id, toMap(t)))
+  doc.transact(() => {
+    tracksMap(doc).set(id, toMap(t))
+    if (kind === 'soundscape') for (let slot = 0; slot < LOOPERS_PER_TRACK; slot++) addLooper(doc, id, slot)
+  })
   return id
 }
 export const updateTrack = (doc: Y.Doc, id: string, patch: Partial<Omit<Track, 'id'>>) => patchMap(doc, tracksMap(doc).get(id), patch)
@@ -110,9 +134,38 @@ export function deleteTrack(doc: Y.Doc, id: string) {
   doc.transact(() => {
     for (const c of getClips(doc)) if (c.trackId === id) deleteClip(doc, c.id)
     for (const d of getDevices(doc)) if (d.trackId === id) deleteDevice(doc, d.id)
+    for (const p of getPads(doc)) if (p.trackId === id) padsMap(doc).delete(p.id)
+    for (const l of getLoopers(doc)) if (l.trackId === id) loopersMap(doc).delete(l.id)
     tracksMap(doc).delete(id)
   })
 }
+
+// --- loopers
+export function addLooper(doc: Y.Doc, trackId: string, slot: number): string {
+  const id = newId()
+  doc.transact(() => loopersMap(doc).set(id, toMap({ id, trackId, slot, speed: 1, start: 0, length: 0, gain: 1, muted: false } satisfies Looper)))
+  return id
+}
+/** Adds a looper in the lowest free slot (slots set its colour and number). */
+export function addNextLooper(doc: Y.Doc, trackId: string): string {
+  const used = new Set(getLoopers(doc).filter((l) => l.trackId === trackId).map((l) => l.slot))
+  let slot = 0
+  while (used.has(slot)) slot++
+  return addLooper(doc, trackId, slot)
+}
+export const deleteLooper = (doc: Y.Doc, id: string) => loopersMap(doc).delete(id)
+export const updateLooper = (doc: Y.Doc, id: string, patch: Partial<Pick<Looper, 'speed' | 'start' | 'length' | 'gain' | 'muted'>>) =>
+  patchMap(doc, loopersMap(doc).get(id), patch)
+
+// --- pads
+export function addPad(doc: Y.Doc, trackId: string, start: number, length: number): string {
+  const id = newId()
+  doc.transact(() => padsMap(doc).set(id, toMap({ id, trackId, start, length } satisfies Pad)))
+  return id
+}
+export const updatePad = (doc: Y.Doc, id: string, patch: Partial<Pick<Pad, 'start' | 'length'>>) =>
+  patchMap(doc, padsMap(doc).get(id), patch)
+export const deletePad = (doc: Y.Doc, id: string) => doc.transact(() => padsMap(doc).delete(id))
 
 // --- clips
 export function addAudioClip(
@@ -198,6 +251,22 @@ export function deleteLane(doc: Y.Doc, id: string) {
   })
 }
 
+// --- chat
+export const CHAT_MAX = 2000
+export function addChatMessage(doc: Y.Doc, user: AwarenessState['user'], text: string): string | null {
+  const t = text.trim().slice(0, CHAT_MAX)
+  if (!t) return null
+  const id = newId()
+  chatLog(doc).push([{ id, email: user.email, name: user.name, color: user.color, text: t, ts: Date.now() }])
+  return id
+}
+
+export function deleteChatMessage(doc: Y.Doc, id: string) {
+  const log = chatLog(doc)
+  const i = log.toArray().findIndex((m) => m.id === id)
+  if (i >= 0) log.delete(i, 1)
+}
+
 // --- samples
 export function addSample(doc: Y.Doc, s: SampleMeta) {
   samplesMap(doc).set(s.hash, s)
@@ -212,6 +281,8 @@ export function sweepOrphans(doc: Y.Doc) {
     const tracks = tracksMap(doc), clips = clipsMap(doc)
     for (const c of getClips(doc)) if (!tracks.has(c.trackId)) deleteClip(doc, c.id)
     for (const d of getDevices(doc)) if (!tracks.has(d.trackId)) deleteDevice(doc, d.id)
+    for (const l of getLoopers(doc)) if (!tracks.has(l.trackId)) loopersMap(doc).delete(l.id)
+    for (const p of getPads(doc)) if (!tracks.has(p.trackId)) padsMap(doc).delete(p.id)
     for (const n of getNotes(doc)) if (!clips.has(n.clipId)) notesMap(doc).delete(n.id)
     for (const l of all<Lane>(lanesMap(doc))) if (!devicesMap(doc).has(l.deviceId)) deleteLane(doc, l.id)
   })
