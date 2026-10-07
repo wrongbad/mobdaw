@@ -1,50 +1,41 @@
-# Deploying mobdaw on EC2
+# Deploying mobdaw on the shared EC2 box
 
-The server runs from TypeScript sources via `tsx` (no compile step), behind Caddy which
-serves `client/dist` and proxies `/api/*` and `/collab*` to `localhost:8787`.
+mobdaw is served at `https://wrongbad.com/mobdaw/`. The box runs one Caddy for all sites (`../../proxy/Caddyfile`):
+it serves `client/dist` and proxies `/mobdaw/api/*` and `/mobdaw/collab*` to `localhost:8787`, stripping
+the `/mobdaw` prefix (so the server itself still routes `/api` and `/collab`). `PUBLIC_URL` carries the
+prefix; the server derives cookie paths and local-storage URLs from it.
 
-## 1. EC2
-1. Launch an Amazon Linux 2023 / Ubuntu instance (t4g.small is plenty). Security group: 80 and 443 open, SSH from your IP.
-2. Point a DNS A record for your domain at the instance.
-3. Install Node 24, Caddy and sqlite3. `sudo useradd -r -m mobdaw`.
-4. Deploy the code:
-   ```
-   sudo git clone <repo> /opt/mobdaw && cd /opt/mobdaw
-   sudo npm ci
-   sudo npm run build          # builds client/dist
-   sudo chown -R mobdaw /opt/mobdaw
-   ```
-5. Create `/etc/mobdaw.env` (mode 600), see below, then install `deploy/mobdaw.service`
-   (`systemctl enable --now mobdaw`).
-6. Caddy: copy `deploy/Caddyfile` to `/etc/caddy/Caddyfile`, set `DOMAIN=your.domain` in
-   `/etc/caddy/caddy.env` (or the unit's environment), `systemctl reload caddy`. Certificates are automatic.
+Deploy from the parent folder with `./upload.sh mobdaw` (builds the wasm engine and client locally,
+rsyncs, then runs `npm ci --omit=dev` on the server). `runall.sh` starts everything on boot; there is no
+restart step yet, so after a deploy restart the mobdaw node process by hand (or reboot).
+The server needs Node 24, and Caddy at `/www/proxy/caddy`. `/www/mobdaw/.env` and `/www/mobdaw/data`
+exist only on the server (excluded from rsync).
 
-`/etc/mobdaw.env`:
+## Server env
+`/www/mobdaw/.env`:
 ```
 PORT=8787
-PUBLIC_URL=https://your.domain
-AUTH_MODE=google
-GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+PUBLIC_URL=https://wrongbad.com/mobdaw
 SESSION_SECRET=<openssl rand -hex 32>
-ADMIN_EMAILS=you@gmail.com
-DB_PATH=/var/lib/mobdaw/mobdaw.db
+DB_PATH=./data/mobdaw.db
 STORAGE_DRIVER=s3
 S3_BUCKET=your-bucket
 S3_REGION=us-east-1
 ```
-`sudo install -d -o mobdaw /var/lib/mobdaw`. Create invites with
-`cd /opt/mobdaw && sudo -u mobdaw node --env-file=/etc/mobdaw.env --import tsx server/scripts/admin.ts create-invite --days 7`.
+First admin and invites, on the server:
+```
+cd /www/mobdaw/server
+node --env-file=/www/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-user you --admin   # prompts for a password
+node --env-file=/www/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-invite --days 7   # prints a /#/register/<code> link
+```
+Admins can also make invites from the app (invites page). Friends register with username and
+password (no email); `passwd <username>` resets a password. Logins are rate-limited per username.
 
-## 2. Google OAuth client
-Google Cloud Console, APIs & Services, Credentials, Create OAuth client ID, type "Web application".
-Add `https://your.domain` as an **Authorized JavaScript origin** (no redirect URI is needed for
-Google Identity Services). Put the client id in `GOOGLE_CLIENT_ID`.
-
-## 3. S3 bucket and instance role
+## S3 bucket and instance role
 Create a private bucket (block all public access) in the same region. Add a CORS rule so
 browsers can PUT/GET directly:
 ```json
-[{"AllowedOrigins":["https://your.domain"],"AllowedMethods":["GET","PUT"],
+[{"AllowedOrigins":["https://wrongbad.com"],"AllowedMethods":["GET","PUT"],
   "AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]
 ```
 Attach an IAM role to the instance with:
@@ -67,16 +58,16 @@ Add a lifecycle rule that expires the `proofs/` prefix after 1 day: proof object
 uploads used to prove possession of an existing sample, and abandoned ones are not swept by the app
 on S3.
 
-## 4. AWS Budget alert
+## AWS Budget alert
 Billing, Budgets, Create budget, "Cost budget", monthly, e.g. $10, with email alerts at 80% actual and 100% forecasted.
 
-## 5. Nightly SQLite backup
+## Nightly SQLite backup
 `/etc/cron.daily/mobdaw-backup` (executable):
 ```sh
 #!/bin/sh
 set -e
 f=/tmp/mobdaw-$(date +%F).db
-sqlite3 /var/lib/mobdaw/mobdaw.db ".backup '$f'"   # or: VACUUM INTO '$f'
+sqlite3 /www/mobdaw/data/mobdaw.db ".backup '$f'"   # or: VACUUM INTO '$f'
 aws s3 cp "$f" s3://your-bucket/backups/$(basename "$f")
 rm -f "$f"
 ```

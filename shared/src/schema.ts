@@ -45,11 +45,11 @@ export type Looper = { id: string; trackId: string; slot: number; speed: number;
 export type Pad = { id: string; trackId: string; start: number; length: number }
 export type Lane = { id: string; trackId: string; deviceId: string; paramId: number }
 export type Point = { id: string; laneId: string; pos: number; value: number; curve: 'linear' | 'hold' }
-export type ChatMessage = { id: string; email: string; name: string; color: string; text: string; ts: number }
+export type ChatMessage = { id: string; username: string; color: string; text: string; ts: number }
 export type SampleMeta = { hash: string; name: string; duration: number; size: number; mime: string }
 
 export type AwarenessState = {
-  user: { email: string; name: string; color: string }
+  user: { username: string; color: string }
   playhead?: number | null
   selection?: string[]
   /** In-progress parameter drag; collaborators apply it as a transient override. */
@@ -65,9 +65,9 @@ export function newId(): string {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_') // 12 url-safe chars
 }
 
-export function userColor(email: string): string {
+export function userColor(username: string): string {
   let h = 0
-  for (const ch of email) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  for (const ch of username) h = (h * 31 + ch.charCodeAt(0)) >>> 0
   return `hsl(${h % 360} 65% 62%)`
 }
 
@@ -257,7 +257,7 @@ export function addChatMessage(doc: Y.Doc, user: AwarenessState['user'], text: s
   const t = text.trim().slice(0, CHAT_MAX)
   if (!t) return null
   const id = newId()
-  chatLog(doc).push([{ id, email: user.email, name: user.name, color: user.color, text: t, ts: Date.now() }])
+  chatLog(doc).push([{ id, username: user.username, color: user.color, text: t, ts: Date.now() }])
   return id
 }
 

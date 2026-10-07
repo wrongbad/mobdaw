@@ -7,7 +7,7 @@ export function nav(me: Me): HTMLElement {
     h('a', { href: '#/projects' }, 'mobdaw'),
     me.isAdmin ? h('a', { href: '#/admin' }, 'invites') : null,
     h('span', { className: 'grow' }),
-    h('span', { className: 'dim' }, me.name || me.email),
+    h('span', { className: 'dim' }, me.username),
     h('a', { href: '#/login', onclick: () => api.logout() }, 'log out'),
   )
 }

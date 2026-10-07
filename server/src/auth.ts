@@ -4,11 +4,12 @@ import { getCookie } from 'hono/cookie'
 import type { Me, Role } from '@mobdaw/shared'
 import type { Config } from './config.ts'
 import type { Db } from './db.ts'
+import { hashPassword } from './password.ts'
 
 export const SESSION_COOKIE = 'mobdaw_session'
 export const SESSION_MS = 30 * 24 * 3600 * 1000
 
-export type Session = { email: string; name: string; exp: number }
+export type Session = { username: string; exp: number }
 export type Env = { Variables: { session: Session | null } }
 export type Ctx = { config: Config; db: Db }
 
@@ -22,8 +23,8 @@ export function safeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && timingSafeEqual(ab, bb)
 }
 
-export function signSession(secret: string, email: string, name: string): string {
-  const body = b64u(JSON.stringify({ email, name, exp: Date.now() + SESSION_MS } satisfies Session))
+export function signSession(secret: string, username: string): string {
+  const body = b64u(JSON.stringify({ username, exp: Date.now() + SESSION_MS } satisfies Session))
   return `${body}.${hmac(secret, body)}`
 }
 
@@ -32,55 +33,54 @@ export function verifySession(secret: string, token: string | undefined | null):
   if (!body || !sig || extra !== undefined || !safeEqual(sig, hmac(secret, body))) return null
   try {
     const s = JSON.parse(Buffer.from(body, 'base64url').toString()) as Session
-    return typeof s.email === 'string' && s.exp > Date.now() ? s : null
+    return typeof s.username === 'string' && s.exp > Date.now() ? s : null
   } catch {
     return null
   }
 }
 
-export const isAdminEmail = (ctx: Ctx, email: string) => ctx.config.adminEmails.includes(email)
+type UserRow = { username: string; password_hash: string | null; is_admin: number; bytes_used: number }
+export const getUser = (db: Db, username: string) =>
+  db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined
 
-type UserRow = { email: string; name: string | null; is_admin: number; bytes_used: number }
-const getUser = (db: Db, email: string) =>
-  db.prepare('SELECT * FROM users WHERE email = ?').get(email) as UserRow | undefined
+export const userExists = (ctx: Ctx, username: string) => !!getUser(ctx.db, username)
+export const isAdmin = (ctx: Ctx, username: string) => !!getUser(ctx.db, username)?.is_admin
 
-export const isAdmitted = (ctx: Ctx, email: string) => isAdminEmail(ctx, email) || !!getUser(ctx.db, email)
-export const isAdmin = (ctx: Ctx, email: string) => isAdminEmail(ctx, email) || !!getUser(ctx.db, email)?.is_admin
+/** The signed-in username for a session token, or null if invalid, expired or the user was deleted. */
+export function sessionUser(ctx: Ctx, token: string | undefined | null): string | null {
+  const s = verifySession(ctx.config.sessionSecret, token)
+  return s && userExists(ctx, s.username) ? s.username : null
+}
 
 /** The user's membership role in a project, or undefined. */
-export function memberRole(ctx: Ctx, projectId: string, email: string) {
-  return (ctx.db.prepare('SELECT role FROM project_members WHERE project_id = ? AND email = ?').get(projectId, email) as
+export function memberRole(ctx: Ctx, projectId: string, username: string) {
+  return (ctx.db.prepare('SELECT role FROM project_members WHERE project_id = ? AND username = ?').get(projectId, username) as
     | { role: Role }
     | undefined)?.role
 }
 
-/** Insert the user (idempotent); admin emails are always flagged is_admin. */
-export function upsertUser(ctx: Ctx, email: string, name: string) {
+/** Insert a user with an already-hashed password (sync, so it can run inside a transaction). Throws if taken. */
+export function insertUser(ctx: Ctx, username: string, passwordHash: string, admin = false) {
   ctx.db
-    .prepare(
-      `INSERT INTO users(email, name, is_admin, created_at) VALUES(?, ?, ?, ?)
-       ON CONFLICT(email) DO UPDATE SET name = excluded.name, is_admin = MAX(is_admin, excluded.is_admin)`,
-    )
-    .run(email, name, isAdminEmail(ctx, email) ? 1 : 0, Date.now())
+    .prepare('INSERT INTO users(username, password_hash, is_admin, created_at) VALUES(?, ?, ?, ?)')
+    .run(username, passwordHash, admin ? 1 : 0, Date.now())
 }
 
-export function getMe(ctx: Ctx, s: Session): Me {
-  const u = getUser(ctx.db, s.email)
-  const admitted = isAdmitted(ctx, s.email)
-  return {
-    email: s.email,
-    name: u?.name || s.name,
-    admitted,
-    isAdmin: isAdmin(ctx, s.email),
-    bytesUsed: u?.bytes_used ?? 0,
-    quotaBytes: ctx.config.userQuotaBytes,
-  }
+export async function createUser(ctx: Ctx, username: string, password: string, admin = false) {
+  insertUser(ctx, username, await hashPassword(password), admin)
+}
+
+export function getMe(ctx: Ctx, username: string): Me {
+  const u = getUser(ctx.db, username)!
+  return { username, isAdmin: !!u.is_admin, bytesUsed: u.bytes_used, quotaBytes: ctx.config.userQuotaBytes }
 }
 
 /** Reads the session from the cookie or `Authorization: Bearer`; sets c.var.session (or null). */
 export const sessionMiddleware = (ctx: Ctx): MiddlewareHandler<Env> => async (c, next) => {
   const bearer = c.req.header('authorization')?.match(/^Bearer (.+)$/)?.[1]
-  c.set('session', verifySession(ctx.config.sessionSecret, bearer ?? getCookie(c, SESSION_COOKIE)))
+  const token = bearer ?? getCookie(c, SESSION_COOKIE)
+  const username = sessionUser(ctx, token)
+  c.set('session', username ? { username, exp: 0 } : null)
   await next()
 }
 
@@ -89,18 +89,10 @@ export const requireSignedIn: MiddlewareHandler<Env> = async (c, next) => {
   await next()
 }
 
-export const requireAdmitted = (ctx: Ctx): MiddlewareHandler<Env> => async (c, next) => {
-  const s = c.var.session
-  if (!s) return c.json({ error: 'not_signed_in' }, 401)
-  if (!isAdmitted(ctx, s.email)) return c.json({ error: 'not_invited' }, 403)
-  await next()
-}
-
 export const requireAdmin = (ctx: Ctx): MiddlewareHandler<Env> => async (c, next) => {
   const s = c.var.session
   if (!s) return c.json({ error: 'not_signed_in' }, 401)
-  if (!isAdmitted(ctx, s.email)) return c.json({ error: 'not_invited' }, 403)
-  if (!isAdmin(ctx, s.email)) return c.json({ error: 'forbidden' }, 403)
+  if (!isAdmin(ctx, s.username)) return c.json({ error: 'forbidden' }, 403)
   await next()
 }
 

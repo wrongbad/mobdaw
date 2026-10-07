@@ -8,13 +8,13 @@ export function openSession(projectId: string, me: Me) {
   const doc = new Y.Doc()
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const provider = new HocuspocusProvider({
-    url: `${proto}//${location.host}/collab`,
+    url: `${proto}//${location.host}${import.meta.env.BASE_URL}collab`,
     name: docName(projectId),
     document: doc,
     token: getToken(),
   })
   const awareness = provider.awareness!
-  const user: AwarenessState['user'] = { email: me.email, name: me.name || me.email, color: userColor(me.email) }
+  const user: AwarenessState['user'] = { username: me.username, color: userColor(me.username) }
   awareness.setLocalStateField('user', user)
   // Local edits have origin null (tracked by default); remote updates carry the provider as origin.
   const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })

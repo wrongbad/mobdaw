@@ -15,12 +15,12 @@ export function projectsPage(me: Me) {
   async function render() {
     const [projects, users] = await Promise.all([api.projects(), api.users()])
     const details = await Promise.all(projects.map((p) => (p.role === 'owner' ? api.project(p.id) : null)))
-    list.replaceChildren(...projects.map((p, i) => row(p, details[i], users.map((u) => u.email))))
+    list.replaceChildren(...projects.map((p, i) => row(p, details[i], users.map((u) => u.username))))
   }
 
-  function row(p: ProjectSummary, d: ProjectDetail | null, emails: string[]) {
+  function row(p: ProjectSummary, d: ProjectDetail | null, usernames: string[]) {
     const li = h('li', {}, h('a', { href: `#/project/${p.id}` }, p.name))
-    if (p.role !== 'owner') li.append(h('span', { className: 'dim' }, ` by ${p.ownerEmail} (${p.role})`))
+    if (p.role !== 'owner') li.append(h('span', { className: 'dim' }, ` by ${p.ownerUsername} (${p.role})`))
     li.append(h('span', { className: 'grow' }))
     const copy = h('button', { onclick: () => act(() => api.copyProject(p.id)) }, 'Save a copy')
     if (!d) {
@@ -44,13 +44,13 @@ export function projectsPage(me: Me) {
       return s
     }
     const members = d.members.filter((m) => m.role !== 'owner').map((m) =>
-      h('div', { className: 'row' }, h('span', { className: 'grow' }, m.email),
-        roleSelect(m.role, (role) => act(() => api.addMember(p.id, { email: m.email, role }))),
-        h('button', { title: 'remove', onclick: () => act(() => api.removeMember(p.id, m.email)) }, '×')))
+      h('div', { className: 'row' }, h('span', { className: 'grow' }, m.username),
+        roleSelect(m.role, (role) => act(() => api.addMember(p.id, { username: m.username, role }))),
+        h('button', { title: 'remove', onclick: () => act(() => api.removeMember(p.id, m.username)) }, '×')))
     const pick = h('select', {}, h('option', { value: '' }, 'share with…'),
-      ...emails.filter((e) => e !== me.email && !d.members.some((m) => m.email === e)).map((e) => h('option', { value: e }, e)))
+      ...usernames.filter((e) => e !== me.username && !d.members.some((m) => m.username === e)).map((e) => h('option', { value: e }, e)))
     const role = roleSelect('editor', () => {})
-    pick.onchange = () => pick.value && act(() => api.addMember(p.id, { email: pick.value, role: role.value as 'editor' | 'viewer' }))
+    pick.onchange = () => pick.value && act(() => api.addMember(p.id, { username: pick.value, role: role.value as 'editor' | 'viewer' }))
     li.append(h('details', { className: 'members' }, h('summary', {}, `${members.length} shared`), ...members,
       h('div', { className: 'row' }, pick, role)))
     return li

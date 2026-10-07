@@ -10,13 +10,13 @@ infrastructure. Write no clever abstractions beyond what this spec asks for.
 ## Scope of this pass
 1. Backend:
    - Hocuspocus sync server
-   - auth (dev and Google)
+   - auth (username + password, invite-only registration)
    - invites
    - project access control
    - sample storage (local and S3 drivers)
    - SQLite persistence
 2. A bare-bones web client:
-   - login and invite redemption
+   - login and registration (with an invite code)
    - project list and sharing
    - an admin invites page
    - a **minimal, low-clutter timeline**
@@ -36,7 +36,7 @@ Keep the timeline small, plain and isolated.
   - `@hocuspocus/server` (latest major) and `yjs`
   - `node:sqlite` (built into Node; no native deps)
   - `hono` with `@hono/node-server` for HTTP, or plain `node:http` if simpler
-  - `google-auth-library` for verifying Google ID tokens
+  - password hashing with Node's built-in scrypt (no extra dependency)
   - `@aws-sdk/client-s3` and `@aws-sdk/s3-request-presigner` for the S3 driver
   - `tsx` for dev and running
   - `vitest` for tests
@@ -54,7 +54,7 @@ package.json            # workspaces: shared, server, client; scripts: dev, buil
 shared/src/schema.ts    # Yjs doc schema helpers + awareness types (used by client; server may import)
 shared/src/api.ts       # API request/response types
 server/src/...          # config.ts, db.ts, auth.ts, storage/{index,local,s3}.ts, routes/*.ts, collab.ts, main.ts
-server/scripts/admin.ts # CLI: create-invite, list-invites, add-user
+server/scripts/admin.ts # CLI: create-invite, list-invites, create-user, passwd, make-admin
 server/test/...
 client/index.html, client/src/...   # see Client section
 deploy/Caddyfile, deploy/mobdaw.service, deploy/README.md
@@ -65,11 +65,8 @@ deploy/Caddyfile, deploy/mobdaw.service, deploy/README.md
 | var | default | notes |
 |---|---|---|
 | PORT | 8787 | |
-| PUBLIC_URL | http://localhost:5173 | Used to build invite links. |
-| AUTH_MODE | dev | `dev` or `google`. |
-| GOOGLE_CLIENT_ID | — | Required when AUTH_MODE=google. |
+| PUBLIC_URL | http://localhost:5173 | Used to build invite links; its path (e.g. `/mobdaw`) is the base path the app is served under. |
 | SESSION_SECRET | random per boot in dev, required in prod | HMAC key for session tokens and signed storage URLs. |
-| ADMIN_EMAILS | — | Comma-separated. These users are always admitted and are admins. |
 | DB_PATH | ./data/mobdaw.db | |
 | STORAGE_DRIVER | local | `local` or `s3`. |
 | STORAGE_DIR | ./data/samples | Used by the local driver. |
@@ -78,61 +75,59 @@ deploy/Caddyfile, deploy/mobdaw.service, deploy/README.md
 | USER_QUOTA_BYTES | 107374182400 | 100 GiB. |
 
 ## Auth model
-- **Identity:**
-  - `POST /api/auth/login` verifies an identity and sets a session.
-  - Dev mode: the body is `{email, name?}`, and the server trusts it.
-  - Google mode: the body is `{idToken}`. The server verifies the token with
-    `google-auth-library` against GOOGLE_CLIENT_ID and requires `email_verified`.
-  - Emails are lowercased everywhere.
+- **Accounts:**
+  - Usernames are lowercased, 3-32 chars of `a-z 0-9 _ . -`. No email is collected.
+  - Passwords are 8-200 characters, hashed with scrypt (N=2^16, r=8, p=1, 16-byte random salt),
+    stored as `scrypt$N$r$p$salt$hash` in `users.password_hash`.
+  - `POST /api/auth/register {username, password, invite}` creates the account (consuming the
+    invite) and signs in. `POST /api/auth/login {username, password}` signs in. Unknown users
+    and wrong passwords both return 401 `invalid_credentials` (an unknown user still costs one
+    hash). 8 failures per username in 15 minutes return 429 `too_many_attempts` (in memory).
+  - There is no self-serve password change; an admin runs `npm run admin -- passwd <username>`.
 - **Session:**
-  - The server mints its own token: `base64url(JSON{email,name,exp}) + "." + HMAC-SHA256`.
-    It lasts 30 days.
+  - The server mints its own token: `base64url(JSON{username,exp}) + "." + HMAC-SHA256`.
+    It lasts 30 days. It is only honored while the user still exists.
   - The token is set as an httpOnly cookie `mobdaw_session` (SameSite=Lax; Secure when
-    PUBLIC_URL is https).
-  - It is also returned in the JSON body so the WS provider can pass it as `token`.
-- **Being signed in is not the same as being admitted.** A user is *admitted* if their email
-  is in `users` or in ADMIN_EMAILS. Admin emails are upserted into `users` with
-  `is_admin=1` on login.
-  - Signed-in but non-admitted users may only call `/api/me`, `/api/auth/*` and the invite
-    redeem endpoint.
-  - Every other endpoint, and the WebSocket, returns 403 `{error:"not_invited"}`.
+    PUBLIC_URL is https; Path = PUBLIC_URL's path). It is also returned in the JSON body so the
+    WS provider can pass it as `token`.
+- **Everyone with an account is a full user.** There is no signed-in-but-not-admitted state.
+  Signed-out requests get 401 `not_signed_in`. Admins (`users.is_admin`) are created with
+  `npm run admin -- create-user <username> --admin` (or `make-admin`); there is no config list.
 - **Invites:**
-  - Only admins can create them, either via the API or `npm run admin -- create-invite`.
+  - Only admins can create them, via the API, the invites page, or `npm run admin -- create-invite`.
   - The token is 32 random bytes in base64url. Invites are single-use. Expiry is optional.
-  - Redeeming one adds the signed-in email to `users`.
-  - A used invite returns 410 `{error:"invite_used"}`. An expired one returns 410
-    `{error:"invite_expired"}`. An unknown one returns 404.
-  - Redeeming while already admitted returns 200, and the invite is not consumed.
+  - The invite link is `${PUBLIC_URL}/#/register/<token>`, which prefills the register form.
+  - Registering with a bad code returns 400 `invite_invalid`; a used one 410 `invite_used`; an
+    expired one 410 `invite_expired`. A taken username returns 409 `username_taken`
+    (400 `bad_username` / `bad_password` for invalid input; the invite is only consumed on success).
 
 ## SQLite schema
 ```sql
-users(email TEXT PRIMARY KEY, name TEXT, is_admin INTEGER NOT NULL DEFAULT 0, bytes_used INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)
+users(username TEXT PRIMARY KEY, password_hash TEXT, is_admin INTEGER NOT NULL DEFAULT 0, bytes_used INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)
 invites(token TEXT PRIMARY KEY, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER, redeemed_by TEXT, redeemed_at INTEGER)
-projects(id TEXT PRIMARY KEY, name TEXT NOT NULL, owner_email TEXT NOT NULL, created_at INTEGER NOT NULL)
-project_members(project_id TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('owner','editor')), PRIMARY KEY(project_id,email))
+projects(id TEXT PRIMARY KEY, name TEXT NOT NULL, owner_username TEXT NOT NULL, created_at INTEGER NOT NULL)
+project_members(project_id TEXT NOT NULL, username TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('owner','editor')), PRIMARY KEY(project_id,username))
 documents(name TEXT PRIMARY KEY, data BLOB NOT NULL, updated_at INTEGER NOT NULL)   -- Yjs state (Y.encodeStateAsUpdate)
 samples(hash TEXT PRIMARY KEY, size INTEGER NOT NULL, mime TEXT NOT NULL, uploaded_by TEXT NOT NULL, created_at INTEGER NOT NULL, complete INTEGER NOT NULL DEFAULT 0)
 ```
 Timestamps are ms epoch. Project ids are random url-safe strings of about 12 characters.
 
 ## HTTP API (JSON; all under `/api`)
-- `GET /config` returns `{authMode, googleClientId|null}`.
 - `POST /auth/login` returns `{token, me}`. `POST /auth/logout` clears the cookie.
-- `GET /me` returns `{email,name,admitted,isAdmin,bytesUsed,quotaBytes}`, or 401 when not
+- `GET /me` returns `{username,isAdmin,bytesUsed,quotaBytes}`, or 401 when not
   signed in.
 - Admin only:
   - `POST /invites` with `{expiresInDays?}` returns `{token,url}`, where
-    url = `${PUBLIC_URL}/#/invite/${token}`.
+    url = `${PUBLIC_URL}/#/register/${token}`.
   - `GET /invites` returns a list.
-- `POST /invites/:token/redeem` returns the updated `me`.
-- `GET /users` returns `[{email,name}]`: all admitted users, for the share picker.
+- `GET /users` returns `[{username}]`: all users, for the share picker.
 - Projects:
   - `GET /projects` lists the projects the user belongs to.
   - `POST /projects` with `{name}` creates a project with the caller as owner.
   - `GET /projects/:id` returns the project plus its members. Members only; otherwise 404.
-  - `POST /projects/:id/members` with `{email}` is owner only. The target must be admitted;
+  - `POST /projects/:id/members` with `{username}` is owner only. The target must exist;
     otherwise 400 `{error:"not_admitted"}`.
-  - `DELETE /projects/:id/members/:email` is owner only. The owner cannot be removed.
+  - `DELETE /projects/:id/members/:username` is owner only. The owner cannot be removed.
 - Samples. The hash is the lowercase hex SHA-256 of the file bytes. Any admitted user may
   use these endpoints.
   - `POST /samples/upload-url` with `{hash,size,mime}`:
@@ -164,7 +159,7 @@ Timestamps are ms epoch. Project ids are random url-safe strings of about 12 cha
 - Document name: `project:<projectId>`.
 - `onAuthenticate` verifies the session token, the admitted status and membership. If any
   check fails, it throws, and the connection is rejected. It sets
-  `context = {email,name}`.
+  `context = {username, role}`.
 - Persistence uses `@hocuspocus/extension-database` with fetch/store against the
   `documents` table. Use a debounce of about 2 seconds, which is the default behavior.
 - If a member is removed while connected, accept that they stay connected until reconnect.
@@ -187,21 +182,17 @@ doc.getMap('samples') // hash -> plain object { hash, name, duration, size, mime
   - `newId()`
   - Use `doc.transact` for anything with multiple steps.
 - Awareness state type:
-  `{ user: {email, name, color}, playhead?: number | null, selection?: string[] }`.
+  `{ user: {username, color}, playhead?: number | null, selection?: string[] }`.
 
 ## Client
 - Hash routes:
-  - `#/login`
-    - Dev mode: an email field and a name field.
-    - Google mode: a Google Identity Services button. Load the GIS script, get the
-      credential, then POST `{idToken}`.
-  - `#/invite/:token` is the redeem screen. If the user isn't signed in, it shows login
-    first and then redeems.
+  - `#/login` has a username and password form, with a link to register.
+  - `#/register/:code?` has invite code, username, password and confirm fields; the code is
+    prefilled from the link and the page says registration is invite-only.
   - `#/projects` lists projects, has a create form, and lets the owner share each project
     (pick from `/users`).
   - `#/project/:id` is the timeline.
   - `#/admin` (admins only) creates an invite, shows a copyable link, and lists invites.
-  - A signed-in but non-admitted user sees a single "You need an invite" message.
 - Dev server: Vite proxies `/api` and `/collab` (ws: true) to `localhost:8787`.
 - **Sample pipeline** (`client/src/samples.ts`):
   1. On file drop: read the ArrayBuffer and compute SHA-256 with `crypto.subtle`.
@@ -250,7 +241,7 @@ doc.getMap('samples') // hash -> plain object { hash, name, duration, size, mime
   server entry point via tsx, or on a compiled build. Pick one and document it.
 - `deploy/README.md` covers:
   - EC2 setup steps
-  - creating the Google OAuth client (authorized JS origin = the domain)
+  - creating the first admin with `create-user --admin`
   - S3 bucket plus an IAM instance-role policy (s3:PutObject/GetObject on
     `samples/*`, s3:ListBucket for HeadObject 404s)
   - an AWS Budget alert
@@ -260,11 +251,12 @@ doc.getMap('samples') // hash -> plain object { hash, name, duration, size, mime
 Quick start:
 ```
 npm install
-cp .env.example .env    # set ADMIN_EMAILS=you@x.com
+cp .env.example .env
+npm run admin -- create-user you --admin
 npm run dev
 ```
-Then open http://localhost:5173 and log in as the admin email (dev mode). Create an invite,
-open it in a private window, and log in as another email. Share a project and edit together.
+Then open http://localhost:5173 and log in. Create an invite, open its link in a private window,
+and register a second user. Share a project and edit together.
 
 ---
 
@@ -367,7 +359,7 @@ All sample routes are scoped to a project, and the caller must be a member.
 
 ## Project API additions and changes
 - `ProjectSummary.role` and `Member.role` now include `'viewer'`.
-- `POST /projects/:id/members` accepts `{email, role?: 'editor'|'viewer'}`, default
+- `POST /projects/:id/members` accepts `{username, role?: 'editor'|'viewer'}`, default
   `editor`. Called again for an existing member, it updates their role. Owner only, and
   the owner's own role can't be changed.
 - `POST /projects/:id/leave`: editors and viewers only. The owner gets 400

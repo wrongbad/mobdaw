@@ -88,7 +88,7 @@ export class LocalStorage implements Storage {
 
   private url(op: 'get' | 'put', hash: string, ttl: number, proof?: string) {
     const exp = Date.now() + ttl
-    return `/api/storage/${hash}?exp=${exp}&sig=${this.sign(op, hash, exp, proof)}${proof ? `&proof=${proof}` : ''}`
+    return `${this.config.basePath}/api/storage/${hash}?exp=${exp}&sig=${this.sign(op, hash, exp, proof)}${proof ? `&proof=${proof}` : ''}`
   }
 
   async uploadUrl(hash: string, _size: number, _mime: string, proof?: string) {

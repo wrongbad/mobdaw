@@ -4,7 +4,7 @@ import { addTrack, getTracks } from '@mobdaw/shared'
 import { audit } from '../src/audit.ts'
 import { openDb } from '../src/db.ts'
 import { createStorage } from '../src/storage/index.ts'
-import { ADMIN, admit, connect, login, startTest, until, type Client } from './helpers.ts'
+import { ADMIN, admit, client, connect, login, startTest, until, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 let admin: Client, alice: Client
@@ -12,7 +12,7 @@ let admin: Client, alice: Client
 beforeAll(async () => {
   t = await startTest()
   admin = await login(t.base, ADMIN)
-  alice = await admit(t.base, admin, 'alice@x.com')
+  alice = await admit(t.base, admin, 'alice')
 })
 afterAll(() => t.cleanup())
 
@@ -35,11 +35,11 @@ const denied = (token: string, project: string) =>
 describe('websocket access', () => {
   it('removed member is disconnected and cannot reconnect', async () => {
     const p = await create('Kick')
-    await admin.post(`/api/projects/${p}/members`, { email: 'alice@x.com' })
+    await admin.post(`/api/projects/${p}/members`, { username: 'alice' })
     const v = connect(t.port, p, alice.token!)
     await until(() => v.provider.synced)
     const gone = kicked(v)
-    await admin.del(`/api/projects/${p}/members/alice%40x.com`)
+    await admin.del(`/api/projects/${p}/members/alice`)
     await until(() => gone.closed)
     v.provider.destroy()
     await denied(alice.token!, p)
@@ -47,7 +47,7 @@ describe('websocket access', () => {
 
   it('deleting a project closes connections and leaves no document row behind', async () => {
     const p = await create('Doomed')
-    await admin.post(`/api/projects/${p}/members`, { email: 'alice@x.com' })
+    await admin.post(`/api/projects/${p}/members`, { username: 'alice' })
     const v = connect(t.port, p, alice.token!)
     const a = connect(t.port, p, admin.token!)
     await until(() => v.provider.synced && a.provider.synced)
@@ -65,11 +65,11 @@ describe('websocket access', () => {
 
   it('leaving and downgrading also close the connection', async () => {
     const p = await create('Leave')
-    await admin.post(`/api/projects/${p}/members`, { email: 'alice@x.com' })
+    await admin.post(`/api/projects/${p}/members`, { username: 'alice' })
     const v = connect(t.port, p, alice.token!)
     await until(() => v.provider.synced)
     const gone = kicked(v)
-    await admin.post(`/api/projects/${p}/members`, { email: 'alice@x.com', role: 'viewer' })
+    await admin.post(`/api/projects/${p}/members`, { username: 'alice', role: 'viewer' })
     await until(() => gone.closed)
     v.provider.destroy()
   })
@@ -78,7 +78,7 @@ describe('websocket access', () => {
 describe('copy', () => {
   it('copies live doc state and library; caller owns the copy', async () => {
     const src = await create('Source')
-    await admin.post(`/api/projects/${src}/members`, { email: 'alice@x.com', role: 'viewer' })
+    await admin.post(`/api/projects/${src}/members`, { username: 'alice', role: 'viewer' })
     const data = Buffer.alloc(20, 5)
     const hash = createHash('sha256').update(data).digest('hex')
     const up = await admin.post(`/api/projects/${src}/samples/upload-url`, { hash, size: 20, mime: 'audio/wav' })
@@ -93,7 +93,7 @@ describe('copy', () => {
 
     const copy = await alice.post(`/api/projects/${src}/copy`, { name: 'Mine' }) // a viewer may copy
     expect(copy.status).toBe(201)
-    expect(copy.body).toMatchObject({ name: 'Mine', ownerEmail: 'alice@x.com', role: 'owner' })
+    expect(copy.body).toMatchObject({ name: 'Mine', ownerUsername: 'alice', role: 'owner' })
     expect(copy.body.members).toHaveLength(1)
     expect((await alice.get(`/api/projects/${copy.body.id}/samples`)).body.map((s: any) => s.hash)).toEqual([hash])
     expect((await alice.get(`/api/projects/${copy.body.id}/samples/${hash}/url`)).status).toBe(200)
@@ -103,8 +103,8 @@ describe('copy', () => {
     a.provider.destroy()
     b.provider.destroy()
 
-    expect((await (await login(t.base, 'stranger@x.com')).post(`/api/projects/${src}/copy`)).status).toBe(403) // not admitted
-    expect((await admit(t.base, admin, 'carol@x.com').then((c) => c.post(`/api/projects/${src}/copy`))).status).toBe(404)
+    expect((await client(t.base).post(`/api/projects/${src}/copy`)).status).toBe(401) // not signed in
+    expect((await admit(t.base, admin, 'carol').then((c) => c.post(`/api/projects/${src}/copy`))).status).toBe(404)
     expect((await admin.post(`/api/projects/${src}/copy`)).body.name).toBe('Source (copy)')
   })
 })
@@ -128,11 +128,11 @@ describe('audit', () => {
 
       const leak = 'f'.repeat(64)
       await (await import('node:fs/promises')).writeFile(`${t.config.storageDir}/${leak}`, 'stray')
-      db.prepare('UPDATE users SET bytes_used = bytes_used + 777 WHERE email = ?').run(ADMIN)
+      db.prepare('UPDATE users SET bytes_used = bytes_used + 777 WHERE username = ?').run(ADMIN)
 
       const found = await audit(ctx, storage)
       expect(found.leaked).toEqual([leak])
-      expect(found.drift).toMatchObject([{ email: ADMIN, recorded: found.drift[0].expected + 777 }])
+      expect(found.drift).toMatchObject([{ username: ADMIN, recorded: found.drift[0].expected + 777 }])
 
       await audit(ctx, storage, true)
       const after = await audit(ctx, storage)
@@ -161,9 +161,10 @@ describe('migration', () => {
       CREATE TABLE samples(hash TEXT PRIMARY KEY, size INTEGER NOT NULL, mime TEXT NOT NULL, uploaded_by TEXT NOT NULL, created_at INTEGER NOT NULL, complete INTEGER NOT NULL DEFAULT 0);
       PRAGMA user_version = 1;`)
     const [h1, h2, h3] = ['1', '2', '3'].map((c) => c.repeat(64))
-    raw.prepare("INSERT INTO projects VALUES('p1','P','o@x.com',1)").run()
-    raw.prepare("INSERT INTO project_members VALUES('p1','o@x.com','owner')").run()
-    for (const [h, c] of [[h1, 1], [h2, 1], [h3, 0]] as const) raw.prepare('INSERT INTO samples VALUES(?,?,?,?,?,?)').run(h, 5, 'audio/wav', 'o@x.com', 1, c)
+    raw.prepare("INSERT INTO users(email, name, created_at) VALUES('o', 'Old', 1)").run()
+    raw.prepare("INSERT INTO projects VALUES('p1','P','o',1)").run()
+    raw.prepare("INSERT INTO project_members VALUES('p1','o','owner')").run()
+    for (const [h, c] of [[h1, 1], [h2, 1], [h3, 0]] as const) raw.prepare('INSERT INTO samples VALUES(?,?,?,?,?,?)').run(h, 5, 'audio/wav', 'o', 1, c)
     const doc = new Y.Doc()
     doc.getMap('samples').set(h1, { hash: h1 })
     const clip = new Y.Map<unknown>()
@@ -174,6 +175,9 @@ describe('migration', () => {
 
     const db = openDb(path)
     try {
+      // Google-era identities are kept as usernames, with no password until an admin sets one.
+      expect(db.prepare('SELECT * FROM users').all()).toMatchObject([{ username: 'o', password_hash: null }])
+      expect(db.prepare('SELECT owner_username FROM projects').all()).toMatchObject([{ owner_username: 'o' }])
       expect(db.prepare('SELECT hash, state FROM samples ORDER BY hash').all()).toMatchObject([
         { state: 'complete' }, { state: 'complete' }, { state: 'pending' },
       ])
@@ -188,7 +192,7 @@ describe('migration', () => {
 describe('read-only viewers', () => {
   it('viewer edits are not applied or persisted', async () => {
     const p = await create('Viewer')
-    await admin.post(`/api/projects/${p}/members`, { email: 'alice@x.com', role: 'viewer' })
+    await admin.post(`/api/projects/${p}/members`, { username: 'alice', role: 'viewer' })
     const a = connect(t.port, p, admin.token!)
     const v = connect(t.port, p, alice.token!)
     await until(() => a.provider.synced && v.provider.synced)

@@ -42,6 +42,13 @@ const migrations: (string | ((db: Db) => void))[] = [
       for (const h of hashes) link.run(d.updated_at, d.name.slice('project:'.length), h)
     }
   },
+  // Own auth (username + password) replaces Google email identities: rename the identity columns.
+  // Pre-existing users have no password until an admin sets one (`npm run admin -- passwd <username>`).
+  `ALTER TABLE users RENAME COLUMN email TO username;
+   ALTER TABLE users DROP COLUMN name;
+   ALTER TABLE users ADD COLUMN password_hash TEXT;
+   ALTER TABLE projects RENAME COLUMN owner_email TO owner_username;
+   ALTER TABLE project_members RENAME COLUMN email TO username;`,
 ]
 
 export function openDb(path: string): Db {

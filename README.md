@@ -8,11 +8,12 @@ Prerequisites: Node 24, and Rust via [rustup](https://rustup.rs) with the wasm t
 is compiled to wasm by `npm run build:wasm`, which `npm run dev` and the client build run first.
 ```
 npm install
-cp .env.example .env    # set ADMIN_EMAILS=you@x.com
+cp .env.example .env
+npm run admin -- create-user you --admin    # prompts for a password
 npm run dev
 ```
-Open http://localhost:5173 and log in as the admin email (dev mode). Create an invite, open it
-in a private window, and log in as another email. Share a project and edit together.
+Open http://localhost:5173 and log in. Create an invite on the invites page, open its link
+(`#/register/<code>`) in a private window and register a second user. Share a project and edit together.
 
 The API and the `/collab` WebSocket share one port (8787); Vite proxies both in dev.
 
@@ -21,7 +22,7 @@ The API and the `/collab` WebSocket share one port (8787); Vite proxies both in 
 - `npm test` (Rust `dsp` tests, then server tests) / `npm run typecheck`
 - `npm run build:wasm` builds `engine/` to `client/src/audio/wasm/engine.wasm` (gitignored);
   `npm run test:dsp` runs the Rust tests alone. Dev playground: `#/engine-test` (not linked).
-- `npm run admin -- create-invite [--days N]`, `list-invites`, `add-user <email>`,
+- `npm run admin -- create-invite [--days N]`, `list-invites`, `create-user <username> [--admin]`, `passwd <username>`, `make-admin <username>`,
   `tree` (users, owned projects with members/roles, libraries, totals),
   `audit [--fix]` (reconcile storage with the DB: leaked objects, broken rows, unreferenced
   samples, `bytes_used` drift; exits non-zero on findings; `--fix` deletes leaked objects and

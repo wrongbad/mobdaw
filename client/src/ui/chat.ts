@@ -41,11 +41,11 @@ export function chatPanel({ doc, user, readOnly, onUnread }: ChatDeps) {
     const msgs = log.toArray().slice(-SHOWN)
     let prev: ChatMessage | undefined
     list.replaceChildren(...msgs.flatMap((m) => {
-      const me = m.email === user.email
+      const me = m.username === user.username
       const side = me ? 'me' : 'them'
       const out: HTMLElement[] = []
-      if (!prev || prev.email !== m.email || m.ts - prev.ts > GAP_MS)
-        out.push(h('div', { className: `msg-meta ${side}` }, me ? clock(m.ts) : `${m.name} · ${clock(m.ts)}`))
+      if (!prev || prev.username !== m.username || m.ts - prev.ts > GAP_MS)
+        out.push(h('div', { className: `msg-meta ${side}` }, me ? clock(m.ts) : `${m.username} · ${clock(m.ts)}`))
       const b = h('div', { className: `msg ${side}` }, m.text)
       if (!me) b.style.boxShadow = `inset 2px 0 0 ${m.color}`
       else if (!readOnly) b.oncontextmenu = (e) => { // own messages only: the server can't tell who wrote what

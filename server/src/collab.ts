@@ -1,14 +1,14 @@
 import { Database } from '@hocuspocus/extension-database'
 import { Server } from '@hocuspocus/server'
 import { docName } from '@mobdaw/shared'
-import { isAdmitted, memberRole, verifySession, type Ctx } from './auth.ts'
+import { memberRole, sessionUser, type Ctx } from './auth.ts'
 
 export type Collab = ReturnType<typeof createCollab>
 
 /** Close open connections to a project's document (one user's, or everyone's); clients re-check access. */
-export function kick(collab: Collab, projectId: string, email?: string) {
+export function kick(collab: Collab, projectId: string, username?: string) {
   for (const c of collab.hocuspocus.documents.get(docName(projectId))?.getConnections() ?? [])
-    if (!email || c.context.email === email) c.close({ code: 1000, reason: KICK_REASON })
+    if (!username || c.context.username === username) c.close({ code: 1000, reason: KICK_REASON })
 }
 export const KICK_REASON = 'access_changed'
 
@@ -45,13 +45,13 @@ export function createCollab(ctx: Ctx) {
       }),
     ],
     async onAuthenticate({ token, documentName, connectionConfig }) {
-      const s = verifySession(ctx.config.sessionSecret, token)
+      const username = sessionUser(ctx, token)
       const projectId = documentName.startsWith('project:') ? documentName.slice(8) : null
-      if (!s || !isAdmitted(ctx, s.email)) throw new Error('not_invited')
-      const role = projectId && memberRole(ctx, projectId, s.email)
+      if (!username) throw new Error('not_signed_in')
+      const role = projectId && memberRole(ctx, projectId, username)
       if (!role) throw new Error('forbidden')
       connectionConfig.readOnly = role === 'viewer'
-      return { email: s.email, name: s.name, role }
+      return { username, role }
     },
   })
 }

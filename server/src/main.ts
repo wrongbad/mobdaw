@@ -34,7 +34,7 @@ export async function startServer(config: Config) {
 if (import.meta.main) {
   const config = loadConfig()
   const server = await startServer(config)
-  console.log(`mobdaw server listening on :${server.port} (auth=${config.authMode}, storage=${config.storageDriver})`)
+  console.log(`mobdaw server listening on :${server.port} (storage=${config.storageDriver})`)
   const stop = () => server.close().then(() => process.exit(0))
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)

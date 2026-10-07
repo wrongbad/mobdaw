@@ -2,33 +2,32 @@ import { randomBytes } from 'node:crypto'
 import { Hono, type Context } from 'hono'
 import * as Y from 'yjs'
 import { docName, type Member, type ProjectDetail, type ProjectSummary, type Role } from '@mobdaw/shared'
-import { isAdmitted, memberRole, requireAdmitted, type Ctx, type Env } from '../auth.ts'
+import { memberRole, requireSignedIn, userExists, type Ctx, type Env } from '../auth.ts'
 import { kick, type Collab } from '../collab.ts'
 import { tx } from '../db.ts'
 import type { Storage } from '../storage/index.ts'
 import { sweepSamples } from './samples.ts'
 
-type ProjectRow = { id: string; name: string; owner_email: string; created_at: number; role: Role }
+type ProjectRow = { id: string; name: string; owner_username: string; created_at: number; role: Role }
 const summary = (p: ProjectRow): ProjectSummary => ({
-  id: p.id, name: p.name, ownerEmail: p.owner_email, createdAt: p.created_at, role: p.role,
+  id: p.id, name: p.name, ownerUsername: p.owner_username, createdAt: p.created_at, role: p.role,
 })
 
 export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
   const { db } = ctx
   const r = new Hono<Env>()
-  r.use('*', requireAdmitted(ctx))
+  r.use('*', requireSignedIn)
 
-  const detail = (id: string, email: string): ProjectDetail | null => {
+  const detail = (id: string, username: string): ProjectDetail | null => {
     const p = db
       .prepare(
-        `SELECT p.*, m.role FROM projects p JOIN project_members m ON m.project_id = p.id AND m.email = ? WHERE p.id = ?`,
+        `SELECT p.*, m.role FROM projects p JOIN project_members m ON m.project_id = p.id AND m.username = ? WHERE p.id = ?`,
       )
-      .get(email, id) as ProjectRow | undefined
+      .get(username, id) as ProjectRow | undefined
     if (!p) return null
     const members = db
       .prepare(
-        `SELECT m.email, COALESCE(u.name, '') AS name, m.role FROM project_members m
-         LEFT JOIN users u ON u.email = m.email WHERE m.project_id = ? ORDER BY m.role = 'owner' DESC, m.email`,
+        `SELECT username, role FROM project_members WHERE project_id = ? ORDER BY role = 'owner' DESC, username`,
       )
       .all(id) as Member[]
     return { ...summary(p), members }
@@ -40,9 +39,9 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
         db
           .prepare(
             `SELECT p.*, m.role FROM projects p JOIN project_members m ON m.project_id = p.id
-             WHERE m.email = ? ORDER BY p.created_at DESC`,
+             WHERE m.username = ? ORDER BY p.created_at DESC`,
           )
-          .all(c.var.session!.email) as ProjectRow[]
+          .all(c.var.session!.username) as ProjectRow[]
       ).map(summary),
     ),
   )
@@ -50,23 +49,23 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
   r.post('/', async (c) => {
     const name = String((await c.req.json().catch(() => ({}))).name ?? '').trim()
     if (!name) return c.json({ error: 'bad_request' }, 400)
-    const email = c.var.session!.email
+    const username = c.var.session!.username
     const id = randomBytes(9).toString('base64url')
     tx(db, () => {
-      db.prepare('INSERT INTO projects(id, name, owner_email, created_at) VALUES(?,?,?,?)').run(id, name, email, Date.now())
-      db.prepare("INSERT INTO project_members(project_id, email, role) VALUES(?,?,'owner')").run(id, email)
+      db.prepare('INSERT INTO projects(id, name, owner_username, created_at) VALUES(?,?,?,?)').run(id, name, username, Date.now())
+      db.prepare("INSERT INTO project_members(project_id, username, role) VALUES(?,?,'owner')").run(id, username)
     })
-    return c.json(detail(id, email), 201)
+    return c.json(detail(id, username), 201)
   })
 
   r.get('/:id', (c) => {
-    const p = detail(c.req.param('id'), c.var.session!.email)
+    const p = detail(c.req.param('id'), c.var.session!.username)
     return p ? c.json(p) : c.json({ error: 'not_found' }, 404)
   })
 
   // Access gate: null if the caller may proceed, else a 404 (non-member) / 403 (not owner when required) response.
   const gate = (c: Context<Env>, ownerOnly = false) => {
-    const role = memberRole(ctx, c.req.param('id')!, c.var.session!.email)
+    const role = memberRole(ctx, c.req.param('id')!, c.var.session!.username)
     return role && (!ownerOnly || role === 'owner') ? null : c.json({ error: role ? 'forbidden' : 'not_found' }, role ? 403 : 404)
   }
 
@@ -76,7 +75,7 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
     const name = String((await c.req.json().catch(() => ({}))).name ?? '').trim()
     if (!name) return c.json({ error: 'bad_request' }, 400)
     db.prepare('UPDATE projects SET name = ? WHERE id = ?').run(name, c.req.param('id'))
-    return c.json(detail(c.req.param('id'), c.var.session!.email))
+    return c.json(detail(c.req.param('id'), c.var.session!.username))
   })
 
   r.delete('/:id', (c) => {
@@ -103,38 +102,38 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
     if (denied) return denied
     const id = c.req.param('id')
     const body = await c.req.json().catch(() => ({}))
-    const email = String(body.email ?? '').trim().toLowerCase()
+    const username = String(body.username ?? '').trim().toLowerCase()
     const newRole = body.role ?? 'editor'
     if (newRole !== 'editor' && newRole !== 'viewer') return c.json({ error: 'bad_request' }, 400)
-    if (!isAdmitted(ctx, email)) return c.json({ error: 'not_admitted' }, 400)
-    const current = memberRole(ctx, id, email)
+    if (!userExists(ctx, username)) return c.json({ error: 'not_admitted' }, 400)
+    const current = memberRole(ctx, id, username)
     if (current === 'owner') return c.json({ error: 'cannot_change_owner' }, 400)
     db.prepare(
-      'INSERT INTO project_members(project_id, email, role) VALUES(?,?,?) ON CONFLICT(project_id, email) DO UPDATE SET role = excluded.role',
-    ).run(id, email, newRole)
-    if (current && current !== newRole) kick(collab, id, email) // reconnects with the new role
-    return c.json(detail(id, c.var.session!.email))
+      'INSERT INTO project_members(project_id, username, role) VALUES(?,?,?) ON CONFLICT(project_id, username) DO UPDATE SET role = excluded.role',
+    ).run(id, username, newRole)
+    if (current && current !== newRole) kick(collab, id, username) // reconnects with the new role
+    return c.json(detail(id, c.var.session!.username))
   })
 
-  r.delete('/:id/members/:email', (c) => {
+  r.delete('/:id/members/:username', (c) => {
     const denied = gate(c, true)
     if (denied) return denied
     const id = c.req.param('id')
-    const email = decodeURIComponent(c.req.param('email')).toLowerCase()
-    if (memberRole(ctx, id, email) === 'owner') return c.json({ error: 'cannot_remove_owner' }, 400)
-    db.prepare('DELETE FROM project_members WHERE project_id = ? AND email = ?').run(id, email)
-    kick(collab, id, email)
-    return c.json(detail(id, c.var.session!.email))
+    const username = decodeURIComponent(c.req.param('username')).toLowerCase()
+    if (memberRole(ctx, id, username) === 'owner') return c.json({ error: 'cannot_remove_owner' }, 400)
+    db.prepare('DELETE FROM project_members WHERE project_id = ? AND username = ?').run(id, username)
+    kick(collab, id, username)
+    return c.json(detail(id, c.var.session!.username))
   })
 
   r.post('/:id/leave', (c) => {
     const denied = gate(c)
     if (denied) return denied
-    if (memberRole(ctx, c.req.param('id'), c.var.session!.email) === 'owner') return c.json({ error: 'owner_cannot_leave' }, 400)
+    if (memberRole(ctx, c.req.param('id'), c.var.session!.username) === 'owner') return c.json({ error: 'owner_cannot_leave' }, 400)
     const id = c.req.param('id')
-    const email = c.var.session!.email
-    db.prepare('DELETE FROM project_members WHERE project_id = ? AND email = ?').run(id, email)
-    kick(collab, id, email)
+    const username = c.var.session!.username
+    db.prepare('DELETE FROM project_members WHERE project_id = ? AND username = ?').run(id, username)
+    kick(collab, id, username)
     return c.json({ ok: true })
   })
 
@@ -142,7 +141,7 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
     const denied = gate(c)
     if (denied) return denied
     const id = c.req.param('id')
-    const me = c.var.session!.email
+    const me = c.var.session!.username
     const src = db.prepare('SELECT name FROM projects WHERE id = ?').get(id) as { name: string }
     const given = String((await c.req.json().catch(() => ({}))).name ?? '').trim()
     const copy = randomBytes(9).toString('base64url')
@@ -151,8 +150,8 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
     const stored = db.prepare('SELECT data FROM documents WHERE name = ?').get(docName(id)) as { data: Uint8Array } | undefined
     const state = live ? Y.encodeStateAsUpdate(live) : stored?.data
     tx(db, () => {
-      db.prepare('INSERT INTO projects(id, name, owner_email, created_at) VALUES(?,?,?,?)').run(copy, given || `${src.name} (copy)`, me, Date.now())
-      db.prepare("INSERT INTO project_members(project_id, email, role) VALUES(?,?,'owner')").run(copy, me)
+      db.prepare('INSERT INTO projects(id, name, owner_username, created_at) VALUES(?,?,?,?)').run(copy, given || `${src.name} (copy)`, me, Date.now())
+      db.prepare("INSERT INTO project_members(project_id, username, role) VALUES(?,?,'owner')").run(copy, me)
       db.prepare(
         `INSERT INTO project_samples(project_id, hash, added_by, added_at)
          SELECT ?, hash, added_by, added_at FROM project_samples WHERE project_id = ?`,

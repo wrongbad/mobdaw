@@ -726,7 +726,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
 
     // presence
     presence.replaceChildren(...[s.user, ...remote.map((r) => r.user)].map((u) =>
-      h('span', { className: 'dot', title: u.name, style: `background:${u.color}` }, initials(u.name))))
+      h('span', { className: 'dot', title: u.username, style: `background:${u.color}` }, initials(u.username))))
     for (const e of [...overlay.querySelectorAll('.remote-head'), ...rulerHeads.querySelectorAll('.remote-head')]) e.remove()
     for (const r of remote) {
       if (r.playhead == null) continue

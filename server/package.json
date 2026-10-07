@@ -11,17 +11,16 @@
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
-    "@mobdaw/shared": "*",
-    "@hocuspocus/server": "latest",
-    "@hocuspocus/extension-database": "latest",
-    "@hono/node-server": "^1.13.0",
-    "hono": "^4.6.0",
-    "google-auth-library": "^9.0.0",
     "@aws-sdk/client-s3": "^3.600.0",
     "@aws-sdk/s3-request-presigner": "^3.600.0",
-    "yjs": "^13.6.0",
+    "@hocuspocus/extension-database": "latest",
+    "@hocuspocus/server": "latest",
+    "@hono/node-server": "^1.13.0",
+    "@mobdaw/shared": "*",
+    "hono": "^4.6.0",
     "tsx": "^4.19.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yjs": "^13.6.0"
   },
   "devDependencies": {
     "@hocuspocus/provider": "latest",

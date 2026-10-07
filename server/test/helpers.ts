@@ -5,19 +5,25 @@ import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import WebSocket from 'ws'
 import { loadConfig, type Config } from '../src/config.ts'
+import { createUser, getUser } from '../src/auth.ts'
+import { openDb } from '../src/db.ts'
 import { startServer } from '../src/main.ts'
 
-export const ADMIN = 'admin@x.com'
+export const ADMIN = 'admin'
+export const pw = (username: string) => `${username}-password`
 
 export async function startTest(env: Record<string, string> = {}, dir = mkdtempSync(join(tmpdir(), 'mobdaw-'))) {
   const config: Config = loadConfig({
     PORT: '0',
-    ADMIN_EMAILS: ADMIN,
     DB_PATH: join(dir, 'db.sqlite'),
     STORAGE_DIR: join(dir, 'samples'),
     SESSION_SECRET: 'test-secret',
     ...env,
   })
+  // Bootstrap the admin the way `admin create-user --admin` would (the first user needs no invite).
+  const db = openDb(config.dbPath)
+  if (!getUser(db, ADMIN)) await createUser({ config, db }, ADMIN, pw(ADMIN), true)
+  db.close()
   const server = await startServer(config)
   const base = `http://127.0.0.1:${server.port}`
   return {
@@ -49,8 +55,9 @@ export function client(base: string, token?: string) {
   }
 }
 
-export async function login(base: string, email: string, name?: string) {
-  const r = await client(base).post('/api/auth/login', { email, name })
+export async function login(base: string, username: string, password = pw(username)) {
+  const r = await client(base).post('/api/auth/login', { username, password })
+  if (!r.body?.token) throw new Error(`login failed for ${username}: ${JSON.stringify(r.body)}`)
   return client(base, r.body.token)
 }
 
@@ -70,9 +77,10 @@ export const until = async (fn: () => boolean, ms = 5000) => {
   }
 }
 
-/** Admit `email` via an invite from `admin` and return its client. */
-export async function admit(base: string, admin: Client, email: string) {
-  const c = await login(base, email)
-  await c.post(`/api/invites/${(await admin.post('/api/invites')).body.token}/redeem`)
-  return c
+/** Register `username` with an invite from `admin` and return its client. */
+export async function admit(base: string, admin: Client, username: string) {
+  const invite = (await admin.post('/api/invites')).body.token
+  const r = await client(base).post('/api/auth/register', { username, password: pw(username), invite })
+  if (!r.body?.token) throw new Error(`register failed for ${username}: ${JSON.stringify(r.body)}`)
+  return client(base, r.body.token)
 }

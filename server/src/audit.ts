@@ -5,7 +5,7 @@ export type AuditReport = {
   leaked: string[] // objects with no samples row
   broken: string[] // complete rows with no object
   unreferenced: string[] // complete samples with zero project links
-  drift: { email: string; recorded: number; expected: number }[] // bytes_used != sum of the user's charged uploads
+  drift: { username: string; recorded: number; expected: number }[] // bytes_used != sum of the user's charged uploads
 }
 
 /** Reconcile storage with the DB. With `fix`: delete leaked objects and recompute bytes_used. */
@@ -25,15 +25,15 @@ export async function audit(ctx: Ctx, storage: Storage, fix = false): Promise<Au
     // Charged = complete or still-tombstoned (refunded only once the sweep purges them).
     drift: db
       .prepare(
-        `SELECT u.email, u.bytes_used AS recorded,
-           (SELECT COALESCE(SUM(size), 0) FROM samples WHERE uploaded_by = u.email AND state != 'pending') AS expected
+        `SELECT u.username, u.bytes_used AS recorded,
+           (SELECT COALESCE(SUM(size), 0) FROM samples WHERE uploaded_by = u.username AND state != 'pending') AS expected
          FROM users u WHERE recorded != expected`,
       )
       .all() as AuditReport['drift'],
   }
   if (fix) {
     for (const h of report.leaked) await storage.delete(h)
-    for (const d of report.drift) db.prepare('UPDATE users SET bytes_used = ? WHERE email = ?').run(d.expected, d.email)
+    for (const d of report.drift) db.prepare('UPDATE users SET bytes_used = ? WHERE username = ?').run(d.expected, d.username)
   }
   return report
 }

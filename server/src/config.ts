@@ -6,10 +6,9 @@ const repoRoot = resolve(import.meta.dirname, '../..')
 export type Config = {
   port: number
   publicUrl: string
-  authMode: 'dev' | 'google'
-  googleClientId: string | null
+  /** Path the app is served under (from PUBLIC_URL), e.g. '/mobdaw'; '' at the root. The proxy strips it. */
+  basePath: string
   sessionSecret: string
-  adminEmails: string[]
   dbPath: string
   storageDriver: 'local' | 's3'
   storageDir: string
@@ -20,24 +19,18 @@ export type Config = {
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
-  const authMode = (env.AUTH_MODE ?? 'dev') as Config['authMode']
-  if (authMode !== 'dev' && authMode !== 'google') throw new Error('AUTH_MODE must be dev or google')
   const storageDriver = (env.STORAGE_DRIVER ?? 'local') as Config['storageDriver']
   if (storageDriver !== 'local' && storageDriver !== 's3') throw new Error('STORAGE_DRIVER must be local or s3')
-  if (authMode === 'google' && !env.GOOGLE_CLIENT_ID) throw new Error('GOOGLE_CLIENT_ID is required')
-  // Dev mode trusts any email: never let it run behind a public URL.
+  // A random per-boot secret is only acceptable locally (it logs everyone out on restart).
   const host = new URL(env.PUBLIC_URL ?? 'http://localhost:5173').hostname
-  if (authMode === 'dev' && !['localhost', '127.0.0.1', '[::1]'].includes(host))
-    throw new Error(`AUTH_MODE=dev is only allowed when PUBLIC_URL is localhost (got ${host})`)
-  if (authMode !== 'dev' && !env.SESSION_SECRET) throw new Error('SESSION_SECRET is required outside dev mode')
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(host)
+  if (!local && !env.SESSION_SECRET) throw new Error('SESSION_SECRET is required when PUBLIC_URL is not localhost')
   if (storageDriver === 's3' && !(env.S3_BUCKET && env.S3_REGION)) throw new Error('S3_BUCKET and S3_REGION are required')
   return {
     port: Number(env.PORT ?? 8787),
     publicUrl: (env.PUBLIC_URL ?? 'http://localhost:5173').replace(/\/$/, ''),
-    authMode,
-    googleClientId: env.GOOGLE_CLIENT_ID || null,
+    basePath: new URL(env.PUBLIC_URL ?? 'http://localhost:5173').pathname.replace(/\/$/, ''),
     sessionSecret: env.SESSION_SECRET || randomBytes(32).toString('hex'),
-    adminEmails: (env.ADMIN_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
     dbPath: resolve(repoRoot, env.DB_PATH ?? './data/mobdaw.db'),
     storageDriver,
     storageDir: resolve(repoRoot, env.STORAGE_DIR ?? './data/samples'),

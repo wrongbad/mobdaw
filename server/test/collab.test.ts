@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { addAudioClip, addTrack, getClips, getTracks } from '@mobdaw/shared'
-import { ADMIN, connect, login, startTest, until, type Client } from './helpers.ts'
+import { ADMIN, admit, connect, login, startTest, until, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 let admin: Client, alice: Client, outsider: Client
@@ -9,11 +9,10 @@ let projectId: string
 beforeAll(async () => {
   t = await startTest()
   admin = await login(t.base, ADMIN)
-  alice = await login(t.base, 'alice@x.com')
-  outsider = await login(t.base, 'outsider@x.com')
-  await alice.post(`/api/invites/${(await admin.post('/api/invites')).body.token}/redeem`)
+  alice = await admit(t.base, admin, 'alice')
+  outsider = await admit(t.base, admin, 'outsider')
   projectId = (await admin.post('/api/projects', { name: 'P' })).body.id
-  await admin.post(`/api/projects/${projectId}/members`, { email: 'alice@x.com' })
+  await admin.post(`/api/projects/${projectId}/members`, { username: 'alice' })
 })
 afterAll(() => t.cleanup())
 
@@ -26,7 +25,7 @@ const failsAuth = (token: string, project = projectId) =>
   })
 
 describe('collab', () => {
-  it('rejects non-member, non-admitted, bad token, unknown doc', async () => {
+  it('rejects non-member, bad token, unknown doc', async () => {
     await failsAuth(outsider.token!)
     await failsAuth('garbage')
     await failsAuth(alice.token!, 'nonexistent1')

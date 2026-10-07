@@ -15,7 +15,7 @@ const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 const put = (url: string, body: Buffer | string, base = t.base) => fetch(base + url, { method: 'PUT', body: body as BodyInit })
 const P = (id: string) => `/api/projects/${id}/samples`
 const mk = async (c: Client, name = 'P') => (await c.post('/api/projects', { name })).body.id as string
-const share = (owner: Client, id: string, email: string, role?: string) => owner.post(`/api/projects/${id}/members`, { email, role })
+const share = (owner: Client, id: string, username: string, role?: string) => owner.post(`/api/projects/${id}/members`, { username, role })
 /** Full upload flow into a project; returns the hash. */
 async function upload(c: Client, project: string, d: Buffer, base = t.base) {
   const up = await c.post(`${P(project)}/upload-url`, { hash: sha(d), size: d.length, mime: 'audio/wav' })
@@ -31,8 +31,8 @@ const used = async (c: Client) => (await c.get('/api/me')).body.bytesUsed as num
 beforeAll(async () => {
   t = await startTest({ MAX_UPLOAD_BYTES: '1000', USER_QUOTA_BYTES: '1500' })
   admin = await login(t.base, ADMIN)
-  alice = await admit(t.base, admin, 'alice@x.com')
-  bob = await admit(t.base, admin, 'bob@x.com')
+  alice = await admit(t.base, admin, 'alice')
+  bob = await admit(t.base, admin, 'bob')
   db = openDb(t.config.dbPath)
   storage = createStorage(t.config, () => undefined)
   pA = await mk(admin, 'A')
@@ -113,9 +113,7 @@ describe('samples (local driver)', () => {
     expect(r.body.error).toBe('quota_exceeded')
   })
 
-  it('requires admitted user, membership and valid input', async () => {
-    const u = await login(t.base, 'out@x.com')
-    expect((await u.post(`${P(pA)}/upload-url`, { hash, size: 1, mime: 'a/b' })).body.error).toBe('not_invited')
+  it('requires sign-in, membership and valid input', async () => {
     expect((await admin.post(`${P(pA)}/upload-url`, { hash: 'zz', size: 1, mime: 'a/b' })).status).toBe(400)
     expect((await client(t.base).post(`${P(pA)}/upload-url`, {})).status).toBe(401)
     expect((await alice.post(`${P(pA)}/upload-url`, { hash, size: 1, mime: 'a/b' })).status).toBe(404) // non-member
@@ -127,7 +125,7 @@ describe('samples (local driver)', () => {
 describe('access policy', () => {
   it('read leak: a hash linked only in another project is not readable', async () => {
     const A = await mk(admin), B = await mk(admin)
-    await share(admin, A, 'alice@x.com')
+    await share(admin, A, 'alice')
     const h = await upload(admin, B, Buffer.alloc(11, 21))
     expect((await alice.get(`${P(A)}/${h}/url`)).status).toBe(404)
     expect((await admin.get(`${P(A)}/${h}/url`)).status).toBe(404) // even the owner: not linked here
@@ -137,12 +135,12 @@ describe('access policy', () => {
   it('viewers can download but not upload', async () => {
     const A = await mk(admin)
     const h = await upload(admin, A, Buffer.alloc(12, 22))
-    await share(admin, A, 'alice@x.com', 'viewer')
+    await share(admin, A, 'alice', 'viewer')
     expect((await alice.get(`${P(A)}/${h}/url`)).status).toBe(200)
     expect((await alice.get(P(A))).body).toHaveLength(1)
     expect((await alice.post(`${P(A)}/upload-url`, { hash: h, size: 12, mime: 'audio/wav' })).status).toBe(403)
     expect((await alice.post(`${P(A)}/${h}/complete`)).status).toBe(403)
-    await share(admin, A, 'alice@x.com', 'editor') // role update
+    await share(admin, A, 'alice', 'editor') // role update
     expect((await alice.post(`${P(A)}/upload-url`, { hash: h, size: 12, mime: 'audio/wav' })).body).toEqual({ exists: true })
   })
 
@@ -215,7 +213,7 @@ describe('access policy', () => {
 describe('delete and refcount', () => {
   it('purges unshared samples, keeps shared ones, refunds, and tombstones block re-upload', async () => {
     const A = await mk(admin), B = await mk(admin)
-    await share(admin, A, 'bob@x.com')
+    await share(admin, A, 'bob')
     const dx = Buffer.alloc(31, 31), dy = Buffer.alloc(32, 32)
     const X = await upload(admin, A, dx)
     await admin.post(`${P(B)}/upload-url`, { hash: X, size: dx.length, mime: 'audio/wav' }) // links X into B
@@ -305,7 +303,7 @@ describe('sweepSamples', () => {
   it('sweeps abandoned local proofs older than an hour', async () => {
     const d = Buffer.alloc(16, 6)
     await upload(a, P1, d, s.base)
-    const other = await admit(s.base, a, 'zed@x.com')
+    const other = await admit(s.base, a, 'zed')
     const P3 = await mk(other)
     const up = await other.post(`${P(P3)}/upload-url`, { hash: sha(d), size: 16, mime: 'audio/wav' })
     expect((await put(up.body.url, d, s.base)).status).toBe(200)
