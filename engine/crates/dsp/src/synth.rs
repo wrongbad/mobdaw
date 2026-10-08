@@ -146,10 +146,14 @@ impl Synth {
     /// non-finite values are ignored. Rolloff, env amount, sustain and gain ramp over 10 ms;
     /// the ADSR times are read when a segment starts and need no smoothing.
     pub fn set_param(&mut self, id: u32, value: f32) {
+        self.set_param_smooth(id, value, self.smooth_samples);
+    }
+
+    /// `set_param` with an explicit glide in samples (0 jumps; automation uses that).
+    pub fn set_param_smooth(&mut self, id: u32, value: f32, s: f64) {
         if !value.is_finite() {
             return;
         }
-        let s = self.smooth_samples;
         match id {
             P_ROLLOFF => self.rolloff.set_target(value.clamp(0.001, 3.0) as f64, s),
             P_ENV_TO_ROLLOFF => self.env_amount.set_target(value.clamp(0.0, 3.0) as f64, s),

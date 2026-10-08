@@ -1,6 +1,7 @@
 // FX chain cards: title, bypass, remove and param controls for one device.
-import { DEVICES, paramToPos, paramToValue, type Device, type ParamDef } from '@mobdaw/shared'
+import { DEVICES, paramToPos, paramToValue, type Device, type ParamDef, type ParamTarget } from '@mobdaw/shared'
 import { h } from '../dom'
+import { NO_AUTO, type AutoInfo } from './automation'
 import { deleteMenu } from './popover'
 
 export type CardDeps = {
@@ -13,12 +14,14 @@ export type CardDeps = {
   commit(deviceId: string, paramId: number, value: number): void
   bypass(deviceId: string, bypass: boolean): void
   remove(deviceId: string): void
+  /** Make a param's name offer "Automate" (the timeline owns the lanes). */
+  autoMenu(label: HTMLElement, target: ParamTarget): void
 }
 
-const fmt = (p: ParamDef, v: number) =>
+export const fmt = (p: ParamDef, v: number) =>
   `${v >= 1000 ? Math.round(v) : v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(3)}${p.unit ? ` ${p.unit}` : ''}`
 
-type Row = { p: ParamDef; input: HTMLInputElement | HTMLSelectElement; out: HTMLElement }
+type Row = { p: ParamDef; input: HTMLInputElement | HTMLSelectElement; out: HTMLElement; label: HTMLElement }
 
 export function deviceCard(dev: Device, deps: CardDeps) {
   const def = DEVICES[dev.type]
@@ -30,6 +33,8 @@ export function deviceCard(dev: Device, deps: CardDeps) {
 
   const rows: Row[] = (def?.params ?? []).map((p) => {
     const out = h('span', { className: 'dim out' })
+    const label = h('span', { className: 'dim' }, p.name)
+    deps.autoMenu(label, { scope: dev.trackId, kind: def?.instrument ? 'synth' : 'effect', owner: id, param: String(p.id) })
     if (p.options) {
       const input = h('select', { onchange: () => {
         const v = Number(input.value)
@@ -37,7 +42,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
         deps.commit(id, p.id, v)
       } }, ...p.options.map((o, i) => h('option', { value: String(i) }, o)))
       input.disabled = deps.readOnly
-      return { p, input, out }
+      return { p, input, out, label }
     }
     const input = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly })
     input.oninput = () => {
@@ -50,25 +55,38 @@ export function deviceCard(dev: Device, deps: CardDeps) {
       deps.commit(id, p.id, paramToValue(p, Number(input.value)))
       deps.drag(null)
     }
-    return { p, input, out }
+    return { p, input, out, label }
   })
 
   const el = h('div', { className: 'dev' },
     h('div', { className: 'dev-head' }, h('strong', {}, def?.name ?? `device ${dev.type}`), h('span', { className: 'grow' }), bypass, def?.instrument ? null : remove),
-    ...rows.map((r) => h('label', { className: 'prm' }, h('span', { className: 'dim' }, r.p.name), r.input, r.out)))
+    ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input, r.out)))
   if (!def?.instrument) deleteMenu(el, 'Delete device', () => deps.remove(id), () => !deps.readOnly)
 
-  /** `remote`: in-progress values from other users' drags, keyed by param id. */
-  function update(d: Device, remote: Map<number, number>) {
+  /**
+   * `remote`: in-progress values from other users' drags, keyed by param id. `auto`: the params a lane
+   * drives, keyed by param id as a string; those show the lane's value and can't be dragged.
+   */
+  let lastRemote = new Map<number, number>()
+  function update(d: Device, remote: Map<number, number>, auto: Map<string, AutoInfo> = NO_AUTO) {
     current = d
+    lastRemote = remote
     bypass.classList.toggle('on', d.bypass)
     el.classList.toggle('bypassed', d.bypass)
-    for (const { p, input, out } of rows) {
-      const v = remote.get(p.id) ?? d.params?.[p.id] ?? p.def
-      if (document.activeElement !== input) input instanceof HTMLSelectElement ? (input.value = String(Math.round(v))) : (input.value = String(paramToPos(p, v)))
-      if (!(input instanceof HTMLSelectElement) && document.activeElement !== input) out.textContent = fmt(p, v)
+    for (const { p, input, out, label } of rows) {
+      const a = auto.get(String(p.id))
+      const driven = !!a?.on && a.value != null
+      label.classList.toggle('auto', !!a)
+      label.classList.toggle('driven', driven)
+      input.disabled = deps.readOnly || driven
+      const v = (driven ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def
+      const free = driven || document.activeElement !== input // a driven slider follows the lane even while focused
+      if (free) input instanceof HTMLSelectElement ? (input.value = String(Math.round(v))) : (input.value = String(paramToPos(p, v)))
+      if (!(input instanceof HTMLSelectElement) && free) out.textContent = fmt(p, v)
     }
   }
   update(dev, new Map())
-  return { el, update }
+  /** Repaint with new automation values only (the playhead moved). */
+  const refresh = (auto: Map<string, AutoInfo>) => update(current, lastRemote, auto)
+  return { el, update, refresh }
 }

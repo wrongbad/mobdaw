@@ -65,8 +65,8 @@ uses fractional `order` numbers. As a result:
 | `clips` | Audio clips: `{ id, trackId, kind:'audio', start, length, sourceHash, sourceOffset, gain, fadeIn, fadeOut, fadeShape }`. MIDI clips: `{ id, trackId, kind:'midi', start, bpm, ppq, lengthTicks }` |
 | `notes` | `{ id, clipId, tick, durTicks, pitch, velocity }` |
 | `devices` | `{ id, trackId, type, order, bypass, params: Y.Map<paramId, number> }` |
-| `lanes` | Automation lanes: `{ id, trackId, deviceId, paramId }` |
-| `points` | `{ id, laneId, pos (samples), value, curve: 'linear'\|'hold' }` |
+| `lanes` | Automation lanes, one per automated param: `{ id, enabled, order, scope, kind: 'synth'\|'effect'\|'looper', owner, param }`. `scope` is a track id, or `'master'` for the global fx chain; `owner` is the device or looper id; `param` is the device's param id (as a string) or the looper's field name (`gain`, `speed`, `sat`, `cutoff`, `warble`). The registry (`shared/src/params.ts`) resolves it to a range and scale. While `enabled` the lane *replaces* the param's value; the doc keeps the static value, and it comes back when the lane is disabled or deleted. |
+| `points` | `{ id, laneId, pos (timeline samples), value (normalised 0..1 along the param's own scale), curve: 'linear'\|'hold' }`. `curve` shapes the segment *after* the point. |
 | `samples` | Plain objects: `hash → { hash, name, frames, channels, format: 'pcm16'\|'pcm24'\|'f32', size }` |
 
 - **Track kinds:**
@@ -249,7 +249,7 @@ existing server tests passing.
    - hour-long playback; this removes the 200 MB limit
 4. **Device chains:** gain/pan, SVF filter, SVF EQ, delay and compressor, with live
    parameters (local immediate, collaborators via awareness, commit on release).
-5. **Automation lanes and points.**
+5. **Automation lanes and points.** (done: see engine-api.md "Automation")
 6. **MIDI clips (per-clip BPM) and a synth:** finnwave oscillators, then the SVF, then an
    amp envelope, with rolloff modulatable by the envelope.
 7. **Offline bounce/export:** the same engine in a worker, faster than real time, written to

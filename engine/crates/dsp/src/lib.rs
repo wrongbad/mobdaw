@@ -3,22 +3,28 @@
 
 pub mod adsr;
 pub mod analog;
+pub mod compressor;
 pub mod fade;
 pub mod finnwave;
 pub mod looper;
 pub mod pan;
 pub mod resampler;
+pub mod reverb;
 pub mod smooth;
 pub mod svf;
 pub mod synth;
+pub mod tape;
 pub mod util;
 
 pub use adsr::Adsr;
+pub use compressor::{CompParams, Compressor};
 pub use fade::FadeShape;
 pub use finnwave::Finnwave;
 pub use looper::{LoopParams, LoopVoice};
 pub use resampler::Resampler;
+pub use reverb::Reverb;
 pub use smooth::Ramp;
 pub use svf::Svf;
 pub use synth::Synth;
+pub use tape::TapeColor;
 pub use util::flush_denormal;

@@ -717,3 +717,211 @@ fn a_looper_mutes_and_scales_with_a_ramp_instead_of_a_click() {
     render(&mut e, 128);
     assert!(rms(&render(&mut e, 2_000).0) > 0.1, "and unmutes");
 }
+
+#[test]
+fn a_loopers_tape_controls_darken_it_and_default_to_a_bypass() {
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, 1.0, 0, 20_000);
+    pad_on(&mut e, 1, 0, 60_000);
+    e.play(0);
+    let clean = rms(&render(&mut e, 8_000).0[4_000..]);
+    e.looper_tape(1, 0.0, 200.0, 1.0);
+    render(&mut e, 4_000); // let it glide
+    let dark = rms(&render(&mut e, 8_000).0[4_000..]);
+    assert!(dark < 0.5 * clean, "200 Hz low-pass should cut the tape: {dark} vs {clean}");
+    e.looper_tape(1, 0.0, 20_000.0, 0.0);
+    render(&mut e, 8_000);
+    let back = rms(&render(&mut e, 8_000).0[4_000..]);
+    assert!((back / clean - 1.0).abs() < 0.1, "open again: {back} vs {clean}");
+}
+
+#[test]
+fn a_master_chain_device_processes_the_whole_mix_and_bypass_restores_it() {
+    let master = engine::MASTER_TRACK;
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&sine(5000.0, 48_000)]);
+    e.track_upsert(1, 0, 1.0, 0.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    e.play(0);
+    let clean = rms(&render(&mut e, 12_000).0[4_000..]);
+    e.device_upsert(1, master, 1, 1.0, false); // low-pass filter on the master bus
+    e.param_set(1, 1, 200.0);
+    e.seek(0);
+    let dark = rms(&render(&mut e, 12_000).0[4_000..]);
+    assert!(dark < 0.1 * clean, "master filter should cut 5 kHz: {dark} vs {clean}");
+    e.device_upsert(1, master, 1, 1.0, true); // bypass
+    e.seek(0);
+    let back = rms(&render(&mut e, 12_000).0[4_000..]);
+    assert!((back / clean - 1.0).abs() < 0.01, "bypassed: {back} vs {clean}");
+}
+
+#[test]
+fn a_reverb_device_leaves_a_tail_after_the_clip_ends_and_bypass_clears_it() {
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&sine(440.0, 4_800)]); // 0.1 s burst
+    e.track_upsert(1, 0, 1.0, 0.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 4_800, 0, 1.0, 0.0, 0.0, 0);
+    e.device_upsert(1, 1, 3, 1.0, false); // reverb
+    e.param_set(1, 0, 1.0);
+    e.param_set(1, 1, 0.9);
+    e.play(0);
+    render(&mut e, 12_000);
+    let tail = rms(&render(&mut e, 6_000).0);
+    assert!(tail > 1e-3, "reverb tail after the clip ended: {tail}");
+    e.device_upsert(1, 1, 3, 1.0, true);
+    e.device_upsert(1, 1, 3, 1.0, false);
+    assert!(rms(&render(&mut e, 6_000).0) < 1e-6, "bypass clears the tail");
+}
+
+// ---- automation -------------------------------------------------------------------------------
+
+const LIN: u32 = 0;
+const LOG: u32 = 1;
+
+/// A looper (handle 1) of the soundscape on track 1, sounding over the first 4 s.
+fn auto_looper() -> Engine {
+    let mut e = soundscape_engine(2);
+    e.looper_upsert(1, 1, 1.0, 0, 40_000);
+    pad_on(&mut e, 1, 0, 200_000);
+    e
+}
+
+#[test]
+fn a_looper_gain_lane_draws_the_level_it_replaces_the_static_value() {
+    let mut e = auto_looper();
+    e.looper_mix(1, 1.0, false);
+    // 1.0 at 0, 0.0 at 24000: a straight fade-out, then silence
+    e.lane_upsert(1, engine::LANE_LOOPER, 1, engine::LOOPER_GAIN, true, 0.0, 1.0, LIN);
+    e.point_upsert(1, 1, 0, 1.0, false);
+    e.point_upsert(2, 1, 24_000, 0.0, false);
+    e.play(0);
+    let (l, _) = render(&mut e, 48_000);
+    let at = |from: usize| rms(&l[from..from + 2_000]);
+    let (start, mid, late, after) = (at(1_000), at(11_000), at(21_000), at(30_000));
+    println!("gain lane: {start:.3} {mid:.3} {late:.3} {after:.5}");
+    assert!((mid / start - 0.5).abs() < 0.08, "halfway down: {}", mid / start);
+    assert!((late / start - 0.125).abs() < 0.06, "near the end: {}", late / start);
+    assert!(after < 1e-4, "silent after the last point");
+}
+
+#[test]
+fn a_disabled_or_removed_lane_gives_the_static_value_back() {
+    let mut e = auto_looper();
+    e.looper_mix(1, 0.8, false);
+    e.lane_upsert(1, engine::LANE_LOOPER, 1, engine::LOOPER_GAIN, true, 0.0, 1.0, LIN);
+    e.point_upsert(1, 1, 0, 0.1, false);
+    e.play(0);
+    let auto = rms(&render(&mut e, 8_000).0[4_000..]);
+    // (the host re-sends the static values when a lane goes away: the engine keeps no second copy of what it replaced)
+    e.lane_upsert(1, engine::LANE_LOOPER, 1, engine::LOOPER_GAIN, false, 0.0, 1.0, LIN);
+    e.looper_mix(1, 0.8, false);
+    render(&mut e, 1_000);
+    let off = rms(&render(&mut e, 8_000).0[4_000..]);
+    assert!((off / auto - 8.0).abs() < 0.8, "0.8 static vs 0.1 automated: {}", off / auto);
+    e.lane_upsert(1, engine::LANE_LOOPER, 1, engine::LOOPER_GAIN, true, 0.0, 1.0, LIN);
+    render(&mut e, 1_000);
+    assert!((rms(&render(&mut e, 8_000).0[4_000..]) / auto - 1.0).abs() < 0.1, "enabled again");
+    e.lane_remove(1);
+    e.looper_mix(1, 0.8, false);
+    render(&mut e, 1_000);
+    assert!((rms(&render(&mut e, 8_000).0[4_000..]) / off - 1.0).abs() < 0.1, "removed");
+}
+
+#[test]
+fn a_muted_looper_stays_silent_under_automation() {
+    let mut e = auto_looper();
+    e.looper_mix(1, 1.0, true);
+    e.lane_upsert(1, engine::LANE_LOOPER, 1, engine::LOOPER_GAIN, true, 0.0, 1.0, LIN);
+    e.point_upsert(1, 1, 0, 1.0, false);
+    e.play(0);
+    let (l, _) = render(&mut e, 4_000);
+    assert!(l[300..].iter().all(|&x| x == 0.0));
+}
+
+#[test]
+fn points_and_lanes_may_arrive_in_any_order_and_a_hold_point_steps() {
+    let mut e = auto_looper();
+    e.point_upsert(2, 1, 12_000, 0.0, false); // before the lane exists
+    e.point_upsert(1, 1, 0, 1.0, true); // hold: stays at 1 until the next point, then jumps
+    e.lane_upsert(1, engine::LANE_LOOPER, 1, engine::LOOPER_GAIN, true, 0.0, 1.0, LIN);
+    e.play(0);
+    let (l, _) = render(&mut e, 24_000);
+    let before = rms(&l[8_000..11_000]);
+    assert!(before > 0.1, "held at the first value: {before}");
+    assert!(l[12_300..].iter().all(|&x| x == 0.0), "stepped to 0 at the second point");
+}
+
+#[test]
+fn a_device_lane_moves_a_filter_cutoff_sample_exactly_with_no_glide() {
+    // 8 kHz sine through the low-pass; the cutoff steps from 20 Hz (closed) to 16 kHz (open) at 6000
+    let n = 12_000;
+    let src = sine(8000.0, n);
+    let mut e = one_clip(&src, 0, n as i64, 0, 0.0, 0.0, 0);
+    e.device_upsert(1, 1, 1, 1.0, false);
+    e.lane_upsert(1, engine::LANE_DEVICE, 1, 1, true, 20.0, 20_000.0, LOG);
+    e.point_upsert(1, 1, 0, 0.0, true);
+    e.point_upsert(2, 1, 6_000, 0.95, true);
+    e.play(0);
+    let (l, _) = render(&mut e, n);
+    let closed = rms(&l[1_000..5_900]);
+    let open = rms(&l[6_500..11_900]);
+    println!("cutoff lane: closed {closed:.5}, open {open:.3}");
+    assert!(closed < 0.01, "8 kHz through a 20 Hz low-pass");
+    assert!(open > 0.5, "8 kHz through ~11 kHz: {open}");
+    // the corner is exact: the signal before the step is the closed filter's (tiny), after it opens within a few samples
+    assert!(l[5_990..6_000].iter().all(|x| x.abs() < 0.01));
+    assert!(l[6_040..6_080].iter().any(|x| x.abs() > 0.3), "open almost at once, no 10 ms glide");
+}
+
+#[test]
+fn a_master_device_lane_is_automated_too() {
+    let master = engine::MASTER_TRACK;
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&sine(5000.0, 48_000)]);
+    e.track_upsert(1, 0, 1.0, 0.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    e.device_upsert(1, master, 1, 1.0, false);
+    e.lane_upsert(1, engine::LANE_DEVICE, 1, 1, true, 20.0, 20_000.0, LOG);
+    e.point_upsert(1, 1, 0, 0.0, false); // closed ...
+    e.point_upsert(2, 1, 24_000, 1.0, false); // ... fully open by 0.5 s
+    e.play(0);
+    let (l, _) = render(&mut e, 36_000);
+    let early = rms(&l[2_000..6_000]);
+    let late = rms(&l[30_000..34_000]);
+    assert!(late > 10.0 * early, "the master filter opens: {early:.4} -> {late:.3}");
+}
+
+#[test]
+fn lane_values_follow_the_timeline_position_and_the_scale() {
+    // cutoff 20..20000 on a log scale: the midpoint is the geometric mean (632 Hz), not 10 kHz
+    let n = 8_000;
+    let src = sine(632.0, n);
+    let mut e = one_clip(&src, 0, n as i64, 0, 0.0, 0.0, 0);
+    e.device_upsert(1, 1, 1, 1.0, false);
+    e.lane_upsert(1, engine::LANE_DEVICE, 1, 1, true, 20.0, 20_000.0, LOG);
+    e.point_upsert(1, 1, 0, 0.5, false);
+    e.play(0);
+    let (l, _) = render(&mut e, n);
+    let g = db(rms(&l[4_000..]) / rms(&src[4_000..]));
+    assert!((g + 3.01).abs() < 0.3, "-3 dB at the cutoff: {g}");
+}
+
+#[test]
+fn a_compressor_device_tames_a_loud_clip_and_bypass_restores_it() {
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&sine(440.0, 24_000)]);
+    e.track_upsert(1, 0, 1.0, 0.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 24_000, 0, 1.0, 0.0, 0.0, 0);
+    e.play(0);
+    let clean = rms(&render(&mut e, 12_000).0[4_000..]);
+    e.device_upsert(1, 1, 4, 1.0, false); // compressor
+    e.param_set(1, 0, -30.0);
+    e.param_set(1, 1, 10.0);
+    e.seek(0);
+    let squashed = rms(&render(&mut e, 12_000).0[4_000..]);
+    assert!(squashed < 0.6 * clean, "compressed: {squashed} vs {clean}");
+    e.device_upsert(1, 1, 4, 1.0, true);
+    e.seek(0);
+    let back = rms(&render(&mut e, 12_000).0[4_000..]);
+    assert!((back / clean - 1.0).abs() < 0.01, "bypassed: {back} vs {clean}");
+}

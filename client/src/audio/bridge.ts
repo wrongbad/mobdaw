@@ -3,8 +3,9 @@
 // by id: present and parented -> upsert, otherwise -> remove. Command order never matters.
 import * as Y from 'yjs'
 import {
-  clipsMap, devicesMap, getClips, getDevices, getLoopers, getNotes, getPads, loopersMap, notesMap, padsMap, samplesMap, tracksMap,
-  type AudioClip, type Clip, type Device, type Looper, type MidiClip, type Pad, type Note, type SampleMeta, type Track,
+  LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
+  looperParamDef, loopersMap, notesMap, padsMap, pointsMap, resolveTarget, samplesMap, tracksMap,
+  type AudioClip, type Clip, type Device, type Lane, type Looper, type MidiClip, type Pad, type Note, type ParamTarget, type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
 
 export interface EngineSink {
@@ -64,15 +65,20 @@ export type PreviewTransport = {
   seek(pos: number): void
 }
 
-type Kind = 'track' | 'clip' | 'note' | 'device' | 'looper' | 'pad'
+/** The engine's handle for the master bus (`MASTER_TRACK` in engine.rs). */
+const MASTER_HANDLE = 0xffffffff
+type Kind = 'track' | 'clip' | 'note' | 'device' | 'looper' | 'pad' | 'lane' | 'point'
 const key = (d: string, p: number) => `${d}:${p}`
 type Dirty = { all: boolean; fields: boolean; params: Set<string> }
 const ALL: Dirty = { all: true, fields: true, params: new Set() }
 
 export class Bridge {
   private handles: Record<Kind | 'source', Map<string, number>> = {
-    track: new Map(), clip: new Map(), note: new Map(), device: new Map(), looper: new Map(), pad: new Map(), source: new Map(),
+    track: new Map(), clip: new Map(), note: new Map(), device: new Map(), looper: new Map(), pad: new Map(), lane: new Map(), point: new Map(),
+    source: new Map(),
   }
+  /** What each lane in the engine automates, to give the param its static value back when the lane goes away. */
+  private laneTargets = new Map<string, ParamTarget>()
   private next = 1 // never reused, shared by all kinds (unique per kind is all the contract needs)
   private requested = new Set<string>()
   private wanted = new Set<string>()
@@ -102,6 +108,8 @@ export class Bridge {
     watch(devicesMap(doc), dirtyIds('device'))
     watch(loopersMap(doc), dirtyIds('looper'))
     watch(padsMap(doc), dirtyIds('pad'))
+    watch(lanesMap(doc), dirtyIds('lane'))
+    watch(pointsMap(doc), dirtyIds('point'))
     watch(samplesMap(doc), () => [...this.wanted].forEach((h) => this.wantSource(h)))
     this.clock = new Clock(rate, now)
     this.syncAll()
@@ -215,6 +223,8 @@ export class Bridge {
     for (const d of getDevices(this.doc)) this.upsertDevice(d, ALL)
     for (const l of getLoopers(this.doc)) this.upsertLooper(l)
     for (const p of getPads(this.doc)) this.upsertPad(p)
+    for (const l of getLanes(this.doc)) this.upsertLane(l)
+    for (const p of getPoints(this.doc)) this.upsertPoint(p)
   }
 
   private reconcile(kind: Kind, evs: Y.YEvent<any>[]) {
@@ -234,7 +244,7 @@ export class Bridge {
   }
 
   private map(kind: Kind) {
-    return { track: tracksMap, clip: clipsMap, note: notesMap, device: devicesMap, looper: loopersMap, pad: padsMap }[kind](this.doc)
+    return { track: tracksMap, clip: clipsMap, note: notesMap, device: devicesMap, looper: loopersMap, pad: padsMap, lane: lanesMap, point: pointsMap }[kind](this.doc)
   }
 
   private upsertById(kind: Kind, id: string, d: Dirty = ALL): boolean {
@@ -246,6 +256,8 @@ export class Bridge {
       else if (kind === 'note') ok = this.upsertNote(v as Note)
       else if (kind === 'looper') ok = this.upsertLooper(v as Looper)
       else if (kind === 'pad') ok = this.upsertPad(v as Pad)
+      else if (kind === 'lane') ok = this.upsertLane(v as Lane)
+      else if (kind === 'point') ok = this.upsertPoint(v as Point)
       else ok = this.upsertDevice(v as Device, d)
     }
     if (!ok) this.remove(kind, id)
@@ -260,6 +272,8 @@ export class Bridge {
       for (const p of getPads(this.doc)) if (p.trackId === id) this.upsertById('pad', p.id)
     } else if (kind === 'clip') {
       for (const n of getNotes(this.doc)) if (n.clipId === id) this.upsertById('note', n.id)
+    } else if (kind === 'lane') {
+      for (const p of getPoints(this.doc)) if (p.laneId === id) this.upsertById('point', p.id)
     }
   }
 
@@ -274,8 +288,51 @@ export class Bridge {
     if (h == null) return
     this.handles[kind].delete(id)
     if (kind === 'track') this.dropPreviews(id)
-    const fn = { track: 'engine_track_remove', clip: 'engine_clip_remove', note: 'engine_note_remove', device: 'engine_device_remove', looper: 'engine_looper_remove', pad: 'engine_pad_remove' }[kind]
+    const fn = {
+      track: 'engine_track_remove', clip: 'engine_clip_remove', note: 'engine_note_remove', device: 'engine_device_remove', looper: 'engine_looper_remove',
+      pad: 'engine_pad_remove', lane: 'engine_lane_remove', point: 'engine_point_remove',
+    }[kind]
     this.sink.call(fn, h)
+    if (kind === 'lane') {
+      const t = this.laneTargets.get(id)
+      this.laneTargets.delete(id)
+      if (t) this.restoreStatic(t) // the engine only replaced the value: hand the param its own back
+    }
+  }
+
+  /** Re-send the doc's value of an automated param (its lane was disabled or removed). */
+  private restoreStatic(t: ParamTarget) {
+    if (t.kind === 'looper') {
+      const l = loopersMap(this.doc).get(t.owner)?.toJSON() as Looper | undefined
+      if (l) this.upsertLooper(l)
+      return
+    }
+    const h = this.handles.device.get(t.owner)
+    const v = this.docParam(t.owner, Number(t.param))
+    if (h != null && v != null) this.sendParam(t.owner, h, Number(t.param), v)
+  }
+
+  private upsertLane(l: Lane): boolean {
+    const r = resolveTarget(this.doc, l)
+    if (!r || l.owner == null) return false
+    const scale = SCALE_CODE[r.def.scale]
+    if (l.kind === 'looper') {
+      const code = looperParamDef(l.param)?.id
+      if (code == null) return false
+      this.sink.call('engine_lane_upsert', this.handle('lane', l.id), 1, this.handle('looper', l.owner), code, +l.enabled, r.def.min, r.def.max, scale)
+    } else {
+      this.sink.call('engine_lane_upsert', this.handle('lane', l.id), 0, this.handle('device', l.owner), Number(l.param), +l.enabled, r.def.min, r.def.max, scale)
+    }
+    this.laneTargets.set(l.id, { scope: l.scope, kind: l.kind, owner: l.owner, param: l.param })
+    if (!l.enabled) this.restoreStatic(l)
+    return true
+  }
+
+  private upsertPoint(p: Point): boolean {
+    const lane = this.handles.lane.get(p.laneId)
+    if (lane == null || !lanesMap(this.doc).has(p.laneId)) return false
+    this.sink.call('engine_point_upsert', this.handle('point', p.id), lane, p.pos, p.value, +(p.curve === 'hold'))
+    return true
   }
 
   private upsertTrack(t: Track): boolean {
@@ -306,6 +363,7 @@ export class Bridge {
     const h = this.handle('looper', l.id)
     this.sink.call('engine_looper_upsert', h, this.handle('track', l.trackId), l.speed, l.start, l.length)
     this.sink.call('engine_looper_mix', h, l.gain ?? 1, +(l.muted ?? false))
+    this.sink.call('engine_looper_tape', h, l.sat ?? 0, l.cutoff ?? LOOP_CUTOFF_MAX, l.warble ?? 0)
     return true
   }
 
@@ -322,10 +380,10 @@ export class Bridge {
   }
 
   private upsertDevice(d: Device, dirty: Dirty): boolean {
-    if (!tracksMap(this.doc).has(d.trackId)) return false
+    if (d.trackId !== MASTER_TRACK && !tracksMap(this.doc).has(d.trackId)) return false
     const h = this.handle('device', d.id)
     if (dirty.all || dirty.fields) {
-      this.sink.call('engine_device_upsert', h, this.handle('track', d.trackId), d.type, d.order, +d.bypass)
+      this.sink.call('engine_device_upsert', h, d.trackId === MASTER_TRACK ? MASTER_HANDLE : this.handle('track', d.trackId), d.type, d.order, +d.bypass)
     }
     for (const [p, v] of Object.entries(d.params ?? {})) {
       if (dirty.all || dirty.params.has(p)) this.sendParam(d.id, h, Number(p), v)

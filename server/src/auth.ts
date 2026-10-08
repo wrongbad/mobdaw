@@ -39,21 +39,34 @@ export function verifySession(secret: string, token: string | undefined | null):
   }
 }
 
-type UserRow = { username: string; password_hash: string | null; is_admin: number; bytes_used: number }
+type UserRow = { username: string; password_hash: string | null; is_admin: number; account_role: 'user' | 'dev'; bytes_used: number }
 export const getUser = (db: Db, username: string) =>
   db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined
 
 export const userExists = (ctx: Ctx, username: string) => !!getUser(ctx.db, username)
+/** Accounts with role 'dev' own every project, but only while the localhost-only DEV_NO_AUTH mode is on. */
+export const isDevUser = (ctx: Ctx, username: string) => ctx.config.devNoAuth && getUser(ctx.db, username)?.account_role === 'dev'
+
+/** The dev account (created on first use, passwordless so it can't log in normally). */
+function devAccount(ctx: Ctx): string {
+  const found = ctx.db.prepare("SELECT username FROM users WHERE account_role = 'dev' LIMIT 1").get() as { username: string } | undefined
+  if (found) return found.username
+  const username = userExists(ctx, 'dev') ? 'dev_local' : 'dev'
+  ctx.db.prepare("INSERT INTO users(username, password_hash, is_admin, account_role, created_at) VALUES(?, '', 1, 'dev', ?)").run(username, Date.now())
+  return username
+}
 export const isAdmin = (ctx: Ctx, username: string) => !!getUser(ctx.db, username)?.is_admin
 
 /** The signed-in username for a session token, or null if invalid, expired or the user was deleted. */
 export function sessionUser(ctx: Ctx, token: string | undefined | null): string | null {
+  if (ctx.config.devNoAuth) return devAccount(ctx) // DEV_NO_AUTH: everyone is the dev account
   const s = verifySession(ctx.config.sessionSecret, token)
   return s && userExists(ctx, s.username) ? s.username : null
 }
 
 /** The user's membership role in a project, or undefined. */
 export function memberRole(ctx: Ctx, projectId: string, username: string) {
+  if (isDevUser(ctx, username)) return ctx.db.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId) ? ('owner' as Role) : undefined
   return (ctx.db.prepare('SELECT role FROM project_members WHERE project_id = ? AND username = ?').get(projectId, username) as
     | { role: Role }
     | undefined)?.role

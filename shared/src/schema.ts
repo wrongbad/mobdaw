@@ -7,11 +7,13 @@
 //   loopers Y.Map  id -> Y.Map Looper (1 to start per 'soundscape' track, add/remove freely; region in *source* time, length 0 = unset)
 //   pads    Y.Map  id -> Y.Map Pad (a free-time gate block on the soundscape's timeline: all its loopers on)
 //   devices Y.Map  id -> Y.Map Device (params: nested Y.Map paramId -> number)
-//   lanes, points  automation (types only for now)
+//   lanes   Y.Map  id -> Y.Map Lane (one automation lane per ParamTarget, see params.ts; `scope` is a track id or MASTER_TRACK)
+//   points  Y.Map  id -> Y.Map Point (a lane's keyframes: pos = timeline samples, value = normalised 0..1 of the param's range)
 //   samples Y.Map  hash -> plain object SampleMeta
 //   chat    Y.Array of plain ChatMessage, append-only; outside the undo scope
 import * as Y from 'yjs'
 import { DEVICES } from './devices.ts'
+import type { ParamTarget } from './params.ts'
 
 export const SCHEMA_VERSION = 2
 export const DEFAULT_SAMPLE_RATE = 48000
@@ -23,9 +25,14 @@ export const DEFAULT_MIDI_BPM = 120
  * pads on the main timeline switch the loopers on. The clips are never played linearly.
  */
 export type TrackKind = 'audio' | 'midi' | 'soundscape'
+/** A device whose `trackId` is this sits on the master bus: the project's global fx chain, run over the sum of all tracks. */
+export const MASTER_TRACK = 'master'
 export const LOOPERS_PER_TRACK = 1
 export const LOOP_SPEED_MIN = 0.1
 export const LOOP_SPEED_MAX = 4
+/** Tape low-pass range in Hz; the top is fully open (bypassed). */
+export const LOOP_CUTOFF_MIN = 200
+export const LOOP_CUTOFF_MAX = 20000
 export type Track = { id: string; name: string; kind: TrackKind; order: number; gain: number; pan: number; muted: boolean; soloed: boolean }
 /** 0 equal-power, 1 linear, 2 s-curve */
 export type FadeShape = 0 | 1 | 2
@@ -39,12 +46,22 @@ export type Clip = AudioClip | MidiClip
 export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number }
 export type Device = { id: string; trackId: string; type: number; order: number; bypass: boolean; params: Record<string, number> }
 /** Loop region in source time (samples of the track's source clips); `length` 0 means unset. */
-/** `gain` (0..1) and `muted` are absent on loopers saved before they existed: read them with `?? 1` / `?? false`. */
-export type Looper = { id: string; trackId: string; slot: number; speed: number; start: number; length: number; gain?: number; muted?: boolean }
+/** `gain` (0..1), `muted` and the tape controls are absent on loopers saved before they existed: read them with `?? 1` / `?? false` /
+ * `?? 0` (`sat`: saturation 0..1; `warble`: wow/flutter depth 0..1) / `?? LOOP_CUTOFF_MAX` (`cutoff`: low-pass Hz). */
+export type Looper = {
+  id: string; trackId: string; slot: number; speed: number; start: number; length: number
+  gain?: number; muted?: boolean; sat?: number; cutoff?: number; warble?: number
+}
 /** All of the soundscape's loopers are on over `[start, start+length)` of the timeline (samples). Each pad restarts the loops. */
 export type Pad = { id: string; trackId: string; start: number; length: number }
-export type Lane = { id: string; trackId: string; deviceId: string; paramId: number }
-export type Point = { id: string; laneId: string; pos: number; value: number; curve: 'linear' | 'hold' }
+/**
+ * While `enabled`, the lane replaces the param's value (the doc keeps the static value; disabling or deleting the lane gives it back).
+ * `order` sorts the lanes within their scope's automation section.
+ */
+export type Lane = { id: string; enabled: boolean; order: number } & ParamTarget
+/** `value` is normalised (0..1 along the param's own scale); `curve` shapes the segment *after* this point. */
+export type AutoCurve = 'linear' | 'hold'
+export type Point = { id: string; laneId: string; pos: number; value: number; curve: AutoCurve }
 export type ChatMessage = { id: string; username: string; color: string; text: string; ts: number }
 export type SampleMeta = { hash: string; name: string; duration: number; size: number; mime: string }
 
@@ -96,6 +113,8 @@ export const getNotes = (doc: Y.Doc) => all<Note>(notesMap(doc))
 export const getPads = (doc: Y.Doc) => all<Pad>(padsMap(doc)).sort((a, b) => a.start - b.start)
 export const getLoopers = (doc: Y.Doc) => all<Looper>(loopersMap(doc)).sort((a, b) => a.slot - b.slot)
 export const getDevices = (doc: Y.Doc) => all<Device>(devicesMap(doc)).sort((a, b) => a.order - b.order)
+export const getLanes = (doc: Y.Doc) => all<Lane>(lanesMap(doc)).filter((l) => l.owner != null).sort((a, b) => a.order - b.order)
+export const getPoints = (doc: Y.Doc) => all<Point>(pointsMap(doc))
 export const getSamples = (doc: Y.Doc): Record<string, SampleMeta> => samplesMap(doc).toJSON()
 export const getSampleRate = (doc: Y.Doc): number => (metaMap(doc).get('sampleRate') as number | undefined) ?? DEFAULT_SAMPLE_RATE
 
@@ -153,8 +172,13 @@ export function addNextLooper(doc: Y.Doc, trackId: string): string {
   while (used.has(slot)) slot++
   return addLooper(doc, trackId, slot)
 }
-export const deleteLooper = (doc: Y.Doc, id: string) => loopersMap(doc).delete(id)
-export const updateLooper = (doc: Y.Doc, id: string, patch: Partial<Pick<Looper, 'speed' | 'start' | 'length' | 'gain' | 'muted'>>) =>
+export function deleteLooper(doc: Y.Doc, id: string) {
+  doc.transact(() => {
+    for (const l of getLanes(doc)) if (l.kind === 'looper' && l.owner === id) deleteLane(doc, l.id)
+    loopersMap(doc).delete(id)
+  })
+}
+export const updateLooper = (doc: Y.Doc, id: string, patch: Partial<Pick<Looper, 'speed' | 'start' | 'length' | 'gain' | 'muted' | 'sat' | 'cutoff' | 'warble'>>) =>
   patchMap(doc, loopersMap(doc).get(id), patch)
 
 // --- pads
@@ -240,16 +264,44 @@ export function setParam(doc: Y.Doc, deviceId: string, paramId: number, value: n
 }
 export function deleteDevice(doc: Y.Doc, id: string) {
   doc.transact(() => {
-    for (const l of all<Lane>(lanesMap(doc))) if (l.deviceId === id) deleteLane(doc, l.id)
+    for (const l of getLanes(doc)) if (l.kind !== 'looper' && l.owner === id) deleteLane(doc, l.id)
     devicesMap(doc).delete(id)
   })
 }
+
+// --- automation
+export const laneOf = (doc: Y.Doc, t: ParamTarget) =>
+  getLanes(doc).find((l) => l.scope === t.scope && l.kind === t.kind && l.owner === t.owner && l.param === t.param)
+/** The lane automating `t`, created (enabled, last in its section) if there isn't one yet. */
+export function addLane(doc: Y.Doc, t: ParamTarget): string {
+  const have = laneOf(doc, t)
+  if (have) return have.id
+  const id = newId()
+  const order = orderBetween(getLanes(doc).filter((l) => l.scope === t.scope).at(-1)?.order)
+  const lane: Lane = { id, enabled: true, order, scope: t.scope, kind: t.kind, owner: t.owner, param: t.param }
+  doc.transact(() => lanesMap(doc).set(id, toMap(lane)))
+  return id
+}
+export const setLaneEnabled = (doc: Y.Doc, id: string, enabled: boolean) => patchMap(doc, lanesMap(doc).get(id), { enabled })
 export function deleteLane(doc: Y.Doc, id: string) {
   doc.transact(() => {
-    for (const p of all<Point>(pointsMap(doc))) if (p.laneId === id) pointsMap(doc).delete(p.id)
+    for (const p of getPoints(doc)) if (p.laneId === id) pointsMap(doc).delete(p.id)
     lanesMap(doc).delete(id)
   })
 }
+export function addPoint(doc: Y.Doc, laneId: string, pos: number, value: number, curve: AutoCurve = 'linear'): string {
+  const id = newId()
+  const p: Point = { id, laneId, pos: Math.max(0, Math.round(pos)), value: Math.min(1, Math.max(0, value)), curve }
+  doc.transact(() => pointsMap(doc).set(id, toMap(p)))
+  return id
+}
+export const updatePoint = (doc: Y.Doc, id: string, patch: Partial<Pick<Point, 'pos' | 'value' | 'curve'>>) =>
+  patchMap(doc, pointsMap(doc).get(id), {
+    ...patch,
+    ...(patch.pos != null ? { pos: Math.max(0, Math.round(patch.pos)) } : {}),
+    ...(patch.value != null ? { value: Math.min(1, Math.max(0, patch.value)) } : {}),
+  })
+export const deletePoint = (doc: Y.Doc, id: string) => doc.transact(() => pointsMap(doc).delete(id))
 
 // --- chat
 export const CHAT_MAX = 2000
@@ -280,11 +332,22 @@ export function sweepOrphans(doc: Y.Doc) {
   doc.transact(() => {
     const tracks = tracksMap(doc), clips = clipsMap(doc)
     for (const c of getClips(doc)) if (!tracks.has(c.trackId)) deleteClip(doc, c.id)
-    for (const d of getDevices(doc)) if (!tracks.has(d.trackId)) deleteDevice(doc, d.id)
+    for (const d of getDevices(doc)) if (d.trackId !== MASTER_TRACK && !tracks.has(d.trackId)) deleteDevice(doc, d.id)
     for (const l of getLoopers(doc)) if (!tracks.has(l.trackId)) loopersMap(doc).delete(l.id)
     for (const p of getPads(doc)) if (!tracks.has(p.trackId)) padsMap(doc).delete(p.id)
     for (const n of getNotes(doc)) if (!clips.has(n.clipId)) notesMap(doc).delete(n.id)
-    for (const l of all<Lane>(lanesMap(doc))) if (!devicesMap(doc).has(l.deviceId)) deleteLane(doc, l.id)
+    for (const l of all<Lane>(lanesMap(doc))) {
+      const owner = l.kind === 'looper' ? loopersMap(doc).has(l.owner) : devicesMap(doc).has(l.owner)
+      if (l.owner == null || !owner) deleteLane(doc, l.id)
+    }
+    for (const p of getPoints(doc)) if (!lanesMap(doc).has(p.laneId)) pointsMap(doc).delete(p.id)
+    // two clients automating the same param at once make two lanes: keep the first (by id)
+    const seen = new Set<string>()
+    for (const l of getLanes(doc).sort((x, y) => (x.id < y.id ? -1 : 1))) {
+      const k = `${l.scope}/${l.kind}/${l.owner}/${l.param}`
+      if (seen.has(k)) deleteLane(doc, l.id)
+      else seen.add(k)
+    }
   })
 }
 

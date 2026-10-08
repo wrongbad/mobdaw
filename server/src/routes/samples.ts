@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { LibrarySample, UploadUrlRequest } from '@mobdaw/shared'
-import { hmac, memberRole, requireSignedIn, type Ctx, type Env } from '../auth.ts'
+import { hmac, isDevUser, memberRole, requireSignedIn, type Ctx, type Env } from '../auth.ts'
 import { tx } from '../db.ts'
 import { isHash, type Storage } from '../storage/index.ts'
 
@@ -16,6 +16,7 @@ export function sampleRoutes(ctx: Ctx, storage: Storage) {
     db.prepare('INSERT OR IGNORE INTO project_samples(project_id, hash, added_by, added_at) VALUES(?,?,?,?)').run(project, hash, by, Date.now())
   // Can this user already read the sample through any project they belong to?
   const canRead = (username: string, hash: string) =>
+    isDevUser(ctx, username) ||
     !!db
       .prepare('SELECT 1 FROM project_samples ps JOIN project_members m ON m.project_id = ps.project_id WHERE ps.hash = ? AND m.username = ?')
       .get(hash, username)

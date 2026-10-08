@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  addAudioClip, addDevice, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
+  addAudioClip, addDevice, MASTER_TRACK, devicesMap, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
+  addLane, addPoint, deleteLane, evalPoints, getLanes, getPoints, laneOf, setLaneEnabled, updatePoint, resolveTarget,
   getClips, getLoopers, getSampleRate, getTracks, migrateToV2, notesMap, setParam, splitClip, sweepOrphans, tracksMap,
   updateClip, updateLooper, updateNote, updateTrack, type SampleMeta,
 } from '@mobdaw/shared'
@@ -113,6 +114,16 @@ describe('bridge', () => {
     expect(take()).toEqual([['engine_param_set', dh, 2, 0.3]])
     deleteDevice(doc, d)
     expect(take()).toEqual([['engine_device_remove', dh]])
+  })
+
+  it('global fx devices (on the master bus) reach the engine without a track and survive an orphan sweep', () => {
+    const { doc, take } = setup()
+    const d = addDevice(doc, MASTER_TRACK, 1)
+    const up = take().find((c) => c[0] === 'engine_device_upsert')!
+    expect(up[2]).toBe(0xffffffff)
+    sweepOrphans(doc)
+    expect(devicesMap(doc).has(d)).toBe(true)
+    expect(take()).toEqual([])
   })
 
   it('loads each source once, after its metadata arrives, and transfers channels', async () => {
@@ -254,3 +265,95 @@ describe('schema v2', () => {
     expect(take().filter((c) => c[0] === 'engine_preview_remove').map((c) => c[1]).sort()).toEqual([hs, hl].sort())
   })
 })
+
+describe('automation', () => {
+  it('lanes and points reach the engine with the param range, and the static value comes back when the lane goes', () => {
+    const { doc, take } = setup()
+    const t = addTrack(doc, 'a')
+    const dev = addDevice(doc, t, 1) // filter
+    setParam(doc, dev, 1, 4000)
+    const dh = take().find((c) => c[0] === 'engine_device_upsert')![1]
+
+    const lane = addLane(doc, { scope: t, kind: 'effect', owner: dev, param: '1' })
+    const up = take().find((c) => c[0] === 'engine_lane_upsert')!
+    expect(up.slice(2)).toEqual([0, dh, 1, 1, 20, 20000, 1]) // device, handle, param, enabled, min, max, log
+    const p1 = addPoint(doc, lane, 0, 0.25)
+    addPoint(doc, lane, 48000, 0.75, 'hold')
+    const pts = take().filter((c) => c[0] === 'engine_point_upsert')
+    expect(pts.map((c) => c.slice(3))).toEqual([[0, 0.25, 0], [48000, 0.75, 1]])
+    updatePoint(doc, p1, { value: 0.5 })
+    expect(take()).toEqual([['engine_point_upsert', pts[0][1], up[1], 0, 0.5, 0]])
+
+    setLaneEnabled(doc, lane, false)
+    const off = take()
+    expect(off[0].slice(0, 2)).toEqual(['engine_lane_upsert', up[1]])
+    expect(off[0][5]).toBe(0) // enabled
+    expect(off).toContainEqual(['engine_param_set', dh, 1, 4000]) // the static value is handed back
+
+    setLaneEnabled(doc, lane, true)
+    take()
+    deleteLane(doc, lane)
+    const gone = take()
+    expect(gone.filter((c) => c[0] === 'engine_point_remove')).toHaveLength(2)
+    expect(gone).toContainEqual(['engine_lane_remove', up[1]])
+    expect(gone).toContainEqual(['engine_param_set', dh, 1, 4000])
+  })
+
+  it('looper lanes use the looper param codes; deleting the looper takes its lanes along', () => {
+    const { doc, take } = setup()
+    const t = addTrack(doc, 'scape', 'soundscape')
+    const lp = getLoopers(doc)[0].id
+    const lh = take().find((c) => c[0] === 'engine_looper_upsert')![1]
+    const lane = addLane(doc, { scope: t, kind: 'looper', owner: lp, param: 'cutoff' })
+    expect(take().find((c) => c[0] === 'engine_lane_upsert')!.slice(2)).toEqual([1, lh, 3, 1, 200, 20000, 1])
+    expect(addLane(doc, { scope: t, kind: 'looper', owner: lp, param: 'cutoff' })).toBe(lane) // one lane per param
+    deleteLooper(doc, lp)
+    expect(getLanes(doc)).toHaveLength(0)
+    expect(take().map((c) => c[0])).toContain('engine_lane_remove')
+  })
+
+  it('points that arrive before their lane are sent once it exists; unresolvable targets are ignored', () => {
+    const { doc, take } = setup()
+    const t = addTrack(doc, 'a')
+    const dev = addDevice(doc, t, 3) // reverb
+    take()
+    doc.transact(() => {
+      addPoint(doc, 'L', 10, 0.5) // lane not created yet (a concurrent client's order)
+      addLane(doc, { scope: t, kind: 'effect', owner: 'ghost', param: '0' })
+    })
+    expect(take().filter((c) => c[0].startsWith('engine_lane') || c[0] === 'engine_point_upsert')).toEqual([])
+    sweepOrphans(doc)
+    expect(getLanes(doc)).toHaveLength(0)
+    expect(getPoints(doc)).toHaveLength(0)
+    expect(resolveTarget(doc, { scope: t, kind: 'effect', owner: dev, param: '3' })?.def.name).toBe('predelay')
+  })
+
+  it('master (global) effects can be automated, and a track delete cascades through its devices', () => {
+    const { doc, take } = setup()
+    const fx = addDevice(doc, MASTER_TRACK, 3)
+    take()
+    const lane = addLane(doc, { scope: MASTER_TRACK, kind: 'effect', owner: fx, param: '0' })
+    expect(laneOf(doc, { scope: MASTER_TRACK, kind: 'effect', owner: fx, param: '0' })?.id).toBe(lane)
+    expect(take().find((c) => c[0] === 'engine_lane_upsert')).toBeTruthy()
+    const t = addTrack(doc, 'a')
+    const d2 = addDevice(doc, t, 1)
+    addLane(doc, { scope: t, kind: 'effect', owner: d2, param: '1' })
+    deleteTrack(doc, t)
+    expect(getLanes(doc).map((l) => l.owner)).toEqual([fx])
+  })
+
+  it('evaluates like the engine: holds the ends, lerps, steps on hold', () => {
+    const pts = [
+      { pos: 100, value: 0.2, curve: 'linear' as const },
+      { pos: 200, value: 1, curve: 'hold' as const },
+      { pos: 300, value: 0, curve: 'linear' as const },
+    ]
+    expect(evalPoints([], 5)).toBeNull()
+    expect(evalPoints(pts, 0)).toBe(0.2)
+    expect(evalPoints(pts, 150)).toBeCloseTo(0.6)
+    expect(evalPoints(pts, 250)).toBe(1)
+    expect(evalPoints(pts, 300)).toBe(0)
+    expect(evalPoints(pts, 999)).toBe(0)
+  })
+})
+

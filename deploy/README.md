@@ -6,8 +6,10 @@ the `/mobdaw` prefix (so the server itself still routes `/api` and `/collab`). `
 prefix; the server derives cookie paths and local-storage URLs from it.
 
 Deploy from the parent folder with `./upload.sh mobdaw` (builds the wasm engine and client locally,
-rsyncs, then runs `npm ci --omit=dev` on the server). `runall.sh` starts everything on boot; there is no
-restart step yet, so after a deploy restart the mobdaw node process by hand (or reboot).
+rsyncs, runs `npm ci --omit=dev` on the server, then restarts the `www-mobdaw` unit). First time, or after
+changing `systemd/` or `setup.sh`, run `./upload.sh install` (it also runs `setup.sh` on the server). Every site is a systemd unit (`../../systemd/`, installed by `setup.sh`) that starts on boot and
+restarts on failure. Logs are in the persistent journal: `journalctl -u www-mobdaw -f`, or all sites with
+`journalctl -u 'www-*'`. Status: `systemctl status 'www-*'`.
 The server needs Node 24, and Caddy at `/www/proxy/caddy`. `/www/mobdaw/.env` and `/www/mobdaw/data`
 exist only on the server (excluded from rsync).
 
@@ -43,7 +45,7 @@ Attach an IAM role to the instance with:
 {
   "Version": "2012-10-17",
   "Statement": [
-    {"Effect":"Allow","Action":["s3:PutObject","s3:GetObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::your-bucket/samples/*","arn:aws:s3:::your-bucket/proofs/*"]},
+    {"Effect":"Allow","Action":["s3:PutObject","s3:GetObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::mobdaw-360949415650-us-east-1-an/samples/*","arn:aws:s3:::mobdaw-360949415650-us-east-1-an/proofs/*"]},
     {"Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::your-bucket"}
   ]
 }

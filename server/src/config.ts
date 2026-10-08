@@ -16,6 +16,8 @@ export type Config = {
   s3Region: string
   maxUploadBytes: number
   userQuotaBytes: number
+  /** Dev only (DEV_NO_AUTH): every request is signed in as the account with role 'dev'; no login. Localhost only. */
+  devNoAuth: boolean
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -26,6 +28,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(host)
   if (!local && !env.SESSION_SECRET) throw new Error('SESSION_SECRET is required when PUBLIC_URL is not localhost')
   if (storageDriver === 's3' && !(env.S3_BUCKET && env.S3_REGION)) throw new Error('S3_BUCKET and S3_REGION are required')
+  const devNoAuth = !!env.DEV_NO_AUTH && env.DEV_NO_AUTH !== '0'
+  if (devNoAuth && !local) throw new Error('DEV_NO_AUTH is only allowed when PUBLIC_URL is localhost')
   return {
     port: Number(env.PORT ?? 8787),
     publicUrl: (env.PUBLIC_URL ?? 'http://localhost:5173').replace(/\/$/, ''),
@@ -38,5 +42,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     s3Region: env.S3_REGION ?? '',
     maxUploadBytes: Number(env.MAX_UPLOAD_BYTES ?? 4294967296),
     userQuotaBytes: Number(env.USER_QUOTA_BYTES ?? 107374182400),
+    devNoAuth,
   }
 }

@@ -19,7 +19,7 @@ pub mod source;
 pub mod transport;
 mod test_voice;
 
-pub use engine::{Engine, BLOCK};
+pub use engine::{Engine, BLOCK, LANE_DEVICE, LANE_LOOPER, LOOPER_CUTOFF, LOOPER_GAIN, LOOPER_SAT, LOOPER_SPEED, LOOPER_WARBLE, MASTER_TRACK};
 pub use test_voice::{PARAM_CUTOFF, PARAM_DAMPING, PARAM_FREQ, PARAM_GAIN, PARAM_GATE, PARAM_ROLLOFF};
 
 /// Create an engine. Returns an owning pointer; free it with `engine_free`.
@@ -155,6 +155,16 @@ pub unsafe extern "C" fn engine_looper_upsert(e: *mut Engine, h: u32, track: u32
 #[no_mangle]
 pub unsafe extern "C" fn engine_looper_mix(e: *mut Engine, h: u32, gain: f32, muted: u32) {
     (*e).looper_mix(h, gain, muted != 0);
+}
+
+/// A looper's tape character: saturation `drive` (0..1), low-pass `cutoff_hz` (200..20000, the top
+/// is open) and `warble` depth (0..1). All glide.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_looper_tape(e: *mut Engine, h: u32, drive: f32, cutoff_hz: f32, warble: f32) {
+    (*e).looper_tape(h, drive, cutoff_hz, warble);
 }
 
 /// The looper's read head on the source tape (samples), or -1 while it isn't sounding.
@@ -298,6 +308,46 @@ pub unsafe extern "C" fn engine_device_upsert(e: *mut Engine, h: u32, track: u32
 #[no_mangle]
 pub unsafe extern "C" fn engine_device_remove(e: *mut Engine, h: u32) {
     (*e).device_remove(h);
+}
+
+/// A lane automating one param: `kind` 0 = a device's (`target` its handle, `param` its param id), 1 =
+/// a looper's (`param`: 0 level, 1 speed, 2 saturation, 3 filter, 4 warble). Points are normalised;
+/// `min`/`max`/`scale` (0 linear, 1 log, 2 cubic) map them to the param's own range. See `engine.rs`.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_lane_upsert(
+    e: *mut Engine,
+    h: u32,
+    kind: u32,
+    target: u32,
+    param: u32,
+    enabled: u32,
+    min: f64,
+    max: f64,
+    scale: u32,
+) {
+    (*e).lane_upsert(h, kind, target, param, enabled != 0, min, max, scale);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_lane_remove(e: *mut Engine, h: u32) {
+    (*e).lane_remove(h);
+}
+
+/// A keyframe of `lane`: timeline sample `pos`, normalised `value` (0..1), `hold` non-zero for a step.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_point_upsert(e: *mut Engine, h: u32, lane: u32, pos: f64, value: f32, hold: u32) {
+    (*e).point_upsert(h, lane, pos as i64, value, hold != 0);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn engine_point_remove(e: *mut Engine, h: u32) {
+    (*e).point_remove(h);
 }
 
 #[no_mangle]

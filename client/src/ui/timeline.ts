@@ -1,10 +1,12 @@
 // Plain absolutely-positioned DOM timeline. Isolated so it can be redesigned.
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import {
-  DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, FINNWAVE, addAudioClip, addDevice, addMidiClip, addPad, addTrack, deletePad, clipLength, clipsMap, deleteClip,
+  DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, MASTER_TRACK, FINNWAVE, addAudioClip, addDevice, addLane, addMidiClip, addPad, addPoint, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
+  evalPoints, getLanes, getPoints, lanesMap, laneOf, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled,
   deleteDevice, deleteLooper, addNextLooper, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, sweepOrphans, tracksMap, updateClip,
-  updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Looper, type Note, type Pad, type Track,
+  updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
+  type Point, type Track,
 } from '@mobdaw/shared'
 import { drawWave, onPeaks, peaksFor } from '../audio/peaks'
 import type { PreviewMode } from '../audio/bridge'
@@ -13,7 +15,8 @@ import { h } from '../dom'
 import { importFile, playable } from '../samples'
 import type { Session } from '../project/session'
 import { chatPanel } from './chat'
-import { deviceCard } from './devices'
+import { NO_AUTO, autoRow, automateMenu, type AutoInfo } from './automation'
+import { deviceCard, fmt as fmtParam } from './devices'
 import { LOOP_COLORS, looperCard } from './loopers'
 import { noteEditor } from './noteEditor'
 import { clamp, dragPointer, grabAt, trimBlock, trimMidiLeft, type Grab } from './blocks'
@@ -31,6 +34,8 @@ const audioFiles = (list: FileList | null | undefined) =>
 const initials = (n: string) => n.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()
 
 type Card = ReturnType<typeof deviceCard>
+/** A scope's automation: one collapsible section holding a lane per automated param (absent when there are none). */
+type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
   el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; mute: HTMLButtonElement
   gain: HTMLInputElement; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
@@ -38,6 +43,7 @@ type Lane = {
   loopMore: HTMLButtonElement; loopRow: HTMLElement; loops: HTMLElement
   loopCards: Map<string, ReturnType<typeof looperCard>>; boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
   pads: Map<string, HTMLElement>
+  auto: AutoSec
   loopTc: TransportControls // loops preview transport
   /** Soundscape tracks only: the source lane, which has its own time axis, scroll and zoom. */
   src: Src | null
@@ -64,6 +70,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   const srcClosed = new Set<string>() // soundscapes with the source lane collapsed (open by default)
   const loopClosed = new Set<string>() // looper tracks with the loopers row collapsed (open by default)
   const synthClosed = new Set<string>() // MIDI tracks with the synth row collapsed (open by default)
+  const autoClosed = new Set<string>() // scopes (track ids, or MASTER_TRACK) with the automation section collapsed (open by default)
+  let autoLanes: AutoLane[] = [] // as of the last draw
+  let autoPoints = new Map<string, Point[]>() // lane id -> its points, sorted
+  let autoInfos = new Map<string, Map<string, AutoInfo>>() // owner id -> param -> what drives it
   const lanes = new Map<string, Lane>()
   const clipEls = new Map<string, HTMLElement>()
   const waves = new Map<string, { cv: HTMLCanvasElement; label: HTMLElement; sig: string; pk?: Float32Array; v0: number; v1: number }>()
@@ -127,7 +137,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
   overlay.append(playhead)
   const hint = h('div', { className: 'hint dim' }, readOnly ? 'Nothing here yet.' : 'Drop audio files here, or use + track.')
-  const content = h('div', { className: 'content' }, ruler, laneBox, hint, readOnly ? null : addLink, fileInput, bgPicker, overlay)
+  const masterAuto = makeAutoSection(MASTER_TRACK, 'global automation')
+  const content = h('div', { className: 'content' }, ruler, laneBox, masterAuto.el, hint, readOnly ? null : addLink, fileInput, bgPicker, overlay)
   const scroll = h('div', { className: 'scroll' }, content)
   // Drops outside any lane start a new track.
   scroll.ondragover = (e) => e.preventDefault()
@@ -136,7 +147,19 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     if (readOnly) return
     void dropFiles(audioFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   }
-  const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
+  // The global fx lane: the master bus chain, pinned under the scroller (open or shut, it never scrolls away).
+  let masterOpen = false
+  const masterCards = new Map<string, ReturnType<typeof deviceCard>>()
+  const masterMore = h('button', { className: 'fx-toggle', title: 'effects on the whole mix', onclick: () => {
+    masterOpen = !masterOpen
+    draw()
+  } }, 'global fx')
+  const masterFx = h('div', { className: 'fx', hidden: true })
+  const masterAdd = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
+    popover(masterAdd, EFFECTS.map((d) => [d.name, () => addDevice(doc, MASTER_TRACK, d.type)] as [string, () => void])) }, '+')
+  masterFx.append(masterAdd)
+  const master = h('div', { className: 'lane master' }, h('div', { className: 'fx-row' }, masterMore, masterFx))
+  const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el), master)
 
   const x = (smp: number) => (smp / rate) * pps
   const fromX = (px: number) => Math.max(0, Math.round((px / pps) * rate))
@@ -177,6 +200,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     requestAnimationFrame(tick)
   }
   function drawPlayhead() {
+    if (autoLanes.length) refreshAuto()
     const p = position()
     playhead.style.left = `${HEADER + x(p)}px`
     rulerHead.style.left = `${x(p)}px`
@@ -203,6 +227,131 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     },
     bypass: (d: string, b: boolean) => updateDevice(doc, d, { bypass: b }),
     remove: (d: string) => deleteDevice(doc, d),
+    autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, t),
+  }
+
+  // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
+  const rowDeps = { doc, readOnly, grab: () => undo.stopCapturing(), x, fromX }
+
+  function autoMenu(label: HTMLElement, t: ParamTarget) {
+    const lane = () => laneOf(doc, t)
+    automateMenu(label, {
+      state: () => { const l = lane(); return !l ? 'none' : l.enabled ? 'on' : 'off' },
+      automate: () => automate(t),
+      show: () => reveal(t.scope),
+      toggle: () => { const l = lane(); if (l) setLaneEnabled(doc, l.id, !l.enabled) },
+      remove: () => { const l = lane(); if (l) deleteLane(doc, l.id) },
+    }, readOnly)
+  }
+
+  /** Automate a param: a lane that starts flat at its current value, so nothing changes until a point is moved. */
+  function automate(t: ParamTarget) {
+    const r = resolveTarget(doc, t)
+    if (!r) return
+    doc.transact(() => {
+      const id = addLane(doc, t)
+      if (!getPoints(doc).some((p) => p.laneId === id)) addPoint(doc, id, 0, paramToPos(r.def, r.value), r.def.options ? 'hold' : 'linear')
+    })
+    reveal(t.scope)
+  }
+
+  function reveal(scope: string) {
+    autoClosed.delete(scope)
+    draw()
+    ;(scope === MASTER_TRACK ? masterAuto : lanes.get(scope)?.auto)?.el.scrollIntoView({ block: 'nearest' })
+  }
+
+  function makeAutoSection(scope: string, title = 'automation'): AutoSec {
+    const toggle = h('button', { className: 'fx-toggle', title: 'automation lanes', onclick: () => {
+      if (!autoClosed.delete(scope)) autoClosed.add(scope)
+      draw()
+    } }, title)
+    const box = h('div', { className: 'auto-box' })
+    const el = h('div', { className: 'auto-section', hidden: true }, h('div', { className: 'fx-row' }, toggle), box)
+    el.dataset.title = title
+    return { el, toggle, box, rows: new Map() }
+  }
+
+  /** The owner's name for a lane header: the device's, numbered when its chain has several of a kind. */
+  function ownerLabel(l: AutoLane, base: string, devices: Device[]) {
+    if (l.kind === 'looper') return base
+    const same = devices.filter((d) => d.trackId === l.scope && DEVICES[d.type]?.name === base)
+    return same.length > 1 ? `${base} ${same.findIndex((d) => d.id === l.owner) + 1}` : base
+  }
+
+  /** Read the lanes and their points from the doc, and what they drive at the playhead. */
+  function loadAuto() {
+    autoLanes = getLanes(doc)
+    autoPoints = new Map()
+    for (const p of getPoints(doc)) (autoPoints.get(p.laneId) ?? autoPoints.set(p.laneId, []).get(p.laneId)!).push(p)
+    for (const list of autoPoints.values()) list.sort((a, b) => a.pos - b.pos)
+    readAuto()
+  }
+
+  /** Sync every scope's section with the lanes in the doc. */
+  function drawAutomation(devices: Device[], loopers: Looper[], width: number) {
+    const byScope = new Map<string, AutoLane[]>()
+    for (const l of autoLanes) (byScope.get(l.scope) ?? byScope.set(l.scope, []).get(l.scope)!).push(l)
+    const sections: [string, AutoSec][] = [[MASTER_TRACK, masterAuto], ...[...lanes].map(([id, l]) => [id, l.auto] as [string, AutoSec])]
+    for (const [scope, sec] of sections) {
+      const mine = (byScope.get(scope) ?? []).flatMap((l) => {
+        const r = resolveTarget(doc, l)
+        return r ? [{ l, r }] : []
+      })
+      sec.el.hidden = mine.length === 0
+      const open = !autoClosed.has(scope)
+      sec.toggle.classList.toggle('on', open)
+      sec.toggle.textContent = `${sec.el.dataset.title} (${mine.length})`
+      sec.box.hidden = !open
+      const ids = new Set(mine.map((m) => m.l.id))
+      for (const [id, row] of sec.rows) if (!ids.has(id)) { row.el.remove(); sec.rows.delete(id) }
+      if (!open) continue
+      mine.forEach(({ l, r }, i) => {
+        let row = sec.rows.get(l.id)
+        if (!row) sec.rows.set(l.id, (row = autoRow(rowDeps)))
+        if (sec.box.children[i] !== row.el) sec.box.insertBefore(row.el, sec.box.children[i] ?? null)
+        const slot = l.kind === 'looper' ? loopers.find((x) => x.id === l.owner)?.slot : undefined
+        row.update(l, autoPoints.get(l.id) ?? [], {
+          def: r.def, label: `${ownerLabel(l, r.owner, devices)} · ${r.label}`, value: r.value, width,
+          color: slot != null ? LOOP_COLORS[slot % LOOP_COLORS.length] : 'var(--accent)',
+        })
+      })
+    }
+    showReadouts()
+  }
+
+  const fmtAuto = (def: { options?: string[] } & Parameters<typeof fmtParam>[0], v: number) => def.options?.[Math.round(v)] ?? fmtParam(def, v)
+
+  /**
+   * What each automated param reads at the playhead (`autoInfos`, for the controls it drives) and the text for each
+   * lane's header (`autoReadouts`). Cheap enough to run every frame while playing.
+   */
+  let autoReadouts = new Map<string, string>()
+  function readAuto() {
+    const at = position()
+    autoInfos = new Map()
+    const readouts = (autoReadouts = new Map<string, string>())
+    for (const l of autoLanes) {
+      const r = resolveTarget(doc, l)
+      if (!r) continue
+      const t = evalPoints(autoPoints.get(l.id) ?? [], at)
+      const v = t == null ? null : paramToValue(r.def, t)
+      readouts.set(l.id, !l.enabled ? 'off' : v == null ? fmtAuto(r.def, r.value) : fmtAuto(r.def, v))
+      ;(autoInfos.get(l.owner) ?? autoInfos.set(l.owner, new Map()).get(l.owner)!).set(l.param, { on: l.enabled && v != null, value: v })
+    }
+  }
+  function showReadouts() {
+    for (const sec of [masterAuto, ...[...lanes.values()].map((l) => l.auto)]) for (const [id, row] of sec.rows) row.setReadout(autoReadouts.get(id) ?? '')
+  }
+  /** The playhead moved: repaint the readouts and the controls a lane drives. */
+  function refreshAuto() {
+    readAuto()
+    showReadouts()
+    for (const l of lanes.values()) {
+      for (const [id, c] of l.cards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)
+      for (const [id, c] of l.loopCards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)
+    }
+    for (const [id, c] of masterCards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)
   }
 
   function laneFor(t: Track): Lane {
@@ -277,10 +426,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     const loopTc = transportControls({ title: 'play / stop the loops', small: true, onToggle: () => togglePreview(t.id, 'loops') })
     const loopRow = h('div', { className: 'fx-row', hidden: true }, h('div', { className: 'fx-head' }, loopMore, loopTc.el), loops)
     const row = h('div', { className: 'lane-row' }, head, body)
+    const auto = makeAutoSection(t.id)
     l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow), row, body, name, mute, gain, more,
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el), row, body, name, mute, gain, more,
       fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
-      pads: new Map(), loopTc, src,
+      pads: new Map(), auto, loopTc, src,
     }
     lanes.set(t.id, l)
     return l
@@ -317,10 +467,27 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       let c = l.cards.get(d.id)
       if (!c) l.cards.set(d.id, (c = deviceCard(d, cardDeps)))
       if (box.children[i] !== c.el) box.insertBefore(c.el, box.children[i] ?? null)
-      c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS)
+      c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS, autoInfos.get(d.id) ?? NO_AUTO)
     })
     if (synthOpen) place(l.synth, mine.filter((d) => DEVICES[d.type]?.instrument))
     if (fxOpen) place(l.fx, mine.filter((d) => !DEVICES[d.type]?.instrument))
+  }
+
+  function drawMaster(devices: Device[]) {
+    masterFx.hidden = !masterOpen
+    masterMore.classList.toggle('on', masterOpen)
+    const n = devices.filter((d) => d.trackId === MASTER_TRACK).length
+    masterMore.textContent = n ? `global fx (${n})` : 'global fx'
+    if (!masterOpen) return
+    const mine = devices.filter((d) => d.trackId === MASTER_TRACK)
+    const ids = new Set(mine.map((d) => d.id))
+    for (const [id, c] of masterCards) if (!ids.has(id)) { c.el.remove(); masterCards.delete(id) }
+    mine.forEach((d, i) => {
+      let c = masterCards.get(d.id)
+      if (!c) masterCards.set(d.id, (c = deviceCard(d, cardDeps)))
+      if (masterFx.children[i] !== c.el) masterFx.insertBefore(c.el, masterFx.children[i] ?? null)
+      c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS, autoInfos.get(d.id) ?? NO_AUTO)
+    })
   }
 
   // --- soundscape previews: each soundscape's source and loops have a private transport/playhead
@@ -554,6 +721,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     commit: (id: string, speed: number) => updateLooper(doc, id, { speed }),
     setMuted: (id: string, muted: boolean) => updateLooper(doc, id, { muted }),
     setGain: (id: string, gain: number) => updateLooper(doc, id, { gain }),
+    setTape: (id: string, patch: { sat?: number; cutoff?: number; warble?: number }) => updateLooper(doc, id, patch),
+    autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, t),
     toggleArm: (id: string) => { armed = armed === id ? null : id; draw() },
     clear: (id: string) => updateLooper(doc, id, { start: 0, length: 0 }),
     remove: (id: string) => { if (armed === id) armed = null; deleteLooper(doc, id) },
@@ -579,6 +748,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
         b = h('div', { className: 'loop-box' }, h('span', {}, String(lp.slot + 1)))
         b.style.setProperty('--c', LOOP_COLORS[lp.slot % LOOP_COLORS.length])
         l.boxes.set(lp.id, b)
+        const id = lp.id
+        b.onpointerdown = (ev) => loopBoxDown(ev, id, b!)
         l.src.body.append(b) // regions live in source time, over the source audio
       }
       b.style.left = `${(lp.start / rate) * l.src.pps}px`
@@ -591,7 +762,33 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       let c = l.loopCards.get(lp.id)
       if (!c) l.loopCards.set(lp.id, (c = looperCard(lp, loopDeps)))
       if (l.loops.children[i] !== c.el) l.loops.insertBefore(c.el, l.loops.children[i] ?? null)
-      c.update(lp, lp.id === armed, rate)
+      c.update(lp, lp.id === armed, rate, autoInfos.get(lp.id) ?? NO_AUTO)
+    })
+  }
+
+  /** Drag a loop window to move it, or either edge to resize it (live in the doc, one undo step). */
+  function loopBoxDown(ev: PointerEvent, id: string, el: HTMLElement) {
+    if (ev.button !== 0) return
+    ev.stopPropagation()
+    const lp = getLoopers(doc).find((x) => x.id === id)
+    const l = lp && lanes.get(lp.trackId)
+    if (!lp || !l?.src || readOnly || armed) return
+    ev.preventDefault()
+    const mode = grabAt(ev.clientX, el.getBoundingClientRect())
+    const pps = l.src.pps
+    const min = Math.round(MIN_SEC * rate)
+    const end = lp.start + lp.length
+    undo.stopCapturing()
+    dragPointer(ev, {
+      onDrag: (m) => {
+        const d = Math.round(((m.clientX - ev.clientX) / pps) * rate)
+        if (mode === 'move') updateLooper(doc, id, { start: Math.max(0, lp.start + d) })
+        else if (mode === 'l') {
+          const start = clamp(lp.start + d, 0, end - min)
+          updateLooper(doc, id, { start, length: end - start })
+        } else updateLooper(doc, id, { length: Math.max(min, lp.length + d) })
+      },
+      onEnd: () => undo.stopCapturing(),
     })
   }
 
@@ -634,6 +831,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     rulerBody.style.width = `${x(total)}px`
     drawRuler(total / rate)
 
+    loadAuto() // (before the cards: they show what a lane drives)
+
     // remote live-param drags -> overrides on our engine, and the values shown on sliders
     const remote = s.remoteStates()
     remoteDrags = new Map()
@@ -673,6 +872,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
         drawTicks(l.src.ticks, end / rate, l.src.pps)
       }
     })
+
+    drawMaster(devices)
+    drawAutomation(devices, loopers, x(total))
 
     // clips
     selection = selection.filter((id) => clipsMap(doc).has(id))
@@ -824,7 +1026,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       draw()
     }
     select([id])
-    if (readOnly) return zoom()
+    if (readOnly || lane0?.src) return zoom() // source audio stays anchored: only the loop windows move
     undo.stopCapturing()
     ev.preventDefault()
     const grab = ev.clientX - box.left // where in the clip it was picked up
@@ -960,7 +1162,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   addEventListener('keydown', key)
 
   // --- sync
-  const watched = [tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), loopersMap(doc), padsMap(doc), samplesMap(doc)]
+  const watched = [tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), loopersMap(doc), padsMap(doc), lanesMap(doc), pointsMap(doc), samplesMap(doc)]
   watched.forEach((m) => m.observeDeep(schedule))
   s.awareness.on('change', schedule)
   const offPeaks = onPeaks(schedule)

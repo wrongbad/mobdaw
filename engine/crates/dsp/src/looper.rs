@@ -15,6 +15,12 @@
 //! five octaves) and there are no zipper noises or clicks. The phase integrates the smoothed
 //! speed, so the read head never jumps.
 //!
+//! # Warble
+//! `warble` (0..1) adds a tape-transport wobble to the speed, in the log2 domain, on top of the
+//! smoothed speed: a slow *wow* (~0.7 Hz), a faster *flutter* (~7 Hz) and a slow random drift. At
+//! full depth the pitch swings about +-30 cents. The phase integrates the wobbled speed, so the
+//! read head stays continuous.
+//!
 //! # Triggers
 //! The voice is stateful on purpose and makes no promise that the same timeline position sounds
 //! the same twice. The loop restarts from the region start (phase 0, speed snapped to its target)
@@ -40,6 +46,13 @@ use std::f64::consts::FRAC_PI_2;
 pub const XF_MS: f64 = 10.0;
 /// Time constant of the speed smoothing (a generous 150 ms).
 pub const SPEED_TAU_S: f64 = 0.15;
+/// Warble LFO rates (Hz) and the peak deviation of each at full depth (octaves; 0.01 = 12 cents).
+const WOW_HZ: f64 = 0.7;
+const FLUTTER_HZ: f64 = 7.1;
+const DRIFT_HZ: f64 = 0.23;
+const WOW_OCT: f64 = 0.0125;
+const FLUTTER_OCT: f64 = 0.004;
+const DRIFT_OCT: f64 = 0.006;
 /// Regions shorter than this (source samples) are treated as empty.
 pub const MIN_LENGTH: i64 = 64;
 
@@ -51,6 +64,8 @@ pub struct LoopParams {
     pub start: i64,
     /// Region length (source samples).
     pub length: i64,
+    /// Tape wow/flutter depth, 0..1 (0 is a steady transport).
+    pub warble: f64,
     pub sample_rate: f64,
 }
 
@@ -69,6 +84,11 @@ pub struct LoopVoice {
     /// Whether the head has wrapped since the trigger (before that there is no seam to crossfade).
     wrapped: bool,
     region: (i64, i64),
+    /// Warble LFO phases (cycles) and the smoothed depth.
+    wow: f64,
+    flutter: f64,
+    drift: f64,
+    depth: f64,
 }
 
 /// Input samples fed to a fresh filter before the read position. The slowest filter pole decays
@@ -109,6 +129,8 @@ impl LoopVoice {
         self.h2.clear_cache();
         let len = p.length as f64;
         let target = p.speed.log2();
+        let warble = if p.warble.is_finite() { p.warble.clamp(0.0, 1.0) } else { 0.0 };
+        let inv_sr = 1.0 / p.sample_rate;
         let coef = 1.0 - (-1.0 / (SPEED_TAU_S * p.sample_rate)).exp();
         for k in 0..l.len().min(r.len()) {
             let t = t0 + k as i64;
@@ -128,7 +150,23 @@ impl LoopVoice {
                     self.log_speed = target;
                 }
             }
-            let speed = self.log_speed.exp2();
+            // Depth glides (same time constant as the speed) so moving the knob never zippers.
+            self.depth += (warble - self.depth) * coef;
+            if self.depth < 1e-6 && warble == 0.0 {
+                self.depth = 0.0;
+            }
+            let tau = std::f64::consts::TAU;
+            self.wow = (self.wow + WOW_HZ * inv_sr).fract();
+            self.flutter = (self.flutter + FLUTTER_HZ * inv_sr).fract();
+            self.drift = (self.drift + DRIFT_HZ * inv_sr).fract();
+            let wob = if self.depth > 0.0 {
+                // drift is two incommensurate sines, so it doesn't audibly repeat
+                let d = 0.5 * ((self.drift * tau).sin() + (self.drift * tau * 2.618).sin());
+                self.depth * (WOW_OCT * (self.wow * tau).sin() + FLUTTER_OCT * (self.flutter * tau).sin() + DRIFT_OCT * d)
+            } else {
+                0.0
+            };
+            let speed = (self.log_speed + wob).exp2();
             let scale = (1.0 / speed).min(1.0) as f32;
             let w = warmup(speed);
             let mut jumped = fresh;

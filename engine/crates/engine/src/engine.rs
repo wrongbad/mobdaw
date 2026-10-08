@@ -25,6 +25,17 @@
 //!    device chain over the segment and add the result, scaled by the ramped gain/pan, into
 //!    the master output.
 //! 4. Mix in the M1 test voice if its gate is on; advance the transport.
+//!
+//! # Automation
+//! A [`Lane`] drives one param (a device's, or a looper's) from keyframes in *timeline* time; while
+//! it is enabled it replaces the param's static value. Points are normalised (0..1 along the
+//! param's own scale), so the curve between two of them is exactly what the editor draws, even
+//! for a log-scaled cutoff. Device lanes are evaluated at the start of every control segment, and
+//! segments are split at breakpoints, so a corner is sample-exact and the value is applied with no
+//! glide (`Device::set_param_auto`). Looper lanes are evaluated once per block: the level ramps
+//! linearly to the lane's value at the block's end, the rest (speed, warble, saturation, filter)
+//! take its value at the block's start and keep their own, short glides. Lanes follow the
+//! timeline position, stopped or not.
 
 use crate::clip::{clip_notes, AudioClip, Clip, MidiClip, NoteEntry};
 use crate::device::{Device, DeviceKind};
@@ -36,7 +47,7 @@ use dsp::finnwave::SUB_BLOCK;
 use dsp::pan::equal_power;
 use dsp::fade::{clip_edge_gain, fade_in_gain};
 use dsp::looper::MIN_LENGTH;
-use dsp::{FadeShape, LoopParams, LoopVoice, Ramp};
+use dsp::{FadeShape, LoopParams, LoopVoice, Ramp, TapeColor};
 use std::cmp::Ordering;
 
 /// The Web Audio render quantum.
@@ -49,7 +60,21 @@ pub const MAX_DEVICES: usize = 1024;
 pub const MAX_LOOPERS: usize = 1024;
 /// Track kind code for a soundscape track (0 audio, 1 midi).
 pub const KIND_SOUNDSCAPE: u32 = 2;
+/// The track handle that puts a device on the master bus (the "global fx" chain) instead of a track.
+pub const MASTER_TRACK: u32 = u32::MAX;
 pub const MAX_PADS: usize = 16384;
+pub const MAX_LANES: usize = 1024;
+pub const MAX_POINTS: usize = 65536;
+/// What a lane drives (`engine_lane_upsert`'s `kind`): a device's param, or a looper's (`LOOPER_*`).
+pub const LANE_DEVICE: u32 = 0;
+pub const LANE_LOOPER: u32 = 1;
+pub const LOOPER_GAIN: u32 = 0;
+pub const LOOPER_SPEED: u32 = 1;
+pub const LOOPER_SAT: u32 = 2;
+pub const LOOPER_CUTOFF: u32 = 3;
+pub const LOOPER_WARBLE: u32 = 4;
+const LOOPER_PARAMS: usize = 5;
+const NO_LANE: u32 = u32::MAX;
 pub const MAX_PREVIEWS: usize = 512;
 /// Pad gates fade in and out over this long (also the declick floor of `clip_edge_gain`).
 const PAD_FADE_MS: f64 = 5.0;
@@ -79,6 +104,8 @@ struct Track {
     /// Soundscape track: its clips are the *source* tape the loopers read (in source time),
     /// never played linearly.
     soundscape: bool,
+    /// Enabled lanes driving this track's devices (derived).
+    dev_lanes: Vec<u32>,
 }
 
 /// One of a soundscape track's loop slots: reads the track's source audio inside the region
@@ -99,6 +126,16 @@ struct Looper {
     gain_now: f32,
     /// Read head on the tape (source samples) as of the last block, or -1 when not sounding.
     head: f64,
+    /// Saturation and low-pass applied to the looper's output, before its level.
+    color: TapeColor,
+    /// The un-automated level, the mute flag, and the tape settings the bridge last sent (an
+    /// automated saturation keeps the filter's static value, and the other way round).
+    base_gain: f32,
+    muted: bool,
+    drive: f32,
+    cutoff: f32,
+    /// The enabled lane driving each param (`LOOPER_*`), or `NO_LANE` (derived).
+    auto: [u32; LOOPER_PARAMS],
 }
 
 impl Looper {
@@ -127,6 +164,73 @@ impl Looper {
         }
         (active, next)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scale {
+    Lin,
+    Log,
+    Pow,
+}
+
+#[derive(Clone, Copy)]
+struct LanePoint {
+    pos: i64,
+    value: f32,
+    /// The segment after this point is a step (holds `value`) instead of a line to the next point.
+    hold: bool,
+}
+
+/// One automated param. `points` is derived from the point entities (sorted by position).
+struct Lane {
+    kind: u32,
+    target: u32,
+    param: u32,
+    enabled: bool,
+    min: f64,
+    max: f64,
+    scale: Scale,
+    points: Vec<LanePoint>,
+}
+
+impl Lane {
+    /// The normalised value at `pos`: before the first point and after the last it holds that
+    /// point's value; between two, the left one's curve decides. `None` without points.
+    fn norm_at(&self, pos: i64) -> Option<f64> {
+        let i = self.points.partition_point(|p| p.pos <= pos);
+        let a = self.points.get(i.saturating_sub(1))?;
+        let Some(b) = self.points.get(i).filter(|_| i > 0 && !a.hold) else { return Some(a.value as f64) };
+        let f = (pos - a.pos) as f64 / (b.pos - a.pos) as f64;
+        Some(a.value as f64 + (b.value as f64 - a.value as f64) * f)
+    }
+
+    /// The param's own value at `pos` (the normalised one mapped through the range and scale).
+    fn value_at(&self, pos: i64) -> Option<f64> {
+        let t = self.norm_at(pos)?.clamp(0.0, 1.0);
+        Some(match self.scale {
+            Scale::Log if self.min > 0.0 => self.min * (self.max / self.min).powf(t),
+            Scale::Pow => self.min + (self.max - self.min) * t * t * t,
+            _ => self.min + (self.max - self.min) * t,
+        })
+    }
+
+    /// The first breakpoint after `pos` (`i64::MAX` if none): a control segment must not run past it.
+    fn next_break(&self, pos: i64) -> i64 {
+        self.points.get(self.points.partition_point(|p| p.pos <= pos)).map_or(i64::MAX, |p| p.pos)
+    }
+}
+
+/// A keyframe, stored on its own like a note so commands can arrive in any order.
+struct Point {
+    lane: u32,
+    p: LanePoint,
+}
+
+fn lane_value(lanes: &HandleMap<Lane>, h: u32, pos: i64) -> Option<f64> {
+    if h == NO_LANE {
+        return None;
+    }
+    lanes.get(h)?.value_at(pos)
 }
 
 /// What a preview plays.
@@ -184,6 +288,12 @@ pub struct Engine {
     clips: HandleMap<Clip>,
     devices: HandleMap<Device>,
     loopers: HandleMap<Looper>,
+    /// Device handles on the master bus in ascending `order` (derived).
+    master_chain: Vec<u32>,
+    /// Enabled lanes driving master-chain devices (derived).
+    master_lanes: Vec<u32>,
+    lanes: HandleMap<Lane>,
+    points: HandleMap<Point>,
     pads: HandleMap<Pad>,
     previews: HandleMap<Preview>,
     note_keys: HandleMap<(u32, f64)>,
@@ -208,6 +318,10 @@ impl Engine {
             clips: HandleMap::with_capacity(MAX_CLIPS),
             devices: HandleMap::with_capacity(MAX_DEVICES),
             loopers: HandleMap::with_capacity(MAX_LOOPERS),
+            master_chain: Vec::with_capacity(MAX_DEVICES),
+            master_lanes: Vec::new(),
+            lanes: HandleMap::with_capacity(MAX_LANES),
+            points: HandleMap::with_capacity(MAX_POINTS),
             pads: HandleMap::with_capacity(MAX_PADS),
             previews: HandleMap::with_capacity(MAX_PREVIEWS),
             note_keys: HandleMap::with_capacity(MAX_NOTES),
@@ -319,6 +433,7 @@ impl Engine {
                 midi_clips: Vec::new(),
                 audio_clips: Vec::new(),
                 soundscape: kind == KIND_SOUNDSCAPE,
+                dev_lanes: Vec::new(),
             },
         );
         self.rebuild_routing();
@@ -399,15 +514,28 @@ impl Engine {
     /// Updating keeps the voice, so an unchanged upsert doesn't disturb playback.
     pub fn looper_upsert(&mut self, h: u32, track: u32, speed: f64, start: i64, length: i64) {
         let speed = if speed.is_finite() { speed.clamp(LOOP_SPEED.0, LOOP_SPEED.1) } else { 1.0 };
-        let params = LoopParams { speed, start, length, sample_rate: self.sr };
+        let warble = self.loopers.get(h).map_or(0.0, |l| l.params.warble);
+        let params = LoopParams { speed, start, length, warble, sample_rate: self.sr };
         match self.loopers.get_mut(h) {
             Some(l) => (l.track, l.params) = (track, params),
             None => {
                 let (gates, max_end) = (Vec::new(), Vec::new());
-                self.loopers.insert(h, Looper { track, params, voice: LoopVoice::new(), pvoice: LoopVoice::new(), gates, max_end, gain: 1.0, gain_now: 1.0, head: -1.0 });
+                self.loopers.insert(h, Looper { track, params, voice: LoopVoice::new(), pvoice: LoopVoice::new(), gates, max_end, gain: 1.0, gain_now: 1.0, head: -1.0, color: TapeColor::new(),
+                    base_gain: 1.0, muted: false, drive: 0.0, cutoff: dsp::tape::CUTOFF_MAX, auto: [NO_LANE; LOOPER_PARAMS] });
                 self.rebuild_routing(); // pads may have arrived before their looper
             }
         }
+    }
+
+    /// A looper's tape character: `drive` (saturation, 0..1), `cutoff_hz` (low-pass, 200..20000;
+    /// the top is open) and `warble` (wow/flutter depth, 0..1). All glide; the first call after
+    /// the looper is created snaps.
+    pub fn looper_tape(&mut self, h: u32, drive: f32, cutoff_hz: f32, warble: f32) {
+        let sr = self.sr;
+        let Some(l) = self.loopers.get_mut(h) else { return };
+        l.params.warble = if warble.is_finite() { warble.clamp(0.0, 1.0) as f64 } else { 0.0 };
+        (l.drive, l.cutoff) = (drive, cutoff_hz);
+        l.color.set(drive, cutoff_hz, sr, l.head < 0.0 && !self.main.playing);
     }
 
     pub fn looper_remove(&mut self, h: u32) {
@@ -420,6 +548,7 @@ impl Engine {
     pub fn looper_mix(&mut self, h: u32, gain: f32, muted: bool) {
         let Some(l) = self.loopers.get_mut(h) else { return };
         let g = if gain.is_finite() { gain.clamp(0.0, 2.0) } else { 1.0 };
+        (l.base_gain, l.muted) = (g, muted);
         l.gain = if muted { 0.0 } else { g };
         if l.head < 0.0 && !self.main.playing {
             l.gain_now = l.gain;
@@ -441,6 +570,65 @@ impl Engine {
     pub fn pad_remove(&mut self, h: u32) {
         self.pads.remove(h);
         self.rebuild_routing();
+    }
+
+    // ---- automation -----------------------------------------------------------------------
+
+    /// Create or update a lane: `kind` is `LANE_DEVICE` (`target` a device handle, `param` its param
+    /// id) or `LANE_LOOPER` (`param` a `LOOPER_*` code). `min`, `max` and `scale` (0 linear, 1 log,
+    /// 2 cubic) map the points' normalised values to the param's own. A disabled lane is kept but
+    /// does nothing. Its points are separate entities (`point_upsert`) and may arrive before it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn lane_upsert(&mut self, h: u32, kind: u32, target: u32, param: u32, enabled: bool, min: f64, max: f64, scale: u32) {
+        if !min.is_finite() || !max.is_finite() {
+            return;
+        }
+        let scale = match scale {
+            1 => Scale::Log,
+            2 => Scale::Pow,
+            _ => Scale::Lin,
+        };
+        match self.lanes.get_mut(h) {
+            Some(l) => (l.kind, l.target, l.param, l.enabled, l.min, l.max, l.scale) = (kind, target, param, enabled, min, max, scale),
+            None => {
+                self.lanes.insert(h, Lane { kind, target, param, enabled, min, max, scale, points: Vec::new() });
+                self.rebuild_lane_points(h);
+            }
+        }
+        self.rebuild_routing();
+    }
+
+    pub fn lane_remove(&mut self, h: u32) {
+        self.lanes.remove(h);
+        self.rebuild_routing();
+    }
+
+    /// A keyframe of `lane` at timeline sample `pos` with normalised `value` (0..1); `hold` makes
+    /// the segment after it a step.
+    pub fn point_upsert(&mut self, h: u32, lane: u32, pos: i64, value: f32, hold: bool) {
+        if !value.is_finite() {
+            return;
+        }
+        let old = self.points.insert(h, Point { lane, p: LanePoint { pos, value: value.clamp(0.0, 1.0), hold } });
+        if let Some(o) = old.filter(|o| o.lane != lane) {
+            self.rebuild_lane_points(o.lane);
+        }
+        self.rebuild_lane_points(lane);
+    }
+
+    pub fn point_remove(&mut self, h: u32) {
+        if let Some(p) = self.points.remove(h) {
+            self.rebuild_lane_points(p.lane);
+        }
+    }
+
+    /// Refill a lane's sorted point list (equal positions keep handle order). Allocation is fine here.
+    fn rebuild_lane_points(&mut self, lane: u32) {
+        let Engine { lanes, points, .. } = self;
+        let Some(l) = lanes.get_mut(lane) else { return };
+        l.points.clear();
+        l.points.extend(points.values().filter(|p| p.lane == lane).map(|p| p.p));
+        l.points.sort_by_key(|p| p.pos);
     }
 
     // ---- previews -------------------------------------------------------------------------
@@ -523,14 +711,19 @@ impl Engine {
     /// Recompute each track's device chain (sorted by `order`, ties by handle) and MIDI clip
     /// list. Allocation is allowed here; this is never called from `process`.
     fn rebuild_routing(&mut self) {
-        let Engine { tracks, devices, clips, loopers, pads, .. } = self;
+        let Engine { tracks, devices, clips, loopers, pads, master_chain, master_lanes, lanes, .. } = self;
+        master_chain.clear();
+        master_lanes.clear();
         for t in tracks.values_mut() {
+            t.dev_lanes.clear();
             t.chain.clear();
             t.midi_clips.clear();
             t.audio_clips.clear();
         }
         for (h, d) in devices.iter() {
-            if let Some(t) = tracks.get_mut(d.track) {
+            if d.track == MASTER_TRACK {
+                master_chain.push(h);
+            } else if let Some(t) = tracks.get_mut(d.track) {
                 t.chain.push(h);
             }
         }
@@ -550,6 +743,26 @@ impl Engine {
         }
         for l in loopers.values_mut() {
             l.gates.clear();
+            l.auto = [NO_LANE; LOOPER_PARAMS];
+        }
+        for (h, l) in lanes.iter().filter(|(_, l)| l.enabled) {
+            match l.kind {
+                LANE_DEVICE => match devices.get(l.target) {
+                    Some(d) if d.track == MASTER_TRACK => master_lanes.push(h),
+                    Some(d) => {
+                        if let Some(t) = tracks.get_mut(d.track) {
+                            t.dev_lanes.push(h);
+                        }
+                    }
+                    None => {}
+                },
+                LANE_LOOPER => {
+                    if let Some(lp) = loopers.get_mut(l.target).filter(|_| (l.param as usize) < LOOPER_PARAMS) {
+                        lp.auto[l.param as usize] = h;
+                    }
+                }
+                _ => {}
+            }
         }
         for p in pads.values().filter(|p| p.length > 0) {
             for l in loopers.values_mut().filter(|l| l.track == p.track) {
@@ -565,12 +778,14 @@ impl Engine {
                 l.max_end.push(m);
             }
         }
+        let by_order = |a: &u32, b: &u32| {
+            let (da, db) = (devices.get(*a).map_or(0.0, |d| d.order), devices.get(*b).map_or(0.0, |d| d.order));
+            da.total_cmp(&db).then(a.cmp(b))
+        };
         for t in tracks.values_mut() {
-            t.chain.sort_unstable_by(|a, b| {
-                let (da, db) = (devices.get(*a).map_or(0.0, |d| d.order), devices.get(*b).map_or(0.0, |d| d.order));
-                da.total_cmp(&db).then(a.cmp(b))
-            });
+            t.chain.sort_unstable_by(by_order);
         }
+        master_chain.sort_unstable_by(by_order);
     }
 
     // ---- M1 test voice --------------------------------------------------------------------
@@ -589,7 +804,7 @@ impl Engine {
         let sr = self.sr;
         let sr32 = self.sample_rate;
         let smooth = self.smooth_samples;
-        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, .. } = self;
+        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, master_lanes, lanes, .. } = self;
         out.fill(0.0);
         let (out_l, out_r) = out.split_at_mut(BLOCK);
 
@@ -636,6 +851,29 @@ impl Engine {
             }
         }
 
+        // 1b. Looper lanes replace the static values: the level ramps to its value at the end of
+        //     the block, the rest take the value at the start (and keep their own glides).
+        let ahead = if playing { p + n as i64 } else { p };
+        for (_, lp) in loopers.iter_mut() {
+            if lp.auto == [NO_LANE; LOOPER_PARAMS] {
+                continue;
+            }
+            if let Some(v) = lane_value(lanes, lp.auto[LOOPER_GAIN as usize], ahead) {
+                lp.gain = if lp.muted { 0.0 } else { (v as f32).clamp(0.0, 2.0) };
+            }
+            if let Some(v) = lane_value(lanes, lp.auto[LOOPER_SPEED as usize], p) {
+                lp.params.speed = v.clamp(LOOP_SPEED.0, LOOP_SPEED.1);
+            }
+            if let Some(v) = lane_value(lanes, lp.auto[LOOPER_WARBLE as usize], p) {
+                lp.params.warble = v.clamp(0.0, 1.0);
+            }
+            let drive = lane_value(lanes, lp.auto[LOOPER_SAT as usize], p);
+            let cutoff = lane_value(lanes, lp.auto[LOOPER_CUTOFF as usize], p);
+            if drive.is_some() || cutoff.is_some() {
+                lp.color.set(drive.map_or(lp.drive, |v| v as f32), cutoff.map_or(lp.cutoff, |v| v as f32), sr, false);
+            }
+        }
+
         for (_, lp) in loopers.iter_mut() {
             lp.head = -1.0;
         }
@@ -664,6 +902,7 @@ impl Engine {
                     let (mut tl, mut tr) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
                     // the pad's start identifies the trigger: a new pad restarts the loops
                     lp.voice.render_add(&lp.params, gs, t, &mut tape, &mut tl[..m], &mut tr[..m]);
+                    lp.color.process(&mut tl[..m], &mut tr[..m], sr);
                     for j in 0..m {
                         let k = t - gs + j as i64;
                         let at = (t - p) as usize + j;
@@ -709,6 +948,7 @@ impl Engine {
                         let (mut tl, mut tr) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
                         // each play or seek of the preview is a new trigger
                         lp.pvoice.render_add(&lp.params, pv.started, pos, &mut tape, &mut tl[..n], &mut tr[..n]);
+                        lp.color.process(&mut tl[..n], &mut tr[..n], sr);
                         for j in 0..n {
                             let g = gain(j) * lp.mix_at(j, n);
                             sl[j] += tl[j] * g;
@@ -759,6 +999,15 @@ impl Engine {
                     }
                 }
 
+                // Automated device params: the value at the segment start, which ends at the next breakpoint.
+                for &lh in &t.dev_lanes {
+                    let Some(lane) = lanes.get(lh) else { continue };
+                    if let (Some(v), Some(d)) = (lane.value_at(at), devices.get_mut(lane.target)) {
+                        d.set_param_auto(lane.param, v as f32);
+                    }
+                    end = end.min(lane.next_break(at).saturating_sub(p).clamp(i as i64 + 1, n as i64) as usize);
+                }
+
                 let (l, r) = (&mut sl[i..end], &mut sr_buf[i..end]);
                 for dh in &t.chain {
                     if let Some(d) = devices.get_mut(*dh) {
@@ -780,6 +1029,26 @@ impl Engine {
                 }
                 i = end;
             }
+        }
+
+        // 3b. The global fx chain, over everything the tracks summed.
+        let mut i = 0;
+        while i < n {
+            let at = p + i as i64;
+            let mut end = (i + SUB_BLOCK).min(n);
+            for &lh in master_lanes.iter() {
+                let Some(lane) = lanes.get(lh) else { continue };
+                if let (Some(v), Some(d)) = (lane.value_at(at), devices.get_mut(lane.target)) {
+                    d.set_param_auto(lane.param, v as f32);
+                }
+                end = end.min(lane.next_break(at).saturating_sub(p).clamp(i as i64 + 1, n as i64) as usize);
+            }
+            for dh in master_chain.iter() {
+                if let Some(d) = devices.get_mut(*dh) {
+                    d.process(&mut out_l[i..end], &mut out_r[i..end], sr32);
+                }
+            }
+            i = end;
         }
 
         // 4. Test voice and transport.

@@ -46,7 +46,7 @@ fn resampler_attenuates_what_would_alias_when_speeding_up() {
 }
 
 fn params(speed: f64, start: i64, length: i64) -> LoopParams {
-    LoopParams { speed, start, length, sample_rate: SR }
+    LoopParams { speed, start, length, warble: 0.0, sample_rate: SR }
 }
 
 /// A band-limited tape: two sines.
@@ -189,4 +189,23 @@ fn passband_report_at_unit_speed() {
     }
     let y = resample(1.0, sine(20000.0), 4000);
     assert!(rms(&y[1000..]) < 0.05, "20 kHz should be well down");
+}
+
+#[test]
+fn warble_wobbles_the_pitch_but_zero_is_steady() {
+    let mut p = params(1.0, 0, 40_000);
+    let tone = |i: i64| (sine(1000.0)(i), sine(1000.0)(i));
+    // instantaneous frequency from zero crossings over 1000-sample windows, across several wow cycles
+    let freqs = |p: &LoopParams| -> Vec<f64> {
+        let mut v = LoopVoice::new();
+        let y = render_with(&mut v, 0, 0, 36_000, 128, |_| *p, tone);
+        y.chunks(1_000).map(|c| crossings(c) as f64 * SR / 1_000.0).collect()
+    };
+    let spread = |f: &[f64]| f.iter().cloned().fold(f64::MIN, f64::max) - f.iter().cloned().fold(f64::MAX, f64::min);
+    let steady = freqs(&p);
+    p.warble = 1.0;
+    let wobbly = freqs(&p);
+    println!("spread steady {} wobbly {}", spread(&steady), spread(&wobbly));
+    assert!(spread(&steady) <= 48.0, "steady transport drifts: {}", spread(&steady)); // +-1 crossing of quantisation
+    assert!(spread(&wobbly) > 8.0 * 48.0 / 8.0, "no audible wobble: {}", spread(&wobbly));
 }

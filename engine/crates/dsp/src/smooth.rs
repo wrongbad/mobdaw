@@ -20,8 +20,14 @@ impl Ramp {
 
     /// Start ramping from the current value to `target`, arriving in `samples` samples.
     /// Calling this mid-ramp restarts a full-length ramp from wherever we are.
+    ///
+    /// `samples <= 0` jumps there at once (automation: the value is exactly what was drawn).
     pub fn set_target(&mut self, target: f64, samples: f64) {
         self.target = target;
+        if samples <= 0.0 {
+            self.snap();
+            return;
+        }
         self.step = (target - self.value) / samples.max(1.0);
     }
 

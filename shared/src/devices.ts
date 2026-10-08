@@ -15,6 +15,8 @@ export type DeviceDef = { type: number; name: string; instrument: boolean; param
 
 export const SIMPLE_FILTER = 1
 export const FINNWAVE = 2
+export const REVERB = 3
+export const COMPRESSOR = 4
 
 export const DEVICES: Record<number, DeviceDef> = {
   [SIMPLE_FILTER]: {
@@ -23,6 +25,25 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 0, name: 'mode', min: 0, max: 4, def: 0, scale: 'lin', options: ['LP', 'HP', 'BP', 'Notch', 'Peak'] },
       { id: 1, name: 'cutoff', min: 20, max: 20000, def: 1000, scale: 'log', unit: 'Hz' },
       { id: 2, name: 'damping', min: 0.05, max: 2, def: 0.7071, scale: 'lin' },
+    ],
+  },
+  [REVERB]: {
+    type: REVERB, name: 'Reverb', instrument: false,
+    params: [
+      { id: 0, name: 'mix', min: 0, max: 1, def: 0.3, scale: 'lin' },
+      { id: 1, name: 'size', min: 0, max: 1, def: 0.5, scale: 'lin' },
+      { id: 2, name: 'damping', min: 0, max: 1, def: 0.5, scale: 'lin' },
+      { id: 3, name: 'predelay', min: 0, max: 200, def: 0, scale: 'pow', unit: 'ms' },
+    ],
+  },
+  [COMPRESSOR]: {
+    type: COMPRESSOR, name: 'Compressor', instrument: false,
+    params: [
+      { id: 0, name: 'threshold', min: -60, max: 0, def: -18, scale: 'lin', unit: 'dB' },
+      { id: 1, name: 'ratio', min: 1, max: 20, def: 4, scale: 'log', unit: ':1' },
+      { id: 2, name: 'attack', min: 0.1, max: 100, def: 10, scale: 'log', unit: 'ms' },
+      { id: 3, name: 'release', min: 10, max: 1000, def: 100, scale: 'log', unit: 'ms' },
+      { id: 4, name: 'makeup', min: 0, max: 24, def: 0, scale: 'lin', unit: 'dB' },
     ],
   },
   [FINNWAVE]: {

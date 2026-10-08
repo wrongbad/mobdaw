@@ -63,13 +63,17 @@ engine_track_remove(e, h)       // also stops rendering its clips/devices (bridg
   - smoothed the same way as gain.
 - **Solo:** if any track is soloed, non-soloed tracks are silent. Mute always wins.
 - **Signal flow:** clips (audio) or instrument output (midi) → device chain in `order` →
-  gain/pan → master sum.
+  gain/pan → master sum → **global fx chain**.
+- **Global fx:** a device upserted with `track = 0xFFFFFFFF` (`MASTER_TRACK`) sits on the master
+  bus instead of a track. Those devices run in `order` over the summed mix, before the test voice.
+  In the doc this is a device whose `trackId` is `'master'`.
 
 ## Soundscape tracks
 ```
 engine_track_upsert(..., kind = 2, ...)          // kind 2 = soundscape track
 engine_looper_upsert(e, h, track: u32, speed: f64, start: f64, length: f64)
 engine_looper_mix(e, h, gain: f32, muted: u32)  // level 0..2 (ramped), mute flag
+engine_looper_tape(e, h, drive: f32, cutoff_hz: f32, warble: f32)  // tape colour, all glide (see below)
 engine_looper_head(e, h) -> f64                 // read head on the source tape (samples), -1 while not sounding
 engine_looper_remove(e, h)
 engine_pad_upsert(e, h, track: u32, start: f64, length: f64)
@@ -106,6 +110,12 @@ warming up over ~96 input samples (times `max(1, speed)`).
 **Seam.** For the first 10 ms (output time) after each loop wrap the output is an equal-power
 crossfade between the restarted loop and the audio continuing past the region end. (The first pass
 after a trigger starts clean: there is no earlier pass to fade from.)
+
+**Tape controls.** `drive` (0..1) is a tanh soft-clip with a little bias for even harmonics, level-
+compensated; `cutoff_hz` (200..20000) is a low-pass, and 20000 is open; `warble` (0..1) adds wow
+(~0.7 Hz), flutter (~7 Hz) and slow drift to the read speed, up to about ±30 cents at 1. Saturation
+and filter run on the looper's output before its level; warble acts on the read head, so it moves
+pitch and time together. Defaults (0, 20000, 0) are a bit-exact bypass.
 
 Editing a looper's region while it plays keeps the phase (folded into the new length) and re-reads
 from the new position; that is a jump, so expect a click. The 4 loopers are summed before the
@@ -181,6 +191,27 @@ engine_param_set(e, device: u32, param: u32, value: f32)   // smoothed per engin
 - **Changing kind** on an existing handle resets the device.
 - Defaults apply until `param_set` is called.
 
+### Automation
+```
+engine_lane_upsert(e, h, kind: u32, target: u32, param: u32, enabled: u32, min: f64, max: f64, scale: u32)
+engine_lane_remove(e, h)
+engine_point_upsert(e, h, lane: u32, pos: f64, value: f32, hold: u32)
+engine_point_remove(e, h)
+```
+A lane drives one param from keyframes in *timeline* time (it follows the transport position, stopped or
+not). `kind` 0 drives a device (`target` = its handle, `param` = its param id); `kind` 1 drives a looper
+(`param`: 0 level, 1 speed, 2 saturation, 3 filter, 4 warble). Point `value`s are **normalised** (0..1);
+`min`/`max`/`scale` (0 linear, 1 log, 2 cubic, as in `devices.ts`) map them to the param's own value, so the
+interpolation is exactly the curve the editor draws. Before the first point and after the last a lane holds
+that point's value; between two, the left one's curve decides (`hold` non-zero = a step). Points may arrive
+before their lane and in any order. A disabled lane is kept but inert.
+- **Devices** (tracks and the master chain): evaluated at the start of every control segment, and segments
+  are split at breakpoints, so a corner is sample-exact. The value is applied at once (`set_param_auto`): no glide.
+- **Loopers:** once per block. The level ramps linearly to the lane's value at the block's end (mute still
+  wins); speed, warble, saturation and filter take the value at the block's start and keep their own glides.
+- A lane replaces the value, it doesn't remember it: when one is disabled or removed the host re-sends the
+  param's static value (the bridge does).
+
 ### Device kinds and params
 **kind 1: Simple filter** (effect). This is the wade SVF, `dsp::svf`.
 
@@ -193,6 +224,32 @@ engine_param_set(e, device: u32, param: u32, value: f32)   // smoothed per engin
 - Stereo is two independent filter states.
 - Coefficients are updated per 32-sample sub-block, with the smoothed params evaluated at
   the sub-block start. Per-sample coefficient updates are fine later.
+
+**kind 3: Reverb** (effect). A Freeverb-style stereo reverb, `dsp::reverb`: 8 damped combs into 4
+allpasses per channel (right channel offset for width), summed from a mono input.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| mix | 0 | 0..1 | 0.3 | dry/wet crossfade; 0 is a bit-exact passthrough of the dry signal. Smoothed. |
+| size | 1 | 0..1 | 0.5 | comb feedback `0.70 + 0.28·size`, i.e. the decay time. Smoothed. |
+| damping | 2 | 0..1 | 0.5 | low-pass in the feedback path: higher is darker. Smoothed. |
+| predelay | 3 | 0..200 ms | 0 | delay before the tail starts. Not smoothed, so moving it while audio passes can click. |
+
+- Bypass clears the tail. The tail keeps ringing after the input stops (the chain runs even when
+  a track is silent), so put it on a track or on the global fx lane freely.
+
+**kind 4: Compressor** (effect). A stereo-linked feed-forward compressor, `dsp::compressor`: peak detector
+on the louder channel, 6 dB soft knee, one shared gain for both channels.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| threshold | 0 | -60..0 dB | -18 | Smoothed. |
+| ratio | 1 | 1..20 | 4 | Smoothed. 1 means no compression. |
+| attack | 2 | 0.1..100 ms | 10 | Not smoothed. |
+| release | 3 | 10..1000 ms | 100 | Not smoothed. |
+| makeup | 4 | 0..24 dB | 0 | Smoothed. |
+
+- Under the threshold with no makeup the gain is exactly 1. Bypass resets the envelope.
 
 **kind 2: Finnwave synth** (instrument). The voice is `dsp::finnwave` → amp ADSR.
 

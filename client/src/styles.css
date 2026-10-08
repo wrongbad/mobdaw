@@ -1,4 +1,6 @@
 /* Flat, square, tiled: no radii, no margins; surfaces are told apart by background hints and 1px lines. */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { display: none; }
 :root {
   --bg: #160f10; --panel: #1d1314; --raise: #271c1d; --line: #2f2223; --fg: #ddd5d5; --dim: #8c7f80; --accent: #7aa2ff; --danger: #ff7a7a;
   color-scheme: dark;
@@ -113,13 +115,20 @@ main.center { margin: auto; text-align: center; }
 .fx { position: sticky; left: 140px; width: calc(100vw - 140px); display: flex; flex-wrap: wrap; align-items: flex-start; min-height: 72px; }
 .fx[hidden] { display: none; }
 .fx-row[hidden] { display: none; }
+/* global fx: pinned under the scroller; opens upward into a capped, scrollable strip */
+.lane.master { flex: none; max-height: 45vh; overflow: auto; border-top: 1px solid var(--accent); border-bottom: 0; }
+.lane.master .fx-row { border-top: 0; min-width: 100%; width: max-content; }
+.lane.master .fx { position: static; width: auto; max-width: calc(100vw - 140px); }
 .dev.looper { box-shadow: inset 3px 0 0 var(--c); }
 .dev.looper .dev-head strong { padding-left: 4px; }
 .lane-body.arming { cursor: crosshair; }
 /* looper regions: coloured outline boxes over the track's audio */
-.loop-box { position: absolute; top: 0; bottom: 0; pointer-events: none; z-index: 1; box-shadow: inset 0 0 0 2px var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.loop-box { position: absolute; top: 0; bottom: 0; cursor: grab; z-index: 1; box-shadow: inset 0 0 0 2px var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
 .loop-box.armed { background: color-mix(in srgb, var(--c) 28%, transparent); }
-.loop-box span { position: absolute; top: 0; left: 0; padding: 0 5px; font-size: 10px; line-height: 14px; color: var(--bg); background: var(--c); }
+.loop-box::before, .loop-box::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; cursor: ew-resize; }
+.loop-box::before { left: 0; }
+.loop-box::after { right: 0; }
+.loop-box span { pointer-events: none; position: absolute; top: 0; left: 0; padding: 0 5px; font-size: 10px; line-height: 14px; color: var(--bg); background: var(--c); }
 .dev { position: relative; width: 200px; font-size: 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .dev.bypassed { opacity: 0.55; }
 .dev-head { display: flex; gap: 6px; align-items: center; padding: 0 0 0 8px; height: 18px; padding-right: 18px; background: var(--raise); }
@@ -130,6 +139,23 @@ main.center { margin: auto; text-align: center; }
 .dev .prm select { grid-column: 2 / 4; padding: 1px 4px; }
 .dev .out { text-align: right; font-size: 11px; }
 .add-fx:hover { color: var(--fg); border-color: var(--dim); }
+/* automation: a collapsible section per track (and one for the global fx) with a drawable lane per automated param */
+.auto-section[hidden], .auto-box[hidden] { display: none; }
+.auto-row { height: 64px; border-top: 1px solid var(--line); }
+.auto-head { gap: 4px; }
+.auto-head .out { flex: 1; text-align: right; padding: 0 4px; font-size: 11px; background: var(--raise); line-height: 18px; overflow: hidden; white-space: nowrap; }
+.auto-body { cursor: crosshair; }
+.auto-svg { display: block; touch-action: none; }
+.auto-line { fill: none; stroke: var(--c); stroke-width: 2; pointer-events: none; }
+.auto-fill { fill: var(--c); opacity: .12; stroke: none; pointer-events: none; }
+.auto-idle { stroke: var(--dim); stroke-dasharray: 4 4; pointer-events: none; }
+.auto-pt { fill: var(--c); stroke: var(--bg); stroke-width: 1.5; cursor: grab; }
+.auto-pt:hover { stroke: var(--fg); }
+.auto-row.off .auto-line, .auto-row.off .auto-pt, .auto-row.off .auto-fill { opacity: .35; }
+.automatable { cursor: pointer; }
+.automatable:hover { color: var(--fg); text-decoration: underline dotted; }
+.dev .prm .auto { color: var(--accent); }
+.dev .prm .driven + input { opacity: .6; }
 .popover { position: fixed; z-index: 10; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); }
 .popover button { border: 0; text-align: left; background: none; padding: 4px 12px; }
 .popover button:hover { background: var(--line); }
@@ -177,7 +203,7 @@ main.center { margin: auto; text-align: center; }
 .src-row.collapsed .wave, .src-row.collapsed .src-ticks, .src-row.collapsed .loop-box, .src-row.collapsed .playhead { display: none; }
 .transport[hidden] { display: none; }
 .src-view { position: sticky; left: 140px; flex: none; width: calc(var(--view, 100vw) - 140px); height: 100%;
-  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+  overflow-x: auto; overflow-y: hidden; }
 .src-body { height: 100%; }
 .src-body .clip { top: 14px; }
 .src-body .loop-box { top: 14px; }

@@ -49,6 +49,8 @@ const migrations: (string | ((db: Db) => void))[] = [
    ALTER TABLE users ADD COLUMN password_hash TEXT;
    ALTER TABLE projects RENAME COLUMN owner_email TO owner_username;
    ALTER TABLE project_members RENAME COLUMN email TO username;`,
+  // Account role: 'dev' marks the passwordless account used by DEV_NO_AUTH (only honoured while that mode is on).
+  `ALTER TABLE users ADD COLUMN account_role TEXT NOT NULL DEFAULT 'user' CHECK(account_role IN ('user','dev'));`,
 ]
 
 export function openDb(path: string): Db {

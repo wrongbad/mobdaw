@@ -77,6 +77,21 @@ fn process_never_allocates_across_a_busy_scene() {
             e.pad_upsert(5000 + t * 10 + g, t, (g * 12_000) as i64 + 1000 * t as i64, 7_000);
         }
     }
+    // automation: a filter cutoff and a synth rolloff, a master filter, and a looper's level, speed and tape
+    e.device_upsert(900, engine::MASTER_TRACK, 1, 1.0, false);
+    for (lane, kind, target, param, min, max, scale) in [
+        (1u32, 0u32, 101u32, 1u32, 20.0, 20_000.0, 1u32),
+        (2, 0, 421, 0, 0.001, 3.0, 1),
+        (3, 0, 900, 1, 20.0, 20_000.0, 1),
+        (4, 1, 1100, 0, 0.0, 1.0, 0),
+        (5, 1, 1101, 1, 0.1, 4.0, 1),
+        (6, 1, 1102, 3, 200.0, 20_000.0, 1),
+    ] {
+        e.lane_upsert(lane, kind, target, param, true, min, max, scale);
+        for k in 0..200u32 {
+            e.point_upsert(lane * 1000 + k, lane, (k * 477) as i64, ((k * 37 + lane * 11) % 100) as f32 / 100.0, k % 3 == 0);
+        }
+    }
     e.preview_upsert(950, 30, 0);
     e.preview_upsert(951, 31, 1);
     e.preview_play(950, 1000);

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { Hono, type Context } from 'hono'
 import * as Y from 'yjs'
 import { docName, type Member, type ProjectDetail, type ProjectSummary, type Role } from '@mobdaw/shared'
-import { memberRole, requireSignedIn, userExists, type Ctx, type Env } from '../auth.ts'
+import { isDevUser, memberRole, requireSignedIn, userExists, type Ctx, type Env } from '../auth.ts'
 import { kick, type Collab } from '../collab.ts'
 import { tx } from '../db.ts'
 import type { Storage } from '../storage/index.ts'
@@ -19,12 +19,10 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
   r.use('*', requireSignedIn)
 
   const detail = (id: string, username: string): ProjectDetail | null => {
-    const p = db
-      .prepare(
-        `SELECT p.*, m.role FROM projects p JOIN project_members m ON m.project_id = p.id AND m.username = ? WHERE p.id = ?`,
-      )
-      .get(username, id) as ProjectRow | undefined
-    if (!p) return null
+    const role = memberRole(ctx, id, username)
+    const row = role && (db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Omit<ProjectRow, 'role'> | undefined)
+    if (!row) return null
+    const p = { ...row, role } as ProjectRow
     const members = db
       .prepare(
         `SELECT username, role FROM project_members WHERE project_id = ? ORDER BY role = 'owner' DESC, username`,
@@ -33,18 +31,18 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
     return { ...summary(p), members }
   }
 
-  r.get('/', (c) =>
-    c.json(
-      (
-        db
+  r.get('/', (c) => {
+    const me = c.var.session!.username
+    const rows = isDevUser(ctx, me)
+      ? (db.prepare(`SELECT p.*, 'owner' AS role FROM projects p ORDER BY p.created_at DESC`).all() as ProjectRow[])
+      : (db
           .prepare(
             `SELECT p.*, m.role FROM projects p JOIN project_members m ON m.project_id = p.id
              WHERE m.username = ? ORDER BY p.created_at DESC`,
           )
-          .all(c.var.session!.username) as ProjectRow[]
-      ).map(summary),
-    ),
-  )
+          .all(me) as ProjectRow[])
+    return c.json(rows.map(summary))
+  })
 
   r.post('/', async (c) => {
     const name = String((await c.req.json().catch(() => ({}))).name ?? '').trim()
