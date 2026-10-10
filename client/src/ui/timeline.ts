@@ -1133,6 +1133,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       overlay.append(h('div', { className: 'remote-head', style: `left:${HEADER + x(r.playhead)}px;${color}` }))
       rulerHeads.append(h('div', { className: 'remote-head', style: `left:${x(r.playhead)}px;${color}` }))
     }
+    // The playhead lines run through the ruler, the lanes and the master automation, not the empty space below them.
+    const last = masterAuto.el.offsetHeight ? masterAuto.el : laneBox
+    overlay.style.height = `${last.offsetTop + last.offsetHeight}px`
     drawPlayhead()
     if (refreshPreviews()) ensurePreviewTick()
   }
