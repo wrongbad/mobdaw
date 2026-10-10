@@ -1,7 +1,7 @@
 import type {
   AddMemberRequest, CreateInviteRequest, CreateInviteResponse, CreateProjectRequest, InviteInfo,
-  LibrarySample, LoginRequest, LoginResponse, Me, ProjectDetail, ProjectSummary, RegisterRequest, UploadUrlRequest, UploadUrlResponse, UrlResponse,
-  UserInfo,
+  LibrarySample, LoginRequest, LoginResponse, Me, ProjectDetail, ProjectSummary, RegisterRequest, UploadInfo, UploadUrlRequest,
+  UploadUrlResponse, UrlResponse, UserInfo,
 } from '@mobdaw/shared'
 
 export class ApiError extends Error {
@@ -63,4 +63,11 @@ export const api = {
   uploadUrl: (id: string, b: UploadUrlRequest) => post<UploadUrlResponse>(`/projects/${id}/samples/upload-url`, b),
   completeSample: (id: string, hash: string) => post(`/projects/${id}/samples/${hash}/complete`),
   sampleUrl: (id: string, hash: string) => get<UrlResponse>(`/projects/${id}/samples/${hash}/url`),
+  uploads: () => get<UploadInfo[]>('/uploads'),
+  deleteUpload: (hash: string) => del(`/uploads/${hash}`),
+  uploadFileUrl: (hash: string) => get<UrlResponse>(`/uploads/${hash}/url`),
+  async deleteAccount(password: string) {
+    await post('/me/delete', { password })
+    localStorage.removeItem(TOKEN_KEY)
+  },
 }

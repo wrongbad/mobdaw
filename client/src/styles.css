@@ -226,3 +226,10 @@ main.center { margin: auto; text-align: center; }
 .dev.looper .btns { display: flex; gap: 6px; }
 .dev.looper .ctl button { background: var(--raise); }
 .dev.looper .ctl button.on { background: var(--accent); }
+
+/* pages: banner, small text, danger buttons */
+.top { flex: none; }
+.banner { margin: 0; padding: 10px 24px; background: var(--raise); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--fg); }
+.small { font-size: 12px; }
+button.danger:hover { color: var(--danger); }
+nav a.on { color: var(--fg); }

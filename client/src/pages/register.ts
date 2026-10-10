@@ -22,5 +22,6 @@ export function registerPage(invite: string, done: () => void) {
         },
       }, code, username, password, again, h('button', {}, 'Register')),
       err,
-      h('p', { className: 'dim' }, 'Already have an account? ', h('a', { href: '#/login' }, 'Log in')))))
+      h('p', { className: 'dim' }, 'Already have an account? ', h('a', { href: '#/login' }, 'Log in')),
+      h('p', { className: 'dim' }, h('a', { href: '#/local' }, 'Continue without an account'), ' to work on this device.'))))
 }

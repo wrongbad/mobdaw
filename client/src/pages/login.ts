@@ -29,5 +29,6 @@ export function loginPage(done: () => void) {
         },
       }, username, password, h('button', {}, 'Log in')),
       err,
-      h('p', { className: 'dim' }, 'Invite only for now. Have a code? ', h('a', { href: '#/register' }, 'Register')))))
+      h('p', { className: 'dim' }, 'Invite only for now. Have a code? ', h('a', { href: '#/register' }, 'Register')),
+      h('p', { className: 'dim' }, h('a', { href: '#/local' }, 'Continue without an account'), ' to work on this device.'))))
 }

@@ -96,9 +96,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   })
   const bar = h('header', { className: 'bar' },
     h('div', { className: 'bar-l' }, h('a', { href: '#/projects', className: 'logo', title: 'All projects' }, 'mobdaw'), h('strong', {}, projectName),
-      readOnly ? h('span', { className: 'dim' }, 'view only') : null),
+      readOnly ? h('span', { className: 'dim' }, 'view only') : null,
+      s.local ? h('span', { className: 'dim', title: 'Saved in this browser, on this device' }, 'on this device') : null),
     transport.el,
-    h('div', { className: 'bar-r' }, status, presence, chatBtn))
+    h('div', { className: 'bar-r' }, status, presence, s.local ? null : chatBtn))
   const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }))
   const rulerBody = h('div', { className: 'ruler-body' })
   ruler.append(rulerBody)
@@ -1167,8 +1168,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   s.awareness.on('change', schedule)
   const offPeaks = onPeaks(schedule)
   const onStatus = ({ status: st }: { status: string }) => (bar.dataset.status = st)
-  s.provider.on('status', onStatus)
-  s.provider.on('authenticationFailed', () => (status.textContent = 'no access'))
+  s.provider?.on('status', onStatus)
+  s.provider?.on('authenticationFailed', () => (status.textContent = 'no access'))
   // After the first sync: migrate old projects (editors only: a viewer's writes never reach the server),
   // then start the engine at the project's sample rate.
   void s.synced.then(() => {

@@ -3,6 +3,8 @@ import { createSHA256 } from 'hash-wasm'
 import type * as Y from 'yjs'
 import { api, ApiError } from './api'
 import { getCtx } from './audio/context'
+import { getAudio, putAudio } from './local/audio'
+import { isLocalId } from './local/ids'
 
 const mem = new Map<string, AudioBuffer>()
 const inflight = new Map<string, Promise<AudioBuffer>>()
@@ -29,6 +31,11 @@ export function getSampleBuffer(projectId: string, hash: string, rate: number): 
   let p = inflight.get(mk)
   if (!p) {
     p = (async () => {
+      if (isLocalId(projectId)) {
+        const row = await getAudio(projectId, hash)
+        if (!row) throw new Error(`sample ${hash.slice(0, 8)}: missing from this device`)
+        return decode(await row.blob.arrayBuffer(), hash, rate)
+      }
       const cache = await cacheOpen()
       let res = await cache?.match(key(hash))
       if (!res) {
@@ -72,7 +79,7 @@ function probeDuration(file: File) {
   })
 }
 
-/** A hash being garbage-collected answers 409 until its object is gone: retry a few times. */
+/** A hash being deleted answers 409 until its bytes are gone: retry a few times. */
 async function requestUpload(projectId: string, req: UploadUrlRequest) {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -84,23 +91,44 @@ async function requestUpload(projectId: string, req: UploadUrlRequest) {
   }
 }
 
-/** Hash, upload if needed, and record metadata in the doc. Returns the sample meta. */
+/**
+ * Make sure `blob` is in the cloud project's library, uploading it only if the server needs the bytes. Every user
+ * owns their own upload of a file, so this also records it under the signed-in account (and charges their storage).
+ */
+export async function uploadToProject(projectId: string, blob: Blob, hash: string, mime: string, name: string) {
+  // A 409 proof_required means someone else's identical upload finished first: ask again, which then wants a proof upload.
+  for (let attempt = 0; ; attempt++) {
+    const up = await requestUpload(projectId, { hash, size: blob.size, mime, name })
+    if (up.exists) return
+    // Passing the Blob lets the browser stream it from disk.
+    const res = await fetch(up.url, { method: up.method, headers: up.headers, body: blob })
+    if (!res.ok) throw new Error(`upload failed (HTTP ${res.status})`)
+    try {
+      await api.completeSample(projectId, hash) // also links it into this project's library
+      return
+    } catch (e) {
+      if (!(e instanceof ApiError && e.code === 'proof_required') || attempt >= 2) throw e
+    }
+  }
+}
+
+export const sampleName = (file: { name: string }) => file.name.replace(/\.[^.]+$/, '')
+
+/** Hash it, store it (on this device, or in the cloud), and record its metadata in the doc. Returns the sample meta. */
 export async function importFile(projectId: string, doc: Y.Doc, file: File): Promise<SampleMeta> {
   const duration = await probeDuration(file) // fail fast on non-audio, before uploading
   const hash = await sha256Hex(file)
   const mime = file.type || 'application/octet-stream'
-  const up = await requestUpload(projectId, { hash, size: file.size, mime })
-  if (!up.exists) {
-    // Passing the File lets the browser stream it from disk.
-    const res = await fetch(up.url, { method: up.method, headers: up.headers, body: file })
-    if (!res.ok) throw new Error(`upload failed (HTTP ${res.status})`)
-    await api.completeSample(projectId, hash) // also links it into this project's library
+  if (isLocalId(projectId)) {
+    await putAudio({ project: projectId, hash, blob: file, mime, name: file.name, size: file.size })
+  } else {
+    await uploadToProject(projectId, file, hash, mime, file.name)
+    if (playable(file)) {
+      const cache = await cacheOpen()
+      await cache?.put(key(hash), new Response(file, { headers: { 'content-type': mime } })).catch(() => {})
+    }
   }
-  if (playable(file)) {
-    const cache = await cacheOpen()
-    await cache?.put(key(hash), new Response(file, { headers: { 'content-type': mime } })).catch(() => {})
-  }
-  const meta: SampleMeta = { hash, name: file.name.replace(/\.[^.]+$/, ''), duration, size: file.size, mime }
+  const meta: SampleMeta = { hash, name: sampleName(file), duration, size: file.size, mime }
   addSample(doc, meta)
   return meta
 }
