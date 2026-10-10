@@ -9,6 +9,7 @@
     "start": "node --env-file-if-exists=../.env --import tsx src/main.ts",
     "admin": "node --env-file-if-exists=../.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts",
     "test": "vitest run",
+    "build": "node build.mjs",
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
@@ -27,6 +28,7 @@
     "@hocuspocus/provider": "latest",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.5.0",
+    "esbuild": "^0.28.2",
     "vitest": "^3.0.0"
   }
 }

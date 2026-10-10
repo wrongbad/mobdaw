@@ -15,17 +15,20 @@ export async function startServer(config: Config) {
   const storage = createStorage(config, (owner, hash) =>
     (db.prepare('SELECT mime FROM uploads WHERE owner_id = ? AND hash = ?').get(owner, hash) as { mime: string } | undefined)?.mime,
   )
-  // Objects stored under an older layout move to u<owner id>/<hash>. Before serving, so downloads find them.
-  await storage.migrateLayout({
-    ownersOf: (hash) =>
-      (db.prepare("SELECT owner_id FROM uploads WHERE hash = ? AND state != 'pending'").all(hash) as { owner_id: number }[]).map((r) => r.owner_id),
-    userId: (username) => (db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id: number } | undefined)?.id,
-  })
   const collab = createCollab(ctx)
   // Hocuspocus owns the http.Server; replace its placeholder handler with the Hono app.
   collab.httpServer.removeAllListeners('request')
   collab.httpServer.on('request', getRequestListener(createApp(ctx, storage, collab).fetch))
   await collab.listen()
+  // Objects stored under an older layout move to u<owner id>/<hash>. In the background: with S3 this lists the
+  // whole bucket, which would otherwise keep the port closed for the first seconds of every restart.
+  storage
+    .migrateLayout({
+      ownersOf: (hash) =>
+        (db.prepare("SELECT owner_id FROM uploads WHERE hash = ? AND state != 'pending'").all(hash) as { owner_id: number }[]).map((r) => r.owner_id),
+      userId: (username) => (db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id: number } | undefined)?.id,
+    })
+    .catch((e) => console.error('storage migration failed', e))
   const sweep = () =>
     Promise.resolve(endExpiredSubscriptions(ctx, collab))
       .then(() => purgeExpiredData(ctx, storage, collab))

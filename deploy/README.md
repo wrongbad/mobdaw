@@ -5,8 +5,8 @@ it serves `client/dist` and proxies `/mobdaw/api/*` and `/mobdaw/collab*` to `lo
 the `/mobdaw` prefix (so the server itself still routes `/api` and `/collab`). `PUBLIC_URL` carries the
 prefix; the server derives cookie paths and local-storage URLs from it.
 
-Deploy from the parent folder with `./upload.sh mobdaw` (builds the wasm engine and client locally,
-rsyncs, runs `npm ci --omit=dev` on the server, then restarts the `www-mobdaw` unit). First time, or after
+Deploy from the parent folder with `./upload.sh mobdaw` (builds the wasm engine, client and server bundle
+(`server/dist/main.mjs`, so boot doesn't transpile with tsx) locally, rsyncs, runs `npm ci --omit=dev` on the server, then restarts the `www-mobdaw` unit). First time, or after
 changing `systemd/` or `setup.sh`, run `./upload.sh install` (it also runs `setup.sh` on the server). Every site is a systemd unit (`../../systemd/`, installed by `setup.sh`) that starts on boot and
 restarts on failure. Logs are in the persistent journal: `journalctl -u www-mobdaw -f`, or all sites with
 `journalctl -u 'www-*'`. Status: `systemctl status 'www-*'`.
