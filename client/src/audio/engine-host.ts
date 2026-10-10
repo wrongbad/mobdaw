@@ -51,6 +51,7 @@ export class EngineHost {
       else if (ev.data?.type === 'loopers') host.onloopers?.(ev.data)
       else if (ev.data?.type === 'recstart') host.onrecstart?.(ev.data)
       else if (ev.data?.type === 'rec') host.onrec?.(ev.data)
+      else if (ev.data?.type === 'level') host.onlevel?.(ev.data)
     }
     return host
   }
@@ -67,6 +68,14 @@ export class EngineHost {
   onrecstart: ((m: { pos: number }) => void) | null = null
   /** A chunk of captured input: planar, one array per channel. The last one has `final`. */
   onrec: ((m: { channels: Float32Array[]; frames: number; final: boolean }) => void) | null = null
+
+  /** Input level: `peaks` are max |x| per 64 frames (BUCKET); `rec` when those frames went into the take. */
+  onlevel: ((m: { peaks: Float32Array; rec: boolean }) => void) | null = null
+
+  /** Report the input's level (while a microphone is armed). */
+  meter(on: boolean) {
+    this.node.port.postMessage({ type: 'meter', on })
+  }
 
   /** Start (`on`, with the channel count to capture) or end capturing the node's input. Capture begins once the engine plays. */
   record(on: boolean, channels = 1) {

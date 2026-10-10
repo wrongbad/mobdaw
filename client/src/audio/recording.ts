@@ -22,11 +22,37 @@ export class Recorder {
   private stream: MediaStream | null = null
   private src: MediaStreamAudioSourceNode | null = null
   private take: Take | null = null
+  private pk = new Float32Array(4096)
+  private pkN = 0
+  /** Recent input level, 0..1 (peak with a short decay), and whether it hit full scale since arming or the take began. */
+  level = 0
+  clipped = false
+  /** Called whenever the level moves (about 45 times a second while armed). */
+  onlevel: (() => void) | null = null
 
   constructor(private ctx: AudioContext, private hostP: Promise<EngineHost>, private rate: number) {}
 
   get armed() { return !!this.stream }
   get recording() { return !!this.take }
+  /** The take so far as waveform peaks (BUCKET frames each, the first being the take's first frame). */
+  get peaks() { return this.pk.subarray(0, this.pkN) }
+
+  private onLevel(m: { peaks: Float32Array; rec: boolean }) {
+    let mx = 0
+    for (const v of m.peaks) if (v > mx) mx = v
+    this.level = Math.max(mx, this.level * 0.85)
+    if (mx >= 0.99) this.clipped = true
+    if (this.take && m.rec) {
+      if (this.pkN + m.peaks.length > this.pk.length) {
+        const bigger = new Float32Array(this.pk.length * 2)
+        bigger.set(this.pk.subarray(0, this.pkN))
+        this.pk = bigger
+      }
+      this.pk.set(m.peaks, this.pkN)
+      this.pkN += m.peaks.length
+    }
+    this.onlevel?.()
+  }
 
   /** Ask for the microphone (the first time) and connect it to the engine. Rejects with a readable message. */
   async arm(): Promise<InputInfo> {
@@ -60,6 +86,10 @@ export class Recorder {
     }
     this.src.connect(this.host.node)
     this.stream = stream
+    this.level = 0
+    this.clipped = false
+    this.host.onlevel = (m) => this.onLevel(m)
+    this.host.meter(true)
     return (this.info = { deviceId: s.deviceId ?? '', label: track.label, channels: Math.max(1, s.channelCount ?? 1) })
   }
 
@@ -69,6 +99,10 @@ export class Recorder {
       this.host?.record(false)
       this.take = null
     }
+    this.host?.meter(false)
+    if (this.host) this.host.onlevel = null
+    this.level = 0
+    this.onlevel?.()
     this.src?.disconnect()
     this.stream?.getTracks().forEach((t) => t.stop())
     this.src = this.stream = this.info = null
@@ -79,8 +113,11 @@ export class Recorder {
     const h = this.host
     if (!h || !this.info || this.take) throw new Error('not armed')
     let done = () => {}
-    const take: Take = { pcm: [], frames: 0, startPos: null, onChunk, done, finished: new Promise<void>((r) => (done = take.done = r)) }
+    const finished = new Promise<void>((r) => (done = r))
+    const take: Take = { pcm: [], frames: 0, startPos: null, onChunk, done, finished }
     this.take = take
+    this.pkN = 0
+    this.clipped = false
     h.onrecstart = (m) => ((take.startPos = m.pos), onStart?.(m.pos))
     h.onrec = (m) => {
       if (m.frames) {

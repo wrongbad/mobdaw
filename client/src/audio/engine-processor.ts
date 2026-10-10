@@ -43,6 +43,11 @@ class EngineProcessor extends AudioWorkletProcessor {
   private loopersSounding = false
   private warned = new Set<string>()
   /** Input capture (docs/engine.md §9.2): armed by a 'record' message, begins with the engine playing. */
+  /** Input level (docs/engine.md §9.2): max |x| per 64 frames, posted 16 at a time while a meter is wanted. */
+  private meter = false
+  private lvl = new Float32Array(16)
+  private lvlAt = 0
+  private lvlRec = false
   private rec: { channels: number; buf: Float32Array[]; fill: number; started: boolean; next: number; ended: boolean } | null = null
 
   constructor(options: { processorOptions: { wasmBytes: ArrayBuffer } }) {
@@ -60,6 +65,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       else if (m?.type === 'call') this.call(m.fn, m.args)
       else if (m?.type === 'source') this.loadSource(m.h, m.channels, m.frames)
       else if (m?.type === 'record') this.record(m.on, m.channels)
+      else if (m?.type === 'meter') this.meter = !!m.on
     }
     this.port.postMessage({ type: 'ready' })
   }
@@ -134,6 +140,26 @@ class EngineProcessor extends AudioWorkletProcessor {
     r.fill = 0
   }
 
+  /** Fold this call's input into the level peaks; `captured` marks calls whose frames went into the take. */
+  private level(input: Float32Array[] | undefined, total: number, captured: boolean) {
+    for (let at = 0; at < total; at += 64) {
+      let m = 0
+      for (const ch of input ?? []) {
+        for (let i = at, end = Math.min(at + 64, total); i < end; i++) {
+          const a = Math.abs(ch[i])
+          if (a > m) m = a
+        }
+      }
+      this.lvl[this.lvlAt++] = m
+      if (captured) this.lvlRec = true
+      if (this.lvlAt === this.lvl.length) {
+        this.port.postMessage({ type: 'level', peaks: this.lvl.slice(), rec: this.lvlRec })
+        this.lvlAt = 0
+        this.lvlRec = false
+      }
+    }
+  }
+
   /** Copy this call's input into the take. Runs in the same call that advances the engine, so frame i is timeline sample start+i. */
   private capture(input: Float32Array[] | undefined, frames: number) {
     const r = this.rec!
@@ -155,6 +181,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     const out = outputs[0]
     const total = out[0].length
     const r = this.rec
+    let captured = false
     if (r && !r.ended && this.x.engine_is_playing(this.e) === 1) {
       const pos = this.x.engine_position(this.e)
       if (!r.started) {
@@ -163,9 +190,10 @@ class EngineProcessor extends AudioWorkletProcessor {
         this.port.postMessage({ type: 'recstart', pos }) // the timeline sample of the first captured frame
       }
       // A take is one continuous stretch of the timeline: if the transport jumped, capture ends here.
-      if (pos === r.next) this.capture(inputs[0], total), (r.next = pos + total)
+      if (pos === r.next) this.capture(inputs[0], total), (r.next = pos + total), (captured = true)
       else r.ended = true
     } else if (r?.started) r.ended = true // stopped: a later play must not append to this take
+    if (this.meter) this.level(inputs[0], total, captured)
     for (let at = 0; at < total; at += BLOCK) {
       const n = Math.min(BLOCK, total - at)
       this.x.engine_process(this.e, n)

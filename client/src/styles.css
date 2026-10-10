@@ -293,6 +293,9 @@ nav a.on { color: var(--fg); }
 .rec.on::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent); }
 .ctl button.record.on { color: #fff; background: var(--danger); }
 .clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); box-shadow: inset 0 0 0 1px var(--danger); pointer-events: none; z-index: 1; }
+.head .meter { position: absolute; left: 0; bottom: 0; height: 3px; width: calc(var(--lv, 0) * 100%); background: #6fcf8f; transition: width 60ms linear; }
+.head .meter.clip { background: var(--danger); }
+.head .meter[hidden] { display: none; }
 .clip.incoming { background: #3a3358; animation: incoming 1.6s ease-in-out infinite; }
 .clip.missing { opacity: 0.55; background: repeating-linear-gradient(135deg, #2d3a5c 0 6px, #232c47 6px 12px); }
 @keyframes incoming { 50% { opacity: 0.55; } }
