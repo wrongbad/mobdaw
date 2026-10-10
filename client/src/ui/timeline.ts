@@ -218,15 +218,26 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     draw()
   }
 
-  /** ●: play and capture from the playhead; again to stop. */
+  /** ●: play and capture from the playhead (onto a new track if none is armed); again to stop. */
+  let preparing = false // asking for the microphone: ignore further presses
   async function toggleRecord() {
-    if (!pb || readOnly) return
+    if (!pb || readOnly || preparing) return
     if (take) return stop()
-    const trackId = armedTrack
-    if (!trackId || !tracksMap(doc).has(trackId)) {
-      status.textContent = 'arm an audio track with R, then record'
-      return
+    if (!armedTrack || !tracksMap(doc).has(armedTrack) || !pb.recorder.armed) {
+      preparing = true
+      try {
+        await pb.recorder.arm()
+      } catch (err) {
+        status.textContent = `record: ${(err as Error).message}`
+        return
+      } finally {
+        preparing = false
+      }
+      if (destroyed || take) return
+      if (!armedTrack || !tracksMap(doc).has(armedTrack)) armedTrack = addTrack(doc, `Track ${getTracks(doc).length + 1}`)
+      draw()
     }
+    const trackId = armedTrack!
     const from = Math.round(position()) // (while playing, capture begins at the engine's next block: the recorder reports where)
     const info = { trackId, trackName: String(tracksMap(doc).get(trackId)!.get('name')) }
     const journal = takeJournal(s.projectId, info, rate, pb.recorder.info!.channels)

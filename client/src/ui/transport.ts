@@ -9,7 +9,7 @@ export type TransportControls = ReturnType<typeof transportControls>
 export function transportControls(opts: { title: string; onToggle(): void; small?: boolean; record?: { onToggle(): void; onMenu(e: MouseEvent): void } }) {
   const btn = h('button', { className: 'play', title: opts.title, onclick: opts.onToggle })
   const time = h('span', { className: 'time' }, fmt(0))
-  const rec = opts.record && h('button', { className: 'rec', title: 'record onto the armed track (shift+space)', onclick: opts.record.onToggle })
+  const rec = opts.record && h('button', { className: 'rec', title: 'record onto the armed track, or a new one (shift+space)', onclick: opts.record.onToggle })
   if (rec) rec.addEventListener('contextmenu', (e) => { e.preventDefault(); opts.record!.onMenu(e) })
   const el = h('div', { className: `transport${opts.small ? ' sm' : ''}` }, btn, rec, time)
   return {
