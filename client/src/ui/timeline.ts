@@ -76,10 +76,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   const recRegions = new Map<string, HTMLElement>()
   let armed: string | null = null // looper whose region is being drawn (local UI state)
   let padSel: string | null = null // selected pad
-  const srcClosed = new Set<string>() // soundscapes with the source lane collapsed (open by default)
-  const loopClosed = new Set<string>() // looper tracks with the loopers row collapsed (open by default)
-  const synthClosed = new Set<string>() // MIDI tracks with the synth row collapsed (open by default)
-  const autoClosed = new Set<string>() // scopes (track ids, or MASTER_TRACK) with the automation section collapsed (open by default)
+  const srcShown = new Set<string>() // soundscapes with the source lane expanded (collapsed by default)
+  const loopShown = new Set<string>() // looper tracks with the loopers row expanded (collapsed by default)
+  const synthShown = new Set<string>() // MIDI tracks with the synth row expanded (collapsed by default)
+  const autoShown = new Set<string>() // scopes (track ids, or MASTER_TRACK) with the automation section expanded (collapsed by default)
   let autoLanes: AutoLane[] = [] // as of the last draw
   let autoPoints = new Map<string, Point[]>() // lane id -> its points, sorted
   let autoInfos = new Map<string, Map<string, AutoInfo>>() // owner id -> param -> what drives it
@@ -404,14 +404,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   }
 
   function reveal(scope: string) {
-    autoClosed.delete(scope)
+    autoShown.add(scope)
     draw()
     ;(scope === MASTER_TRACK ? masterAuto : lanes.get(scope)?.auto)?.el.scrollIntoView({ block: 'nearest' })
   }
 
   function makeAutoSection(scope: string, title = 'automation'): AutoSec {
     const toggle = h('button', { className: 'fx-toggle', title: 'automation lanes', onclick: () => {
-      if (!autoClosed.delete(scope)) autoClosed.add(scope)
+      if (!autoShown.delete(scope)) autoShown.add(scope)
       draw()
     } }, title)
     const box = h('div', { className: 'auto-box' })
@@ -447,7 +447,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
         return r ? [{ l, r }] : []
       })
       sec.el.hidden = mine.length === 0
-      const open = !autoClosed.has(scope)
+      const open = autoShown.has(scope)
       sec.toggle.classList.toggle('on', open)
       sec.toggle.textContent = `${sec.el.dataset.title} (${mine.length})`
       sec.box.hidden = !open
@@ -549,7 +549,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     const fxRow = h('div', { className: 'fx-row' }, more, fx) // opaque, so it covers the playhead
     // MIDI tracks: the instrument gets its own row above the FX bar
     const synthMore = h('button', { className: 'fx-toggle', title: 'instrument', onclick: () => {
-      if (!synthClosed.delete(t.id)) synthClosed.add(t.id)
+      if (!synthShown.delete(t.id)) synthShown.add(t.id)
       draw()
     } }, 'synth')
     const synth = h('div', { className: 'fx' })
@@ -558,11 +558,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
     // the loopers row: speed and region per slot, above the FX bar
     const loopMore = h('button', { className: 'fx-toggle', title: 'loopers', onclick: () => {
-      if (!loopClosed.delete(t.id)) {
-        loopClosed.add(t.id)
+      if (loopShown.delete(t.id)) {
         const pv = pb?.preview(t.id, 'loops') // the transport is about to be hidden: don't leave it playing
         if (pv?.playing) pv.stop()
-      }
+      } else loopShown.add(t.id)
       draw()
     } }, 'loopers')
     const loops = h('div', { className: 'fx' })
@@ -597,7 +596,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
 
   function drawFx(l: Lane, t: Track, devices: Device[]) {
     const fxOpen = expanded.has(t.id)
-    const synthOpen = t.kind === 'midi' && !synthClosed.has(t.id)
+    const synthOpen = t.kind === 'midi' && synthShown.has(t.id)
     l.fx.hidden = !fxOpen
     l.more.classList.toggle('on', fxOpen)
     l.synthRow.hidden = t.kind !== 'midi'
@@ -746,11 +745,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     const view = h('div', { className: 'src-view' }, body)
     const tc = transportControls({ title: 'play / pause the source audio', small: true, onToggle: () => togglePreview(trackId, 'source') })
     const more = h('button', { className: 'fx-toggle', title: 'source audio', onclick: () => {
-      if (!srcClosed.delete(trackId)) {
-        srcClosed.add(trackId)
+      if (srcShown.delete(trackId)) {
         const pv = pb?.preview(trackId, 'source') // the transport is about to be hidden: don't leave it playing
         if (pv?.playing) pv.stop()
-      }
+      } else srcShown.add(trackId)
       draw()
     } }, 'source')
     const head = h('div', { className: 'head src-head' }, more, tc.el)
@@ -876,7 +874,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   function drawLoopers(l: Lane, t: Track, loopers: Looper[]) {
     const isLoop = t.kind === 'soundscape' && !!l.src
     l.loopRow.hidden = !isLoop
-    const open = isLoop && !loopClosed.has(t.id)
+    const open = isLoop && loopShown.has(t.id)
     l.loops.hidden = !open
     l.loopMore.classList.toggle('on', open)
     l.loopTc.el.hidden = !open
@@ -1016,7 +1014,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       drawLoopers(l, t, loopers)
       drawPads(l, t, pads)
       if (l.src) {
-        const srcOpen = !srcClosed.has(t.id)
+        const srcOpen = srcShown.has(t.id)
         l.src.row.classList.toggle('collapsed', !srcOpen) // collapsed: just the clip names
         l.src.more.classList.toggle('on', srcOpen)
         l.src.tc.el.hidden = !srcOpen
