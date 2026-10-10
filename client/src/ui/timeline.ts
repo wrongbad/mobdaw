@@ -553,9 +553,22 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     } }, 'fx')
     const delTrack = () => !locks.has(t.id) && confirm('Delete this track and its clips?') && deleteTrack(doc, t.id)
-    const del = h('button', { className: 'x', title: 'delete track', onclick: delTrack }, '×')
-    const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl' }, mute, solo, record, meter), h('div', { className: 'ctl' }, gain), readOnly ? null : del)
-    deleteMenu(head, 'Delete track', delTrack, () => !readOnly && !locks.has(t.id))
+    const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl track-btns' }, mute, solo, record, meter), h('div', { className: 'ctl' }, gain))
+    // Click or right-click on the header (not on its controls) offers the track's menu.
+    let menuClosed = false // this press just closed the menu: don't open it again
+    head.addEventListener('pointerdown', (e) => (menuClosed = closedBy(e)), true)
+    const trackMenu = (e: MouseEvent) => {
+      if (readOnly || locks.has(t.id)) return
+      popover(head, [['Rename', () => rename(t.id)], ['Delete track', () => void delTrack()]], [e.clientX, e.clientY])
+    }
+    head.addEventListener('click', (e) => {
+      if (!menuClosed && !(e.target as HTMLElement).closest('button, input')) trackMenu(e)
+    })
+    head.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      e.stopPropagation() // not the lane's background menu underneath
+      trackMenu(e)
+    })
     const body = h('div', { className: 'lane-body', 'data-track': t.id })
     body.onpointerdown = (e) => {
       if (e.target !== body) return

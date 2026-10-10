@@ -2,7 +2,7 @@
 * { scrollbar-width: none; }
 *::-webkit-scrollbar { display: none; }
 :root {
-  --bg: #160f10; --panel: #1d1314; --raise: #271c1d; --line: #2f2223; --fg: #ddd5d5; --dim: #8c7f80; --accent: #7aa2ff; --danger: #ff7a7a;
+  --bg: #160f10; --panel: #1d1314; --raise: #271c1d; --line: #2f2223; --fg: #ddd5d5; --dim: #8c7f80; --accent: #7aa2ff; --danger: #ff7a7a; --divider: #8c1818;
   color-scheme: dark;
   font: 14px/1.4 system-ui, -apple-system, sans-serif;
 }
@@ -122,7 +122,12 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .remote-head { opacity: .8; }
 
 /* lanes: header, clip row, FX chain */
-.lane { --lane: #1a1112; background: var(--lane); border-bottom: 1px solid var(--line); }
+.lane { --lane: #1a1112; background: var(--lane); border-bottom: 1px solid var(--divider); position: relative; }
+.lanes > .lane:first-child { border-top: 1px solid var(--divider); }
+/* the dividers are repainted above the playhead overlay (z-index 1), so the playhead never crosses them */
+.lane:not(.master)::after, .lanes > .lane:first-child::before { content: ''; position: absolute; left: 0; right: 0; height: 1px; background: var(--divider); z-index: 2; pointer-events: none; }
+.lane:not(.master)::after { bottom: -1px; }
+.lanes > .lane:first-child::before { top: -1px; }
 .lane:nth-child(even) { --lane: #241a1b; } /* header, clips row and FX bar share the lane's tint */
 .lane-row { display: flex; height: 72px; }
 .lane.editing .lane-row { height: 320px; }
@@ -137,19 +142,19 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 
 .clip {
   position: absolute; top: 0; bottom: 0; padding: 2px 6px; overflow: hidden; white-space: nowrap; font-size: 12px;
-  background: #2d3a5c; box-shadow: inset 0 0 0 1px #3f5287; cursor: grab; user-select: none;
+  background: #2d3a5c; cursor: grab; user-select: none;
 }
 .clip::before, .clip::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; z-index: 1; cursor: ew-resize; }
 .clip::after { right: 0; }
 .clip::before { left: 0; }
 .clip:not(.editing):hover::before, .clip:not(.editing):hover::after { background: linear-gradient(var(--accent), var(--accent)) no-repeat; background-size: 2px 100%; }
 .clip:not(.editing):hover::after { background-position: right; }
-.clip.sel { background: #364a78; box-shadow: inset 0 0 0 1px var(--accent); }
+.clip.sel { background: #364a78; }
 .clip.unplayable { opacity: 0.55; }
 .clip .wave { position: absolute; top: 0; height: 100%; color: #8fa8e0; opacity: .6; pointer-events: none; }
 .clip .label { position: relative; }
-.clip.midi { background: #2f4a3f; box-shadow: inset 0 0 0 1px #3f7a60; }
-.clip.midi.sel { background: #386052; box-shadow: inset 0 0 0 1px var(--accent); }
+.clip.midi { background: #2f4a3f; }
+.clip.midi.sel { background: #386052; }
 .clip .mark { position: absolute; height: 2px; background: #9fe0c0; pointer-events: none; }
 /* an open MIDI clip is the editor: the clip itself grows to fill the (taller) lane row */
 .clip.editing { z-index: 1; padding: 0; cursor: default; background: var(--bg); box-shadow: inset 0 0 0 1px var(--accent); }
@@ -157,22 +162,21 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 
 /* bottom bar of every lane: the toggle is its header-width left cell, the chain opens to its right */
 .fx-row { position: relative; z-index: 2; display: flex; background: var(--lane); border-top: 1px solid var(--line); }
-.fx-toggle { position: sticky; left: 0; flex: none; width: 140px; min-height: 16px; padding: 0 0 0 24px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
-.fx-toggle::before { content: ''; position: absolute; left: 10px; top: 4px; width: 6px; height: 8px; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); transition: transform .12s; }
+.fx-toggle { position: sticky; left: 0; flex: none; width: 140px; min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
 .fx-toggle.on { color: var(--fg); }
-.fx-toggle.on::before { transform: rotate(90deg); transform-origin: 50% 50%; }
 .fx { position: sticky; left: 140px; width: calc(100vw - 140px); display: flex; flex-wrap: wrap; align-items: flex-start; min-height: 72px; }
 .fx[hidden] { display: none; }
 .fx-row[hidden] { display: none; }
 /* global fx: pinned under the scroller; opens upward into a capped, scrollable strip */
-.lane.master { flex: none; max-height: 45vh; overflow: auto; border-top: 1px solid var(--accent); border-bottom: 0; }
+.lane.master { flex: none; max-height: 45vh; overflow: auto; border-top: 1px solid var(--divider); border-bottom: 0; }
 .lane.master .fx-row { border-top: 0; min-width: 100%; width: max-content; }
 .lane.master .fx { position: static; width: auto; max-width: calc(100vw - 140px); }
+.lane.master .fx-toggle { min-height: 44px; padding-left: 12px; font-size: 14px; line-height: 44px; align-items: center; color: var(--fg); }
 .dev.looper { box-shadow: inset 3px 0 0 var(--c); }
 .dev.looper .dev-head strong { padding-left: 4px; }
 .lane-body.arming { cursor: crosshair; }
 /* looper regions: coloured outline boxes over the track's audio */
-.loop-box { position: absolute; top: 0; bottom: 0; cursor: grab; z-index: 1; box-shadow: inset 0 0 0 2px var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.loop-box { position: absolute; top: 0; bottom: 0; cursor: grab; z-index: 1; background: color-mix(in srgb, var(--c) 14%, transparent); }
 .loop-box.armed { background: color-mix(in srgb, var(--c) 28%, transparent); }
 .loop-box::before, .loop-box::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; cursor: ew-resize; }
 .loop-box::before { left: 0; }
@@ -246,7 +250,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 
 /* soundscape: pad stripes on the main lane, and a source lane in its own time world below it */
 /* soundscape: the main lane is an ordinary blank lane; regions are clip-styled blocks, and the source lane below has its own time world */
-.clip.region { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); box-shadow: inset 0 0 0 1px var(--accent); color: var(--dim); }
+.clip.region { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); color: var(--dim); }
 .clip.region.sel { background: color-mix(in srgb, var(--accent) 40%, var(--bg)); }
 /* The source lane is opaque and above the playhead overlay: the timeline's playhead means nothing in source time. */
 .src-row { position: relative; z-index: 2; background: var(--lane); border-top: 1px solid var(--line); }
@@ -298,8 +302,10 @@ nav a.on { color: var(--fg); }
 .rec.on { color: #fff; }
 .rec.on::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent); }
 .ctl button.record.on { color: #fff; background: var(--danger); }
-.clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); box-shadow: inset 0 0 0 1px var(--danger); pointer-events: none; z-index: 1; }
-.ctl .meter { flex: 1; align-self: stretch; position: relative; overflow: hidden; }
+.clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); pointer-events: none; z-index: 1; }
+.ctl.track-btns { background: none; } /* the strip beside M S R shows only while the meter is live */
+.ctl.track-btns button:not(.on) { background: var(--line); }
+.ctl .meter { background: var(--line); flex: 1; align-self: stretch; position: relative; overflow: hidden; }
 .ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: #6fcf8f; transition: width 60ms linear; }
 .ctl .meter.clip::before { background: var(--danger); }
 .ctl .meter[hidden] { display: none; }
