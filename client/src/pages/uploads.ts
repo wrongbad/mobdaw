@@ -12,14 +12,16 @@ const MEASURE_MAX_BYTES = 500 * 1024 * 1024
 
 /** "My uploads": every audio file you own, where it is used, and the way to delete it. */
 export function uploadsPage(me: Me) {
-  const list = h('ul', { className: 'list' })
+  const list = h('ul', { className: 'uploads' })
   const err = h('p', { className: 'error' })
   const used = h('p', { className: 'dim' })
 
+  /** Where it is used, for the delete confirmation: the first few project names, then a count. */
   const where = (u: UploadInfo) => {
-    const names = u.projects.map((p) => `"${p.name}"`)
-    if (u.otherProjects) names.push(`${u.otherProjects} other project${u.otherProjects === 1 ? '' : 's'} you can no longer see`)
-    return names.length ? names.join(', ') : null
+    const shown = u.projects.slice(0, 3).map((p) => `"${p.name}"`)
+    const more = u.projects.length - shown.length + u.otherProjects
+    if (more > 0) shown.push(`${more} other project${more === 1 ? '' : 's'}`)
+    return shown.length ? shown.join(', ') : null
   }
 
   async function download(u: UploadInfo) {
@@ -44,31 +46,47 @@ export function uploadsPage(me: Me) {
     api.deleteUpload(u.hash).then(() => ((err.textContent = ''), render()), (e) => (err.textContent = describeError(e)))
   }
 
-  /** Bars mirrored about the centre line, one per stored column. */
+  const SVG = 'http://www.w3.org/2000/svg'
+
+  /** Bars mirrored about the centre line, one per stored column; scales to the width of the tile. */
   function wave(peaks: Uint8Array) {
-    const cv = h('canvas', { className: 'wave', width: peaks.length, height: 48 })
-    const g = cv.getContext('2d')!
-    g.fillStyle = getComputedStyle(cv).color
+    const root = document.createElementNS(SVG, 'svg')
+    root.setAttribute('viewBox', `0 0 ${peaks.length} 100`)
+    root.setAttribute('preserveAspectRatio', 'none')
+    root.setAttribute('class', 'up-wave')
     peaks.forEach((p, i) => {
-      const half = Math.round((p / 255) * 24)
-      g.fillRect(i, 24 - half, 1, Math.max(1, half * 2))
+      const half = Math.max(0.5, (p / 255) * 46)
+      const r = document.createElementNS(SVG, 'rect')
+      r.setAttribute('x', String(i + 0.1))
+      r.setAttribute('y', String(50 - half))
+      r.setAttribute('width', '0.8')
+      r.setAttribute('height', String(half * 2))
+      root.append(r)
     })
-    return cv
+    return root
   }
 
-  /** Fill a row's picture and format line from a stored analysis. */
-  function show(slot: HTMLElement, line: HTMLElement, a: NonNullable<UploadInfo['analysis']>) {
+  type Row = { u: UploadInfo; slot: HTMLElement; specs: HTMLElement; audio: string }
+
+  /** The one wide line under the tile: what the file is and how big. */
+  function paint(r: Row, status = '') {
+    r.specs.textContent = [status || r.audio, bytes(r.u.size)].filter(Boolean).join(' · ')
+  }
+
+  /** Fill a row's picture and format from a stored analysis. */
+  function show(r: Row, a: NonNullable<UploadInfo['analysis']>) {
     const peaks = a.peaks ? peaksFromBase64(a.peaks) : new Uint8Array(0)
-    slot.replaceChildren(...(peaks.length ? [wave(peaks)] : []))
-    line.textContent = describeAudio(a.info)
+    r.slot.replaceChildren(...(peaks.length ? [wave(peaks)] : []))
+    r.audio = describeAudio(a.info)
+    paint(r)
   }
 
   /** Files uploaded before measuring existed: measure them here, one at a time, and cache the result on the server. */
-  async function measure(rows: { u: UploadInfo; slot: HTMLElement; line: HTMLElement }[], token: number) {
+  async function measure(rows: Row[], token: number) {
     for (const r of rows) {
       if (token !== generation) return
       if (r.u.size > MEASURE_MAX_BYTES) continue
-      r.line.textContent = 'measuring…'
+      paint(r, 'measuring…')
       try {
         const { url } = await api.uploadFileUrl(r.u.hash)
         const res = await fetch(url)
@@ -76,28 +94,28 @@ export function uploadsPage(me: Me) {
         const a = await analyzeAudio(await res.blob())
         const analysis = { info: a.info, peaks: peaksToBase64(a.peaks) }
         await api.saveAnalysis(r.u.hash, analysis)
-        show(r.slot, r.line, analysis)
+        show(r, analysis)
       } catch {
-        r.line.textContent = ''
+        paint(r)
       }
     }
   }
 
   let generation = 0
-  const pending: { u: UploadInfo; slot: HTMLElement; line: HTMLElement }[] = []
+  const pending: Row[] = []
 
   function row(u: UploadInfo) {
-    const w = where(u)
-    const slot = h('div', { className: 'wave-slot' })
-    const line = h('div', { className: 'dim small' })
-    if (u.analysis) show(slot, line, u.analysis)
-    else pending.push({ u, slot, line })
-    return h('li', {},
-      slot,
-      h('span', { className: 'grow' }, h('div', {}, u.name || u.hash.slice(0, 12)), line,
-        h('div', { className: 'dim small' }, `${bytes(u.size)} · ${w ? `used in ${w}` : 'not used in any project'}`)),
-      h('button', { onclick: () => download(u) }, 'Download'),
-      h('button', { onclick: () => remove(u) }, 'Delete'))
+    const r: Row = { u, slot: h('div', { className: 'up-slot' }), specs: h('div', { className: 'dim small' }), audio: '' }
+    if (u.analysis) show(r, u.analysis)
+    else (paint(r), pending.push(r))
+    const menu = h('details', { className: 'menu up-menu' },
+      h('summary', { title: 'actions' }, '⋯'),
+      h('div', {},
+        h('button', { className: 'link', onclick: () => download(u) }, 'Download'),
+        h('button', { className: 'link danger', onclick: () => remove(u) }, 'Delete')))
+    return h('li', { className: 'upload' },
+      h('div', { className: 'up-tile' }, r.slot, h('strong', { className: 'up-name' }, u.name || u.hash.slice(0, 12)), menu),
+      r.specs)
   }
 
   async function render() {
