@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addAudioClip, addDevice, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, setParam, type SampleMeta } from '@mobdaw/shared'
+import { addAudioClip, addDevice, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, setLaneState, setParam, updateLaneLfo, type SampleMeta } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 
 const SR = 48000
@@ -110,6 +110,31 @@ describe('bridge + real engine.wasm', () => {
     deleteLane(doc, lane) // the doc's own 1 kHz comes back
     render(9600)
     expect(render(9600)).toBeLessThan(open * 0.05)
+    bridge.destroy()
+  })
+
+  it('automation: an LFO lane swings the cutoff around the knob', async () => {
+    const doc = new Y.Doc()
+    const t = addTrack(doc, 'audio')
+    const tone = new Float32Array(SR * 2).map((_, i) => 0.5 * Math.sin((2 * Math.PI * 8000 * i) / SR))
+    addSample(doc, { hash: 'tone', name: 'tone', duration: 2, size: SR * 8, mime: 'audio/wav' })
+    addAudioClip(doc, { trackId: t, sourceHash: 'tone', start: 0, length: SR * 2 })
+    const f = addDevice(doc, t, 1)
+    setParam(doc, f, 1, 632) // ~the middle of 20..20000 on the log scale: 8 kHz is in the stopband
+    const lane = addLane(doc, { scope: t, kind: 'effect', owner: f, param: '1' })
+    setLaneState(doc, lane, 'lfo')
+    updateLaneLfo(doc, lane, { rate: 2, depth: 0.5 }) // a 0.5 s cycle: wide open a quarter in, shut at three quarters
+
+    const { sink, render } = host()
+    const bridge = new Bridge(doc, sink, async () => [tone, tone], SR, () => 0)
+    await tick()
+    bridge.play(0)
+    render(SR / 8 - 1200)
+    const open = render(2400) // around 0.125 s
+    render(SR / 4 - 2400)
+    const closed = render(2400) // around 0.375 s
+    expect(open).toBeGreaterThan(0.3)
+    expect(closed).toBeLessThan(0.05)
     bridge.destroy()
   })
 })

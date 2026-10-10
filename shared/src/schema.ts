@@ -58,7 +58,25 @@ export type Pad = { id: string; trackId: string; start: number; length: number }
  * While `enabled`, the lane replaces the param's value (the doc keeps the static value; disabling or deleting the lane gives it back).
  * `order` sorts the lanes within their scope's automation section.
  */
-export type Lane = { id: string; enabled: boolean; order: number } & ParamTarget
+export type Lane = {
+  id: string
+  enabled: boolean
+  order: number
+  /** Absent means keyframes. In 'lfo' mode the points are kept but not read, and the param's own (static) value is the centre. */
+  mode?: LaneMode
+  /** LFO settings (see LFO_*), meaningful in 'lfo' mode. `depth` is normalised: the wave swings the slider by +- this much. */
+  shape?: number
+  rate?: number
+  depth?: number
+} & ParamTarget
+export type LaneMode = 'keyframes' | 'lfo'
+/** What the lane's mode menu offers; 'off' is `enabled: false`. */
+export type LaneState = 'off' | LaneMode
+export const LFO_SHAPES = ['Sine', 'Triangle', 'Square'] // engine dsp::lfo order
+export const LFO_RATE_MIN = 0.05
+export const LFO_RATE_MAX = 20
+export const LFO_DEFAULTS = { shape: 0, rate: 1, depth: 0.25 }
+export const laneState = (l: Pick<Lane, 'enabled' | 'mode'>): LaneState => (!l.enabled ? 'off' : l.mode === 'lfo' ? 'lfo' : 'keyframes')
 /** `value` is normalised (0..1 along the param's own scale); `curve` shapes the segment *after* this point. */
 export type AutoCurve = 'linear' | 'hold'
 export type Point = { id: string; laneId: string; pos: number; value: number; curve: AutoCurve }
@@ -283,6 +301,15 @@ export function addLane(doc: Y.Doc, t: ParamTarget): string {
   return id
 }
 export const setLaneEnabled = (doc: Y.Doc, id: string, enabled: boolean) => patchMap(doc, lanesMap(doc).get(id), { enabled })
+/** Off / keyframes / LFO. Switching never touches the points, so going back finds the drawing as it was. */
+export const setLaneState = (doc: Y.Doc, id: string, state: LaneState) =>
+  patchMap(doc, lanesMap(doc).get(id), state === 'off' ? { enabled: false } : { enabled: true, mode: state })
+export const updateLaneLfo = (doc: Y.Doc, id: string, patch: Partial<Pick<Lane, 'shape' | 'rate' | 'depth'>>) =>
+  patchMap(doc, lanesMap(doc).get(id), {
+    ...(patch.shape != null ? { shape: Math.min(LFO_SHAPES.length - 1, Math.max(0, Math.round(patch.shape))) } : {}),
+    ...(patch.rate != null ? { rate: Math.min(LFO_RATE_MAX, Math.max(LFO_RATE_MIN, patch.rate)) } : {}),
+    ...(patch.depth != null ? { depth: Math.min(1, Math.max(0, patch.depth)) } : {}),
+  })
 export function deleteLane(doc: Y.Doc, id: string) {
   doc.transact(() => {
     for (const p of getPoints(doc)) if (p.laneId === id) pointsMap(doc).delete(p.id)

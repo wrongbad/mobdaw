@@ -6,7 +6,7 @@
 //   param  device: ParamDef.id as a string; looper: a field name of LOOPER_PARAMS
 import type * as Y from 'yjs'
 import { DEVICES, paramToPos, paramToValue, type ParamDef } from './devices.ts'
-import { LOOP_CUTOFF_MAX, LOOP_CUTOFF_MIN, LOOP_SPEED_MAX, LOOP_SPEED_MIN, devicesMap, loopersMap, type AutoCurve, type Looper } from './schema.ts'
+import { LFO_DEFAULTS, LOOP_CUTOFF_MAX, LOOP_CUTOFF_MIN, LOOP_SPEED_MAX, LOOP_SPEED_MIN, devicesMap, loopersMap, type AutoCurve, type Looper } from './schema.ts'
 
 export type ParamKind = 'synth' | 'effect' | 'looper'
 export type ParamTarget = { scope: string; kind: ParamKind; owner: string; param: string }
@@ -71,4 +71,22 @@ export function evalPoints(points: readonly { pos: number; value: number; curve:
   const b = points[lo]
   if (!b || a.curve === 'hold') return a.value
   return a.value + (b.value - a.value) * ((pos - a.pos) / (b.pos - a.pos))
+}
+
+/** An LFO wave at phase `u` (cycles), in -1..1. Mirrors engine dsp::lfo: every shape starts at 0 going up. */
+export function lfoWave(u: number, shape: number): number {
+  const f = u - Math.floor(u)
+  if (shape === 1) return 1 - 4 * Math.abs((((u + 0.25) % 1) + 1) % 1 - 0.5)
+  if (shape === 2) return Math.min(1, Math.max(-1, Math.sin(2 * Math.PI * f) * 6))
+  return Math.sin(2 * Math.PI * f)
+}
+
+/**
+ * The normalised value (0..1) of a lane in LFO mode at timeline sample `pos`: the param's own static value `center`
+ * (normalised) swung by `depth`. Mirrors engine.rs `Lane::norm_at`.
+ */
+export function evalLfo(l: { shape?: number; rate?: number; depth?: number }, center: number, pos: number, sampleRate: number): number {
+  const rate = l.rate ?? LFO_DEFAULTS.rate
+  const v = center + (l.depth ?? LFO_DEFAULTS.depth) * lfoWave((pos / sampleRate) * rate, l.shape ?? LFO_DEFAULTS.shape)
+  return Math.min(1, Math.max(0, v))
 }

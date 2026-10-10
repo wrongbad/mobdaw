@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
   addAudioClip, addDevice, MASTER_TRACK, devicesMap, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
-  addLane, addPoint, deleteLane, evalPoints, getLanes, getPoints, laneOf, setLaneEnabled, updatePoint, resolveTarget,
+  addLane, addPoint, deleteLane, evalPoints, getLanes, getPoints, laneOf, setLaneEnabled, setLaneState, updateLaneLfo, updatePoint, resolveTarget,
   getClips, getLoopers, getSampleRate, getTracks, migrateToV2, notesMap, setParam, splitClip, sweepOrphans, tracksMap,
   updateClip, updateLooper, updateNote, updateTrack, type SampleMeta,
 } from '@mobdaw/shared'
@@ -297,6 +297,35 @@ describe('automation', () => {
     expect(gone.filter((c) => c[0] === 'engine_point_remove')).toHaveLength(2)
     expect(gone).toContainEqual(['engine_lane_remove', up[1]])
     expect(gone).toContainEqual(['engine_param_set', dh, 1, 4000])
+  })
+
+  it('an LFO lane sends its wave with the knob as the centre, which follows the knob; leaving LFO mode says so once', () => {
+    const { doc, bridge, take } = setup()
+    const t = addTrack(doc, 'audio')
+    const dev = addDevice(doc, t, 1)
+    setParam(doc, dev, 1, 200) // cutoff 200 Hz on 20..20000 (log): a third of the way along
+    const lane = addLane(doc, { scope: t, kind: 'effect', owner: dev, param: '1' })
+    expect(take().map((c) => c[0])).not.toContain('engine_lane_lfo') // keyframes: nothing about LFOs
+    const lh = take()
+    setLaneState(doc, lane, 'lfo')
+    const on = take().find((c) => c[0] === 'engine_lane_lfo')!
+    expect(on.slice(2, 6)).toEqual([1, 0, 1, 0.25]) // lfo on, sine, 1 Hz, depth 0.25 (the defaults)
+    expect(on[6]).toBeCloseTo(1 / 3, 5)
+    expect(lh).toEqual([])
+
+    updateLaneLfo(doc, lane, { shape: 1, rate: 4, depth: 0.5 })
+    expect(take().find((c) => c[0] === 'engine_lane_lfo')!.slice(2, 6)).toEqual([1, 1, 4, 0.5])
+
+    setParam(doc, dev, 1, 2000) // the knob moves: the centre goes with it
+    expect(take().find((c) => c[0] === 'engine_lane_lfo')![6]).toBeCloseTo(2 / 3, 5)
+    bridge.live(dev, 1, 20000) // a drag in progress
+    expect(take().find((c) => c[0] === 'engine_lane_lfo')![6]).toBeCloseTo(1, 5)
+
+    setLaneState(doc, lane, 'keyframes')
+    expect(take().find((c) => c[0] === 'engine_lane_lfo')!.slice(2, 3)).toEqual([0])
+    setParam(doc, dev, 1, 300)
+    expect(take().map((c) => c[0])).not.toContain('engine_lane_lfo')
+    bridge.destroy()
   })
 
   it('looper lanes use the looper param codes; deleting the looper takes its lanes along', () => {

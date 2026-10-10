@@ -331,6 +331,16 @@ pub unsafe extern "C" fn engine_lane_upsert(
     (*e).lane_upsert(h, kind, target, param, enabled != 0, min, max, scale);
 }
 
+/// Put a lane in LFO mode (`lfo` non-zero) or back to keyframes: `center ± depth`, both normalised
+/// (0..1), swung by `shape` (0 sine, 1 triangle, 2 soft square) at `rate_hz`. See `engine.rs`.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_lane_lfo(e: *mut Engine, h: u32, lfo: u32, shape: u32, rate_hz: f64, depth: f64, center: f64) {
+    (*e).lane_lfo(h, lfo != 0, shape, rate_hz, depth, center);
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn engine_lane_remove(e: *mut Engine, h: u32) {
     (*e).lane_remove(h);

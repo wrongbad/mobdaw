@@ -3,8 +3,13 @@
 //   click empty space   add a point (and drag it)         shift-drag    draw freehand
 //   drag a point        move it                           right-click a point   delete it / make its segment a step or a line
 // Points are stored normalised (0..1 of the param's own scale), so the line drawn is the curve that plays.
+// A lane's header menu picks Disabled / Keyframes / LFO. In LFO mode the keyframes are kept but not read, the
+// header shows the wave's shape, rate and depth, and the surface draws the wave around the param's own value.
 import * as Y from 'yjs'
-import { addPoint, deleteLane, deletePoint, pointsMap, setLaneEnabled, updatePoint, type AutoCurve, type Lane, type ParamDef, type Point } from '@mobdaw/shared'
+import {
+  LFO_DEFAULTS, LFO_RATE_MAX, LFO_RATE_MIN, LFO_SHAPES, addPoint, deleteLane, deletePoint, laneState, lfoWave, pointsMap, setLaneState, updateLaneLfo, updatePoint,
+  type AutoCurve, type Lane, type LaneState, type ParamDef, type Point,
+} from '@mobdaw/shared'
 import { h } from '../dom'
 import { clamp, dragPointer } from './blocks'
 import { popover } from './popover'
@@ -29,6 +34,8 @@ export type AutoMenu = {
   /** 'none': no lane yet; 'on': a lane drives the param; 'off': a disabled lane. */
   state(): 'none' | 'on' | 'off'
   automate(): void
+  /** Automate it with an LFO (the lane starts in LFO mode). */
+  lfo(): void
   show(): void
   toggle(): void
   remove(): void
@@ -43,7 +50,7 @@ export function automateMenu(label: HTMLElement, m: AutoMenu, readOnly: boolean)
     e.stopPropagation() // not the card's own menu, nor the <label> focusing its control
     const s = m.state()
     const items: [string, () => void][] =
-      s === 'none' ? (readOnly ? [] : [['Automate', m.automate]])
+      s === 'none' ? (readOnly ? [] : [['Automate', m.automate], ['Modulate with LFO', m.lfo]])
         : [['Show automation', m.show], ...(readOnly ? [] : [[s === 'on' ? 'Disable automation' : 'Enable automation', m.toggle], ['Delete automation', m.remove]] as [string, () => void][])]
     if (items.length) popover(label, items, [e.clientX, e.clientY])
   }
@@ -60,6 +67,8 @@ export type RowDeps = {
   /** Timeline sample <-> surface pixel, at the current zoom. */
   x(smp: number): number
   fromX(px: number): number
+  /** Samples per second (an LFO's phase is `position / rate * hz`). */
+  rate: number
 }
 export type RowView = {
   def: ParamDef
@@ -83,10 +92,32 @@ export function autoRow(deps: RowDeps) {
 
   const name = h('span', { className: 'name' })
   const out = h('span', { className: 'dim out' })
-  const on = h('button', { className: 'auto-on', title: 'automation drives the parameter', onclick: () => setLaneEnabled(doc, lane.id, !lane.enabled) }, 'auto')
+  const modes: [LaneState, string][] = [['off', 'Disabled'], ['keyframes', 'Keyframes'], ['lfo', 'LFO']]
+  const mode = h('select', { className: 'auto-mode', title: 'what drives the parameter', onchange: () => setLaneState(doc, lane.id, mode.value as LaneState) },
+    ...modes.map(([v, t]) => h('option', { value: v }, t)))
   const del = h('button', { className: 'x', title: 'delete automation', onclick: () => deleteLane(doc, lane.id) }, '×')
-  on.disabled = readOnly
-  const head = h('div', { className: 'head auto-head' }, name, h('div', { className: 'ctl' }, on, out), readOnly ? null : del)
+  mode.disabled = readOnly
+
+  // LFO controls, shown in LFO mode. The slider positions are 0..1; rate is logarithmic.
+  const rateToPos = (hz: number) => Math.log(hz / LFO_RATE_MIN) / Math.log(LFO_RATE_MAX / LFO_RATE_MIN)
+  const posToRate = (t: number) => LFO_RATE_MIN * (LFO_RATE_MAX / LFO_RATE_MIN) ** t
+  const slider = (title: string, onInput: (t: number) => void) => {
+    const el = h('input', { type: 'range', min: '0', max: '1', step: 'any', title, disabled: readOnly })
+    el.addEventListener('pointerdown', () => deps.grab()) // one drag, one undo step
+    el.addEventListener('input', () => onInput(el.valueAsNumber))
+    return el
+  }
+  const shape = h('select', { className: 'auto-shape', title: 'wave shape', onchange: () => updateLaneLfo(doc, lane.id, { shape: Number(shape.value) }) },
+    ...LFO_SHAPES.map((t, i) => h('option', { value: String(i) }, t)))
+  shape.disabled = readOnly
+  const rate = slider('rate', (t) => updateLaneLfo(doc, lane.id, { rate: posToRate(t) }))
+  const depth = slider('depth', (t) => updateLaneLfo(doc, lane.id, { depth: t }))
+  const lfoBar = h('div', { className: 'ctl lfo-ctl', hidden: true }, shape, rate, depth)
+
+  const head = h('div', { className: 'head auto-head' },
+    h('div', { className: 'auto-title' }, name, readOnly ? null : del),
+    h('div', { className: 'ctl' }, mode, out),
+    lfoBar)
   const surface = svg('svg', { class: 'auto-svg', height: AUTO_H })
   const body = h('div', { className: 'lane-body auto-body' })
   body.append(surface)
@@ -104,7 +135,7 @@ export function autoRow(deps: RowDeps) {
 
   /** Press on empty space: add a point there and carry on dragging it. Shift: draw a line freehand. */
   surface.addEventListener('pointerdown', (e) => {
-    if (readOnly || e.button !== 0 || e.target !== surface) return
+    if (readOnly || e.button !== 0 || e.target !== surface || laneState(lane) === 'lfo') return
     e.preventDefault()
     deps.grab()
     const first = at(e)
@@ -158,10 +189,22 @@ export function autoRow(deps: RowDeps) {
     view = v
     name.textContent = v.label
     name.title = v.label
-    on.classList.toggle('on', l.enabled)
-    el.classList.toggle('off', !l.enabled)
+    const state = laneState(l)
+    const lfo = state === 'lfo'
+    mode.value = state
+    el.classList.toggle('off', state === 'off')
+    el.classList.toggle('lfo', lfo)
+    lfoBar.hidden = !lfo
+    const d = { shape: l.shape ?? LFO_DEFAULTS.shape, rate: l.rate ?? LFO_DEFAULTS.rate, depth: l.depth ?? LFO_DEFAULTS.depth }
+    if (shape.value !== String(d.shape)) shape.value = String(d.shape)
+    if (document.activeElement !== rate) rate.value = String(rateToPos(d.rate))
+    if (document.activeElement !== depth) depth.value = String(d.depth)
+    rate.title = `rate: ${d.rate < 1 ? d.rate.toFixed(2) : d.rate.toFixed(1)} Hz`
+    depth.title = `depth: ±${Math.round(d.depth * 100)}% of the slider`
     el.style.setProperty('--c', v.color)
-    const next = `${v.width}|${l.enabled}|${v.color}|${v.def.min}|${v.def.max}|${v.def.scale}|${pts.length ? pts.map((p) => `${p.id},${p.pos},${p.value},${p.curve}`).join(';') : v.value}`
+    // the wave is drawn around the param's own value, the keyframes from the points: only what is drawn is in the signature
+    const drawn = lfo ? `lfo,${d.shape},${d.rate},${d.depth},${v.value},${deps.rate},${deps.x(deps.rate)}` : pts.length ? pts.map((p) => `${p.id},${p.pos},${p.value},${p.curve}`).join(';') : v.value
+    const next = `${v.width}|${state}|${v.color}|${v.def.min}|${v.def.max}|${v.def.scale}|${drawn}`
     if (next === sig) return
     sig = next
     surface.setAttribute('width', String(v.width))
@@ -175,7 +218,27 @@ export function autoRow(deps: RowDeps) {
     return clamp(Number.isFinite(t) ? t : 0, 0, 1)
   }
 
+  /** The wave: the param's own value (dashed) with the LFO swinging it by `depth`, sampled every few px. */
+  function drawLfo(): SVGElement[] {
+    const W = view.width
+    const center = norm(view.value)
+    const depth = lane.depth ?? LFO_DEFAULTS.depth
+    const hz = lane.rate ?? LFO_DEFAULTS.rate
+    const shp = lane.shape ?? LFO_DEFAULTS.shape
+    const cy = yOf(center)
+    let d = ''
+    for (let px = 0; px <= W + 2; px += 2) {
+      const v = clamp(center + depth * lfoWave((Math.max(0, deps.fromX(px)) / deps.rate) * hz, shp), 0, 1)
+      d += `${px ? ' L' : 'M'}${px} ${yOf(v).toFixed(1)}`
+    }
+    return [
+      svg('line', { x1: 0, x2: W, y1: cy, y2: cy, class: 'auto-idle' }),
+      svg('path', { d, class: 'auto-line' }),
+    ]
+  }
+
   function draw(): SVGElement[] {
+    if (laneState(lane) === 'lfo') return drawLfo()
     const W = view.width
     if (!pts.length) { // nothing drawn yet: the static value, dashed
       const y = yOf(norm(view.value))

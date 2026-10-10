@@ -2,7 +2,7 @@
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import {
   DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, MASTER_TRACK, FINNWAVE, addAudioClip, addDevice, addLane, addMidiClip, addPad, addPoint, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
-  evalPoints, getLanes, getPoints, lanesMap, laneOf, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled,
+  evalLfo, evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
   deleteDevice, deleteLooper, addNextLooper, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
@@ -232,26 +232,28 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   }
 
   // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
-  const rowDeps = { doc, readOnly, grab: () => undo.stopCapturing(), x, fromX }
+  const rowDeps = { doc, readOnly, grab: () => undo.stopCapturing(), x, fromX, get rate() { return getSampleRate(doc) } }
 
   function autoMenu(label: HTMLElement, t: ParamTarget) {
     const lane = () => laneOf(doc, t)
     automateMenu(label, {
       state: () => { const l = lane(); return !l ? 'none' : l.enabled ? 'on' : 'off' },
       automate: () => automate(t),
+      lfo: () => automate(t, true),
       show: () => reveal(t.scope),
       toggle: () => { const l = lane(); if (l) setLaneEnabled(doc, l.id, !l.enabled) },
       remove: () => { const l = lane(); if (l) deleteLane(doc, l.id) },
     }, readOnly)
   }
 
-  /** Automate a param: a lane that starts flat at its current value, so nothing changes until a point is moved. */
-  function automate(t: ParamTarget) {
+  /** Automate a param: a lane that starts flat at its current value, so nothing changes until a point is moved (or, with `lfo`, one in LFO mode). */
+  function automate(t: ParamTarget, lfo = false) {
     const r = resolveTarget(doc, t)
     if (!r) return
     doc.transact(() => {
       const id = addLane(doc, t)
       if (!getPoints(doc).some((p) => p.laneId === id)) addPoint(doc, id, 0, paramToPos(r.def, r.value), r.def.options ? 'hold' : 'linear')
+      if (lfo) setLaneState(doc, id, 'lfo')
     })
     reveal(t.scope)
   }
@@ -335,10 +337,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     for (const l of autoLanes) {
       const r = resolveTarget(doc, l)
       if (!r) continue
-      const t = evalPoints(autoPoints.get(l.id) ?? [], at)
+      const lfo = laneState(l) === 'lfo'
+      // an LFO lane doesn't drive the control (its slider is the wave's centre); its header shows where the wave is
+      const t = lfo ? evalLfo(l, paramToPos(r.def, r.value), at, getSampleRate(doc)) : evalPoints(autoPoints.get(l.id) ?? [], at)
       const v = t == null ? null : paramToValue(r.def, t)
       readouts.set(l.id, !l.enabled ? 'off' : v == null ? fmtAuto(r.def, r.value) : fmtAuto(r.def, v))
-      ;(autoInfos.get(l.owner) ?? autoInfos.set(l.owner, new Map()).get(l.owner)!).set(l.param, { on: l.enabled && v != null, value: v })
+      ;(autoInfos.get(l.owner) ?? autoInfos.set(l.owner, new Map()).get(l.owner)!).set(l.param, { on: l.enabled && !lfo && v != null, value: lfo ? null : v })
     }
   }
   function showReadouts() {

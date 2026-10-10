@@ -3,8 +3,8 @@
 // by id: present and parented -> upsert, otherwise -> remove. Command order never matters.
 import * as Y from 'yjs'
 import {
-  LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
-  looperParamDef, loopersMap, notesMap, padsMap, pointsMap, resolveTarget, samplesMap, tracksMap,
+  LFO_DEFAULTS, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
+  looperParamDef, loopersMap, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, tracksMap,
   type AudioClip, type Clip, type Device, type Lane, type Looper, type MidiClip, type Pad, type Note, type ParamTarget, type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
 
@@ -79,6 +79,8 @@ export class Bridge {
   }
   /** What each lane in the engine automates, to give the param its static value back when the lane goes away. */
   private laneTargets = new Map<string, ParamTarget>()
+  /** Lanes whose engine copy is in LFO mode (so leaving it is sent once, and the centre follows the knob). */
+  private lfoLanes = new Set<string>()
   private next = 1 // never reused, shared by all kinds (unique per kind is all the contract needs)
   private requested = new Set<string>()
   private wanted = new Set<string>()
@@ -193,6 +195,7 @@ export class Bridge {
   live(deviceId: string, paramId: number, value: number) {
     const h = this.handles.device.get(deviceId)
     if (h != null) this.sink.call('engine_param_set', h, paramId, value)
+    this.followKnob(deviceId, String(paramId), value)
   }
   /** Replace the set of remote drag overrides; params whose override ended revert to the doc value. */
   setOverrides(drags: Drag[]) {
@@ -296,6 +299,7 @@ export class Bridge {
     if (kind === 'lane') {
       const t = this.laneTargets.get(id)
       this.laneTargets.delete(id)
+      this.lfoLanes.delete(id)
       if (t) this.restoreStatic(t) // the engine only replaced the value: hand the param its own back
     }
   }
@@ -324,8 +328,31 @@ export class Bridge {
       this.sink.call('engine_lane_upsert', this.handle('lane', l.id), 0, this.handle('device', l.owner), Number(l.param), +l.enabled, r.def.min, r.def.max, scale)
     }
     this.laneTargets.set(l.id, { scope: l.scope, kind: l.kind, owner: l.owner, param: l.param })
+    this.sendLfo(l)
     if (!l.enabled) this.restoreStatic(l)
     return true
+  }
+
+  /**
+   * An LFO lane swings around the param's own value, so the engine needs that value (as a position on the
+   * slider) with the wave: sent whenever the lane changes and whenever the knob does. Lanes that are not in
+   * LFO mode send nothing, except once on the way out of it.
+   */
+  private sendLfo(l: Lane, value?: number) {
+    const h = this.handles.lane.get(l.id)
+    const r = resolveTarget(this.doc, l)
+    if (h == null || !r) return
+    const lfo = l.enabled && l.mode === 'lfo'
+    if (lfo) this.lfoLanes.add(l.id)
+    else if (!this.lfoLanes.delete(l.id)) return
+    const v = value ?? this.overrides.get(key(l.owner, Number(l.param))) ?? r.value
+    this.sink.call('engine_lane_lfo', h, +lfo, l.shape ?? LFO_DEFAULTS.shape, l.rate ?? LFO_DEFAULTS.rate, l.depth ?? LFO_DEFAULTS.depth, paramToPos(r.def, v))
+  }
+
+  /** The static value of `owner`'s `param` moved: the LFO lanes around it follow. */
+  private followKnob(owner: string, param: string, value?: number) {
+    if (!this.lfoLanes.size) return
+    for (const l of getLanes(this.doc)) if (l.owner === owner && l.param === param && this.lfoLanes.has(l.id)) this.sendLfo(l, value)
   }
 
   private upsertPoint(p: Point): boolean {
@@ -364,6 +391,7 @@ export class Bridge {
     this.sink.call('engine_looper_upsert', h, this.handle('track', l.trackId), l.speed, l.start, l.length)
     this.sink.call('engine_looper_mix', h, l.gain ?? 1, +(l.muted ?? false))
     this.sink.call('engine_looper_tape', h, l.sat ?? 0, l.cutoff ?? LOOP_CUTOFF_MAX, l.warble ?? 0)
+    for (const k of ['speed', 'gain', 'sat', 'cutoff', 'warble']) this.followKnob(l.id, k)
     return true
   }
 
@@ -386,7 +414,10 @@ export class Bridge {
       this.sink.call('engine_device_upsert', h, d.trackId === MASTER_TRACK ? MASTER_HANDLE : this.handle('track', d.trackId), d.type, d.order, +d.bypass)
     }
     for (const [p, v] of Object.entries(d.params ?? {})) {
-      if (dirty.all || dirty.params.has(p)) this.sendParam(d.id, h, Number(p), v)
+      if (dirty.all || dirty.params.has(p)) {
+        this.sendParam(d.id, h, Number(p), v)
+        this.followKnob(d.id, p)
+      }
     }
     return true
   }

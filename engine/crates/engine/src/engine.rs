@@ -181,6 +181,18 @@ struct LanePoint {
     hold: bool,
 }
 
+/// A lane in LFO mode: `center ± depth` (normalised) swung by a wave that is a pure function of the
+/// timeline position, so seeking, looping and a bounce all read the same value in the same place.
+#[derive(Clone, Copy)]
+struct LaneLfo {
+    shape: u32,
+    /// `rate_hz / sample_rate`.
+    cycles_per_sample: f64,
+    depth: f64,
+    /// The param's static value as the host sees it (normalised), kept up to date as the knob moves.
+    center: f64,
+}
+
 /// One automated param. `points` is derived from the point entities (sorted by position).
 struct Lane {
     kind: u32,
@@ -190,6 +202,8 @@ struct Lane {
     min: f64,
     max: f64,
     scale: Scale,
+    /// Set while the lane is in LFO mode: the points are kept but not read.
+    lfo: Option<LaneLfo>,
     points: Vec<LanePoint>,
 }
 
@@ -197,6 +211,10 @@ impl Lane {
     /// The normalised value at `pos`: before the first point and after the last it holds that
     /// point's value; between two, the left one's curve decides. `None` without points.
     fn norm_at(&self, pos: i64) -> Option<f64> {
+        if let Some(l) = &self.lfo {
+            let w = dsp::lfo::wave(pos as f64 * l.cycles_per_sample, l.shape) as f64;
+            return Some((l.center + l.depth * w).clamp(0.0, 1.0));
+        }
         let i = self.points.partition_point(|p| p.pos <= pos);
         let a = self.points.get(i.saturating_sub(1))?;
         let Some(b) = self.points.get(i).filter(|_| i > 0 && !a.hold) else { return Some(a.value as f64) };
@@ -216,6 +234,9 @@ impl Lane {
 
     /// The first breakpoint after `pos` (`i64::MAX` if none): a control segment must not run past it.
     fn next_break(&self, pos: i64) -> i64 {
+        if self.lfo.is_some() {
+            return i64::MAX; // a wave has no corners: it is read at each segment start
+        }
         self.points.get(self.points.partition_point(|p| p.pos <= pos)).map_or(i64::MAX, |p| p.pos)
     }
 }
@@ -591,11 +612,27 @@ impl Engine {
         match self.lanes.get_mut(h) {
             Some(l) => (l.kind, l.target, l.param, l.enabled, l.min, l.max, l.scale) = (kind, target, param, enabled, min, max, scale),
             None => {
-                self.lanes.insert(h, Lane { kind, target, param, enabled, min, max, scale, points: Vec::new() });
+                self.lanes.insert(h, Lane { kind, target, param, enabled, min, max, scale, lfo: None, points: Vec::new() });
                 self.rebuild_lane_points(h);
             }
         }
         self.rebuild_routing();
+    }
+
+    /// Put lane `h` in LFO mode: its value is `center ± depth` (all normalised, 0..1) swung by `shape`
+    /// (`dsp::lfo`) at `rate_hz`, instead of read from its points. `center` is the param's static
+    /// value, which the host re-sends as the knob moves. `lfo: false` returns it to keyframes.
+    /// Does nothing for an unknown lane.
+    #[allow(clippy::too_many_arguments)]
+    pub fn lane_lfo(&mut self, h: u32, lfo: bool, shape: u32, rate_hz: f64, depth: f64, center: f64) {
+        let sr = self.sr;
+        let Some(l) = self.lanes.get_mut(h) else { return };
+        l.lfo = (lfo && rate_hz.is_finite() && depth.is_finite() && center.is_finite()).then(|| LaneLfo {
+            shape: shape.min(dsp::lfo::SHAPES - 1),
+            cycles_per_sample: rate_hz.clamp(0.0, 1000.0) / sr,
+            depth: depth.clamp(0.0, 1.0),
+            center: center.clamp(0.0, 1.0),
+        });
     }
 
     pub fn lane_remove(&mut self, h: u32) {

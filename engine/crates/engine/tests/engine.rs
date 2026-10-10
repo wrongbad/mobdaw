@@ -945,3 +945,44 @@ fn a_tremolo_device_modulates_a_clip_and_bypass_restores_it() {
     let back = rms(&render(&mut e, 12_000).0[4_000..]);
     assert!((back / clean - 1.0).abs() < 0.01, "bypassed: {back} vs {clean}");
 }
+
+/// A 1 s clip of 8 kHz through the low-pass (device 1 on track 1), its cutoff lane (20..20000 Hz, log) in LFO mode.
+fn lfo_filter_engine() -> Engine {
+    let n = 48_000;
+    let mut e = one_clip(&sine(8000.0, n), 0, n as i64, 0, 0.0, 0.0, 0);
+    e.device_upsert(1, 1, 1, 1.0, false);
+    e.lane_upsert(1, engine::LANE_DEVICE, 1, 1, true, 20.0, 20_000.0, LOG);
+    e.lane_lfo(1, true, 0, 2.0, 0.5, 0.5); // 2 Hz sine, 0.5 +- 0.5: closed at 18000, wide open at 6000
+    e
+}
+
+#[test]
+fn an_lfo_lane_swings_a_cutoff_around_its_center_and_keeps_its_keyframes() {
+    let mut e = lfo_filter_engine();
+    e.point_upsert(1, 1, 0, 0.0, true); // keyframes say "closed", but the lane is in LFO mode
+    e.play(0);
+    let (l, _) = render(&mut e, 48_000);
+    let open = rms(&l[5_000..7_000]);
+    let closed = rms(&l[17_000..19_000]);
+    println!("lfo lane: open {open:.3}, closed {closed:.5}");
+    assert!(open > 0.5, "8 kHz through a ~20 kHz low-pass: {open}");
+    assert!(closed < 0.05, "8 kHz through a ~20 Hz low-pass: {closed}");
+    // back to keyframes: the point was kept, and it reads closed
+    e.lane_lfo(1, false, 0, 2.0, 0.5, 0.5);
+    e.seek(0);
+    let (l, _) = render(&mut e, 12_000);
+    assert!(rms(&l[5_000..7_000]) < 0.01, "keyframes again");
+}
+
+#[test]
+fn an_lfo_lane_reads_the_same_wave_wherever_you_start() {
+    let mut a = lfo_filter_engine();
+    a.play(0);
+    let (la, _) = render(&mut a, 8_000);
+    let mut b = lfo_filter_engine();
+    b.seek(4_000); // a seek lands in the middle of a cycle
+    b.play(4_000);
+    let (lb, _) = render(&mut b, 4_000);
+    let (x, y) = (rms(&la[6_000..7_500]), rms(&lb[2_000..3_500]));
+    assert!((x / y - 1.0).abs() < 0.05, "same place, same wave: {x} vs {y}");
+}

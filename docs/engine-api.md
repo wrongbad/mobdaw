@@ -194,6 +194,7 @@ engine_param_set(e, device: u32, param: u32, value: f32)   // smoothed per engin
 ### Automation
 ```
 engine_lane_upsert(e, h, kind: u32, target: u32, param: u32, enabled: u32, min: f64, max: f64, scale: u32)
+engine_lane_lfo(e, h, lfo: u32, shape: u32, rate_hz: f64, depth: f64, center: f64)
 engine_lane_remove(e, h)
 engine_point_upsert(e, h, lane: u32, pos: f64, value: f32, hold: u32)
 engine_point_remove(e, h)
@@ -209,6 +210,14 @@ before their lane and in any order. A disabled lane is kept but inert.
   are split at breakpoints, so a corner is sample-exact. The value is applied at once (`set_param_auto`): no glide.
 - **Loopers:** once per block. The level ramps linearly to the lane's value at the block's end (mute still
   wins); speed, warble, saturation and filter take the value at the block's start and keep their own glides.
+- **LFO mode** (`engine_lane_lfo`, `lfo` non-zero): the lane stops reading its points (they are kept) and reads
+  `center ± depth · wave`, clamped to 0..1 and mapped through the lane's `min`/`max`/`scale` like a point's
+  value. `center` and `depth` are normalised; `center` is the param's static value as a position on its slider,
+  which the host re-sends whenever the knob moves. `shape` is 0 sine, 1 triangle, 2 soft square (`dsp::lfo`),
+  all starting at zero going up. The phase is `position / sample_rate · rate_hz`, a pure function of the
+  timeline position, so a seek, a loop or a bounce reads the same wave in the same place. There are no
+  breakpoints, so a device lane is read at each control segment start (about 1.5 kHz at 48 kHz: fine for
+  sweeps, not an audio-rate modulator). `lfo: 0` returns the lane to its points. Unknown lanes are ignored.
 - A lane replaces the value, it doesn't remember it: when one is disabled or removed the host re-sends the
   param's static value (the bridge does).
 
