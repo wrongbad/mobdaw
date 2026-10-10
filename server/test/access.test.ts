@@ -136,7 +136,7 @@ describe('audit', () => {
 
       await audit(ctx, storage, true)
       const after = await audit(ctx, storage)
-      expect(after).toEqual({ leaked: [], broken: [], unreferenced: [], drift: [] })
+      expect(after).toEqual({ leaked: [], broken: [], orphanLinks: [], drift: [] })
       expect(await storage.size(leak)).toBeNull()
       expect(await storage.size(hash)).toBe(30) // referenced objects untouched
     } finally {
@@ -178,10 +178,13 @@ describe('migration', () => {
       // Google-era identities are kept as usernames, with no password until an admin sets one.
       expect(db.prepare('SELECT * FROM users').all()).toMatchObject([{ username: 'o', password_hash: null }])
       expect(db.prepare('SELECT owner_username FROM projects').all()).toMatchObject([{ owner_username: 'o' }])
-      expect(db.prepare('SELECT hash, state FROM samples ORDER BY hash').all()).toMatchObject([
-        { state: 'complete' }, { state: 'complete' }, { state: 'pending' },
+      // Uploads belong to the old uploader; library links name the upload they point at.
+      expect(db.prepare('SELECT owner, hash, state FROM uploads ORDER BY hash').all()).toMatchObject([
+        { owner: 'o', state: 'complete' }, { owner: 'o', state: 'complete' }, { owner: 'o', state: 'pending' },
       ])
-      expect(db.prepare('SELECT hash FROM project_samples WHERE project_id = ? ORDER BY hash').all('p1')).toMatchObject([{ hash: h1 }, { hash: h2 }])
+      expect(db.prepare('SELECT hash, owner FROM project_samples WHERE project_id = ? ORDER BY hash').all('p1')).toMatchObject([
+        { hash: h1, owner: 'o' }, { hash: h2, owner: 'o' },
+      ])
     } finally {
       db.close()
     }

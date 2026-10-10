@@ -6,6 +6,7 @@ export type ApiError = { error: string }
 // bad_username(400) bad_password(400) username_taken(409) invite_invalid(400) invite_used(410) invite_expired(410)
 // not_admitted(400, unknown user) not_found(404) too_large(413)
 // hash_mismatch(400) bad_request(400) sample_deleting(409) owner_cannot_leave(400) upload_expired(410)
+// proof_required(409, re-request the upload URL and upload again)
 
 export type LoginRequest = { username: string; password: string }
 export type RegisterRequest = { username: string; password: string; invite: string }
@@ -39,9 +40,22 @@ export type CreateProjectRequest = { name: string }
 export type AddMemberRequest = { username: string; role?: 'editor' | 'viewer' }
 export type RenameProjectRequest = { name: string }
 export type CopyProjectRequest = { name?: string }
-export type LibrarySample = { hash: string; size: number; mime: string; addedBy: string; addedAt: number }
+/** An audio file in a project's library. `owner` is the user who uploaded it (and can delete it). */
+export type LibrarySample = { hash: string; size: number; mime: string; owner: string; addedAt: number }
 
-export type UploadUrlRequest = { hash: string; size: number; mime: string }
+/** One of the caller's own uploads, with the projects that use it. */
+export type UploadInfo = {
+  hash: string
+  name: string
+  size: number
+  mime: string
+  createdAt: number
+  projects: { id: string; name: string }[]
+  /** Projects using it that the caller can no longer see (e.g. after leaving). */
+  otherProjects: number
+}
+
+export type UploadUrlRequest = { hash: string; size: number; mime: string; name?: string }
 export type UploadUrlResponse =
   | { exists: true }
   | { exists: false; url: string; method: 'PUT'; headers: Record<string, string> }

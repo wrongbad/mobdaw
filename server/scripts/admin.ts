@@ -71,27 +71,27 @@ if (cmd === 'create-invite') {
     for (const p of projects) {
       const members = q<{ username: string; role: string }>("SELECT username, role FROM project_members WHERE project_id = ? AND role != 'owner' ORDER BY username", p.id)
       console.log(`    ${p.name} [${p.id}]  members: ${members.map((m) => `${m.username} (${m.role})`).join(', ') || 'none'}`)
-      const lib = q<{ hash: string; size: number; uploaded_by: string }>(
-        'SELECT s.hash, s.size, s.uploaded_by FROM project_samples ps JOIN samples s ON s.hash = ps.hash WHERE ps.project_id = ? ORDER BY ps.added_at', p.id)
-      for (const s of lib) console.log(`      ${s.hash.slice(0, 8)}  ${kb(s.size)}  by ${s.uploaded_by}`)
+      const lib = q<{ hash: string; size: number; owner: string }>(
+        'SELECT u.hash, u.size, u.owner FROM project_samples ps JOIN uploads u ON u.hash = ps.hash AND u.owner = ps.owner WHERE ps.project_id = ? ORDER BY ps.added_at', p.id)
+      for (const s of lib) console.log(`      ${s.hash.slice(0, 8)}  ${kb(s.size)}  owned by ${s.owner}`)
     }
   }
-  const [t] = q<{ users: number; projects: number; samples: number; bytes: number }>(
+  const [t] = q<{ users: number; projects: number; uploads: number; bytes: number }>(
     `SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM projects) AS projects,
-            (SELECT COUNT(*) FROM samples) AS samples, (SELECT COALESCE(SUM(size), 0) FROM samples) AS bytes`)
-  console.log(`totals: ${t.users} users, ${t.projects} projects, ${t.samples} samples, ${kb(t.bytes)} stored`)
+            (SELECT COUNT(*) FROM uploads) AS uploads, (SELECT COALESCE(SUM(size), 0) FROM uploads) AS bytes`)
+  console.log(`totals: ${t.users} users, ${t.projects} projects, ${t.uploads} uploads, ${kb(t.bytes)} owned`)
 } else if (cmd === 'audit') {
   const fix = args.includes('--fix')
   const storage = createStorage(config, () => undefined)
   const r = await audit(ctx, storage, fix)
   const show = (label: string, items: string[]) => items.length && console.log(`${label}:\n${items.map((i) => `  ${i}`).join('\n')}`)
-  show('leaked objects (no samples row)', r.leaked)
-  show('broken (complete row, no object)', r.broken)
-  show('unreferenced (complete, no project links)', r.unreferenced)
+  show('leaked objects (no upload row)', r.leaked)
+  show('broken (complete upload, no object)', r.broken)
+  show('orphan library links (project:hash:owner, upload not complete)', r.orphanLinks)
   show('bytes_used drift', r.drift.map((d) => `${d.username}: recorded ${d.recorded}, expected ${d.expected}`))
   if (isClean(r)) console.log('audit: clean')
-  else if (fix) console.log('fixed: leaked objects deleted, bytes_used recomputed (broken/unreferenced need a human)')
-  // --fix repairs leaks and drift; only broken/unreferenced findings remain a failure.
+  else if (fix) console.log('fixed: leaked objects deleted, bytes_used recomputed (broken/orphan links need a human)')
+  // --fix repairs leaks and drift; only broken/orphan-link findings remain a failure.
   process.exit(isClean(fix ? { ...r, leaked: [], drift: [] } : r) ? 0 : 1)
 } else {
   console.error('usage: npm run admin -- create-invite [--days N] | list-invites | create-user <username> [--admin] | passwd <username> | make-admin <username> | tree | audit [--fix]')

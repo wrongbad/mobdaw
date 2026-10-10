@@ -51,6 +51,25 @@ const migrations: (string | ((db: Db) => void))[] = [
    ALTER TABLE project_members RENAME COLUMN email TO username;`,
   // Account role: 'dev' marks the passwordless account used by DEV_NO_AUTH (only honoured while that mode is on).
   `ALTER TABLE users ADD COLUMN account_role TEXT NOT NULL DEFAULT 'user' CHECK(account_role IN ('user','dev'));`,
+  // Per-owner uploads (docs/data-policy.md): every user owns their own upload of a file, even when the
+  // stored bytes are shared. `samples` (one row per hash, first uploader charged) becomes `uploads`
+  // (one row per owner+hash). Library links name the upload they point at. `proof` marks an upload
+  // that must be verified through its private proofs/ object (the bytes already exist for someone else).
+  `CREATE TABLE uploads(
+     owner TEXT NOT NULL, hash TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+     size INTEGER NOT NULL, mime TEXT NOT NULL,
+     state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','complete','deleting')),
+     proof INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+     PRIMARY KEY(owner, hash));
+   INSERT INTO uploads(owner, hash, size, mime, state, created_at) SELECT uploaded_by, hash, size, mime, state, created_at FROM samples;
+   CREATE INDEX uploads_hash ON uploads(hash);
+   CREATE TABLE project_samples_new(project_id TEXT NOT NULL, hash TEXT NOT NULL, owner TEXT NOT NULL, added_at INTEGER NOT NULL, PRIMARY KEY(project_id, hash, owner));
+   INSERT INTO project_samples_new SELECT ps.project_id, ps.hash, s.uploaded_by, ps.added_at FROM project_samples ps JOIN samples s ON s.hash = ps.hash;
+   DROP TABLE project_samples;
+   ALTER TABLE project_samples_new RENAME TO project_samples;
+   CREATE INDEX project_samples_hash ON project_samples(hash);
+   CREATE INDEX project_samples_owner ON project_samples(owner, hash);
+   DROP TABLE samples;`,
 ]
 
 export function openDb(path: string): Db {

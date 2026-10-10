@@ -25,7 +25,7 @@ async function upload(c: Client, project: string, d: Buffer, base = t.base) {
   }
   return sha(d)
 }
-const state = (hash: string) => (db.prepare('SELECT state FROM samples WHERE hash = ?').get(hash) as { state: string } | undefined)?.state
+const state = (hash: string) => (db.prepare('SELECT state FROM uploads WHERE hash = ?').get(hash) as { state: string } | undefined)?.state
 const used = async (c: Client) => (await c.get('/api/me')).body.bytesUsed as number
 
 beforeAll(async () => {
@@ -68,7 +68,7 @@ describe('samples (local driver)', () => {
     expect(Number(new URL(t.base + url).searchParams.get('exp')) - Date.now()).toBeLessThanOrEqual(15 * 60 * 1000)
 
     expect((await admin.post(`${P(pA)}/upload-url`, { hash, size: 600, mime: 'audio/wav' })).body).toEqual({ exists: true })
-    expect((await admin.get(P(pA))).body).toMatchObject([{ hash, size: 600, mime: 'audio/wav', addedBy: ADMIN }])
+    expect((await admin.get(P(pA))).body).toMatchObject([{ hash, size: 600, mime: 'audio/wav', owner: ADMIN }])
   })
 
   it('storage urls are signature-checked', async () => {
@@ -148,7 +148,7 @@ describe('access policy', () => {
     const A = await mk(admin), B = await mk(bob)
     const d = Buffer.alloc(13, 23)
     const h = await upload(admin, A, d)
-    const adminUsed = await used(admin)
+    const adminUsed = await used(admin), bobUsed = await used(bob)
     const up = await bob.post(`${P(B)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' })
     expect(up.body.exists).toBe(false)
     expect(up.body.url).toBeTruthy()
@@ -156,15 +156,15 @@ describe('access policy', () => {
     expect((await put(up.body.url, d)).status).toBe(200)
     expect((await bob.post(`${P(B)}/${h}/complete`)).body).toEqual({ ok: true })
     expect((await bob.get(`${P(B)}/${h}/url`)).status).toBe(200)
-    expect(await used(bob)).toBe(0)
-    expect(await used(admin)).toBe(adminUsed)
+    expect(await used(bob)).toBe(bobUsed + 13) // bob owns his own upload, so he is charged for it
+    expect(await used(admin)).toBe(adminUsed) // and admin is not charged twice
   })
 
   it('proof of possession: skipping the PUT, wrong bytes, and reusing another user\'s proof all fail', async () => {
     const A = await mk(admin), B = await mk(bob), C = await mk(alice)
     const d = Buffer.alloc(15, 25)
     const h = await upload(admin, A, d)
-    const adminUsed = await used(admin)
+    const adminUsed = await used(admin), bobUsed = await used(bob)
     const proofFile = (url: string) => `${t.config.storageDir}/proofs/${h}.${new URL(t.base + url).searchParams.get('proof')}`
 
     // no PUT: refused, no link, and the original object does not count as proof
@@ -195,50 +195,80 @@ describe('access policy', () => {
     expect((await bob.post(`${P(B)}/${h}/complete`)).body).toEqual({ ok: true })
     expect(existsSync(proofFile(skip.body.url))).toBe(false)
     expect((await bob.get(`${P(B)}/${h}/url`)).status).toBe(200)
-    expect(await used(bob)).toBe(0)
+    expect(await used(bob)).toBe(bobUsed + 15)
     expect(await used(admin)).toBe(adminUsed)
     expect(await storage.size(h)).toBe(15) // original untouched
   })
 
-  it('within-access dedupe links without uploading', async () => {
+  it('within-access dedupe links without uploading, and each user owns and is charged for their own upload', async () => {
     const A = await mk(admin), B = await mk(admin)
     const d = Buffer.alloc(14, 24)
     const h = await upload(admin, A, d)
     expect((await admin.post(`${P(B)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' })).body).toEqual({ exists: true })
     expect((await admin.get(P(B))).body.map((s: any) => s.hash)).toEqual([h])
     expect((await admin.get(`${P(B)}/${h}/url`)).status).toBe(200)
+
+    // alice can read it through A, so adding it to her own project needs no upload, but she owns a copy
+    await share(admin, A, 'alice')
+    const C = await mk(alice)
+    const before = await used(alice)
+    expect((await alice.post(`${P(C)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' })).body).toEqual({ exists: true })
+    expect(await used(alice)).toBe(before + 14)
+    expect((await alice.get(P(C))).body).toMatchObject([{ hash: h, owner: 'alice' }])
+    expect(db.prepare('SELECT owner FROM uploads WHERE hash = ? ORDER BY owner').all(h).map((r: any) => r.owner)).toEqual(['admin', 'alice'])
+  })
+
+  it('quota is checked for deduped uploads too', async () => {
+    const carol = await admit(t.base, admin, 'carol'), dave = await admit(t.base, admin, 'dave')
+    const A = await mk(carol)
+    const d = Buffer.alloc(900, 41)
+    const h = await upload(carol, A, d)
+    await upload(dave, await mk(dave), Buffer.alloc(700, 42))
+    await share(carol, A, 'dave')
+    const B = await mk(dave)
+    const r = await dave.post(`${P(B)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' }) // 700 + 900 > 1500
+    expect(r.status).toBe(403)
+    expect(r.body.error).toBe('quota_exceeded')
   })
 })
 
-describe('delete and refcount', () => {
-  it('purges unshared samples, keeps shared ones, refunds, and tombstones block re-upload', async () => {
+describe('project delete and upload ownership', () => {
+  it('deleting a project keeps every upload; deleting an upload purges it and refunds', async () => {
     const A = await mk(admin), B = await mk(admin)
     await share(admin, A, 'bob')
     const dx = Buffer.alloc(31, 31), dy = Buffer.alloc(32, 32)
     const X = await upload(admin, A, dx)
     await admin.post(`${P(B)}/upload-url`, { hash: X, size: dx.length, mime: 'audio/wav' }) // links X into B
+    const bobBefore = await used(bob)
     const Y = await upload(bob, A, dy)
-    expect(await used(bob)).toBe(32)
+    expect(await used(bob)).toBe(bobBefore + 32)
     const storage = createStorage(t.config, () => undefined)
 
     expect((await alice.del(`/api/projects/${A}`)).status).toBe(404)
     expect((await bob.del(`/api/projects/${A}`)).status).toBe(403) // editor can't delete
     expect((await admin.del(`/api/projects/${A}`)).body).toEqual({ ok: true })
     expect((await admin.get(`/api/projects/${A}`)).status).toBe(404)
-    await until(() => state(Y) === undefined)
 
-    expect(await storage.size(Y)).toBeNull()
-    expect(await used(bob)).toBe(0) // refunded
+    // The project is gone but nobody's audio is: bob still owns Y and is still charged for it.
+    expect(state(Y)).toBe('complete')
+    expect(await storage.size(Y)).toBe(32)
+    expect(await used(bob)).toBe(bobBefore + 32)
+    expect((await bob.get('/api/uploads')).body.find((u: any) => u.hash === Y)).toMatchObject({ hash: Y, projects: [], otherProjects: 0 })
+    expect((await bob.get(`/api/uploads/${Y}/url`)).status).toBe(200)
     expect(state(X)).toBe('complete')
-    expect(await storage.size(X)).toBe(31)
     expect((await admin.get(`${P(B)}/${X}/url`)).status).toBe(200)
+
+    expect((await bob.del(`/api/uploads/${Y}`)).body).toEqual({ ok: true })
+    await until(() => state(Y) === undefined)
+    expect(await storage.size(Y)).toBeNull()
+    expect(await used(bob)).toBe(bobBefore) // refunded
   })
 
-  it('upload-url for a deleting sample returns 409', async () => {
+  it('upload-url for a deleting upload returns 409', async () => {
     const A = await mk(admin)
     const d = Buffer.alloc(33, 33)
     const h = await upload(admin, A, d)
-    db.prepare("UPDATE samples SET state = 'deleting' WHERE hash = ?").run(h)
+    db.prepare("UPDATE uploads SET state = 'deleting' WHERE hash = ?").run(h)
     const r = await admin.post(`${P(A)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' })
     expect(r.status).toBe(409)
     expect(r.body.error).toBe('sample_deleting')
@@ -254,8 +284,8 @@ describe('sweepSamples', () => {
   let storage: Storage
   let P1: string
   const up = (d: Buffer) => a.post(`${P(P1)}/upload-url`, { hash: sha(d), size: d.length, mime: 'audio/wav' })
-  const age = (d: Buffer, ms: number) => sdb.prepare('UPDATE samples SET created_at = created_at - ? WHERE hash = ?').run(ms, sha(d))
-  const row = (d: Buffer) => sdb.prepare('SELECT * FROM samples WHERE hash = ?').get(sha(d))
+  const age = (d: Buffer, ms: number) => sdb.prepare('UPDATE uploads SET created_at = created_at - ? WHERE hash = ?').run(ms, sha(d))
+  const row = (d: Buffer) => sdb.prepare('SELECT * FROM uploads WHERE hash = ?').get(sha(d))
   const d1 = Buffer.alloc(900, 1), d2 = Buffer.alloc(700, 2), d3 = Buffer.alloc(300, 3), d4 = Buffer.alloc(100, 4)
 
   beforeAll(async () => {
@@ -322,7 +352,7 @@ describe('sweepSamples', () => {
     const d = Buffer.alloc(40, 5)
     await upload(a, P1, d, s.base)
     const before = (await a.get('/api/me')).body.bytesUsed
-    sdb.prepare("UPDATE samples SET state = 'deleting' WHERE hash = ?").run(sha(d))
+    sdb.prepare("UPDATE uploads SET state = 'deleting' WHERE hash = ?").run(sha(d))
     const ctx = { config: s.config, db: sdb }
     const failing: Storage = { ...storage, delete: async () => { throw new Error('boom') } } as Storage
     const log = console.error

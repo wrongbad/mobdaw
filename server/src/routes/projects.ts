@@ -5,15 +5,13 @@ import { docName, type Member, type ProjectDetail, type ProjectSummary, type Rol
 import { isDevUser, memberRole, requireSignedIn, userExists, type Ctx, type Env } from '../auth.ts'
 import { kick, type Collab } from '../collab.ts'
 import { tx } from '../db.ts'
-import type { Storage } from '../storage/index.ts'
-import { sweepSamples } from './samples.ts'
 
 type ProjectRow = { id: string; name: string; owner_username: string; created_at: number; role: Role }
 const summary = (p: ProjectRow): ProjectSummary => ({
   id: p.id, name: p.name, ownerUsername: p.owner_username, createdAt: p.created_at, role: p.role,
 })
 
-export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
+export function projectRoutes(ctx: Ctx, collab: Collab) {
   const { db } = ctx
   const r = new Hono<Env>()
   r.use('*', requireSignedIn)
@@ -84,14 +82,10 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
       db.prepare('DELETE FROM project_members WHERE project_id = ?').run(id)
       db.prepare('DELETE FROM projects WHERE id = ?').run(id)
       db.prepare('DELETE FROM documents WHERE name = ?').run(docName(id))
+      // Only the library links go: uploads stay with their owners (and keep counting toward their quota).
       db.prepare('DELETE FROM project_samples WHERE project_id = ?').run(id)
-      // Tombstone samples nobody references any more; the sweep deletes the bytes and refunds.
-      db.prepare(
-        "UPDATE samples SET state = 'deleting' WHERE state = 'complete' AND hash NOT IN (SELECT hash FROM project_samples)",
-      ).run()
     })
     kick(collab, id)
-    void sweepSamples(ctx, storage).catch((e) => console.error('sweep failed', e))
     return c.json({ ok: true })
   })
 
@@ -151,8 +145,8 @@ export function projectRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
       db.prepare('INSERT INTO projects(id, name, owner_username, created_at) VALUES(?,?,?,?)').run(copy, given || `${src.name} (copy)`, me, Date.now())
       db.prepare("INSERT INTO project_members(project_id, username, role) VALUES(?,?,'owner')").run(copy, me)
       db.prepare(
-        `INSERT INTO project_samples(project_id, hash, added_by, added_at)
-         SELECT ?, hash, added_by, added_at FROM project_samples WHERE project_id = ?`,
+        `INSERT INTO project_samples(project_id, hash, owner, added_at)
+         SELECT ?, hash, owner, added_at FROM project_samples WHERE project_id = ?`,
       ).run(copy, id)
       if (state) db.prepare('INSERT INTO documents(name, data, updated_at) VALUES(?,?,?)').run(docName(copy), state, Date.now())
     })

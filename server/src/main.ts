@@ -12,7 +12,7 @@ export async function startServer(config: Config) {
   const db = openDb(config.dbPath)
   const ctx: Ctx = { config, db }
   const storage = createStorage(config, (hash) =>
-    (db.prepare('SELECT mime FROM samples WHERE hash = ?').get(hash) as { mime: string } | undefined)?.mime,
+    (db.prepare('SELECT mime FROM uploads WHERE hash = ?').get(hash) as { mime: string } | undefined)?.mime,
   )
   const collab = createCollab(ctx)
   // Hocuspocus owns the http.Server; replace its placeholder handler with the Hono app.
