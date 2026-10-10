@@ -32,7 +32,7 @@ export function start(fallback: string) {
     const path = location.hash.slice(1) || fallback
     for (const [re, h] of routes) {
       const m = re.exec(path)
-      if (m) return void (cleanup = h(m.slice(1).map(decodeURIComponent)))
+      if (m) return void (cleanup = h(m.slice(1).map((g) => (g === undefined ? g : decodeURIComponent(g)))))
     }
     go(fallback)
   }
