@@ -27,8 +27,9 @@ The API and the `/collab` WebSocket share one port (8787); Vite proxies both in 
 - `npm test` (Rust `dsp` tests, then server tests) / `npm run typecheck`
 - `npm run build:wasm` builds `engine/` to `client/src/audio/wasm/engine.wasm` (gitignored);
   `npm run test:dsp` runs the Rust tests alone. Dev playground: `#/engine-test` (not linked).
-- `npm run admin -- create-invite [--days N]`, `list-invites`, `create-user <username> [--admin]`, `passwd <username>`, `make-admin <username>`,
-  `set-plan <username> active|ended` (end or restore a subscription; see below), `purge-expired` (purge accounts past their
+- `npm run admin -- create-invite [--days N] [--months N]`, `list-invites`, `create-user <username> [--admin] [--months N]`, `gift <username> <months>`,
+  `passwd <username>`, `make-admin <username>`,
+  `set-plan <username> active|ended` (end or restore a subscription; see below), `purge-expired` (delete the cloud data of accounts past their
   retention window; a running server does this itself every 15 min),
   `tree` (users, owned projects with members/roles, libraries, totals),
   `audit [--fix]` (reconcile storage with the DB: leaked objects, broken uploads, orphan library links,
@@ -70,8 +71,10 @@ Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Ru
   Abandoned local proofs are swept after 1 hour.
 - Subscriptions: `users.plan_status` is `active` or `read_only`. When a subscription ends the account becomes read-only
   for 30 days (`retention_ends_at`): sign in, play, download and delete still work; creating projects, uploading, copying,
-  sharing and editing do not, and the projects it owns are frozen for their members. After 30 days the account is purged:
-  its projects (for every member) and uploads are deleted. Resubscribing before then restores everything. There is no
+  sharing and editing do not, and the projects it owns are frozen for their members. After 30 days the account's cloud data
+  (its projects, for every member, and its uploads) is deleted and `data_purged_at` is set (`Me.planStatus` is then `lapsed`).
+  **The account itself is never deleted automatically**: adding time (`giftMonths`) makes it `active` again, with an empty
+  cloud (or exactly as it was, within the 30 days). Only `POST /api/me/delete {password}` deletes an account. There is no
   payment provider yet: `set-plan` (or `endSubscription`/`resumeSubscription` in `server/src/accounts.ts`) is the seam
   to call from a payment webhook.
 - Pre-paid time: `users.paid_through` (ms) is how long an account is paid for. Invites carry `gift_months` (default 1, set with

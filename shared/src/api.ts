@@ -18,8 +18,11 @@ export type Me = {
   isAdmin: boolean
   bytesUsed: number
   quotaBytes: number
-  /** 'read_only' once the subscription has ended: play, download and delete only, until `retentionEndsAt`. */
-  planStatus: 'active' | 'read_only'
+  /**
+   * 'read_only' once the subscription has ended: play, download and delete only, until `retentionEndsAt`, when the cloud
+   * data is deleted. 'lapsed' after that: the account remains, empty and read-only, until time is added.
+   */
+  planStatus: 'active' | 'read_only' | 'lapsed'
   retentionEndsAt: number | null
   /** Pre-paid time: the account stays active until this (ms). When it passes, the subscription ends. */
   paidThrough: number

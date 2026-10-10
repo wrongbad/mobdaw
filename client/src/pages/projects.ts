@@ -9,7 +9,7 @@ import { nav } from '../ui/nav'
 export function projectsPage(me: Me) {
   const list = h('ul', { className: 'list' })
   const err = h('p', { className: 'error' })
-  const name = h('input', { placeholder: 'new project', required: true, disabled: me.planStatus === 'read_only' })
+  const name = h('input', { placeholder: 'new project', required: true, disabled: me.planStatus !== 'active' })
 
   // Run an action, then refresh the list; show any error.
   const act = (fn: () => Promise<unknown>) =>
@@ -25,7 +25,7 @@ export function projectsPage(me: Me) {
     const li = h('li', {}, h('a', { href: `#/project/${p.id}` }, p.name))
     if (p.role !== 'owner') li.append(h('span', { className: 'dim' }, ` by ${p.ownerUsername} (${p.role})`))
     // Read-only: the account's own subscription ended, or the owner's did (the project is frozen until they resubscribe).
-    const accountRO = me.planStatus === 'read_only'
+    const accountRO = me.planStatus !== 'active'
     const locked = accountRO || p.frozen
     if (p.frozen && p.retentionEndsAt)
       li.append(h('span', { className: 'dim small' }, p.role === 'owner' ? 'read-only' : `read-only: ${p.ownerUsername}'s subscription ended; deleted ${dateOf(p.retentionEndsAt)}`))
@@ -79,7 +79,7 @@ export function projectsPage(me: Me) {
         e.preventDefault()
         api.createProject({ name: name.value }).then((p) => (location.hash = `#/project/${p.id}`), (e) => (err.textContent = describeError(e)))
       },
-    }, name, h('button', { disabled: me.planStatus === 'read_only' }, 'Create')),
+    }, name, h('button', { disabled: me.planStatus !== 'active' }, 'Create')),
     err, list))
   render().catch((e) => (err.textContent = describeError(e)))
 }

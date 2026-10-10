@@ -6,7 +6,7 @@ import { sweepSamples } from './routes/samples.ts'
 import type { Storage } from './storage/index.ts'
 import { tombstoneAllUploads } from './uploads.ts'
 
-/** How long an account stays read-only after its subscription ends, before its data is purged (docs/data-policy.md). */
+/** How long an account stays read-only after its subscription ends, before its cloud data is deleted (docs/data-policy.md). */
 export const RETENTION_MS = 30 * 24 * 3600 * 1000
 
 /** The subscription ended: the account turns read-only and the retention window starts. No-op if it already has. */
@@ -18,10 +18,10 @@ export function endSubscription(ctx: Ctx, collab: Collab | null, username: strin
   return changed
 }
 
-/** Resubscribed during the retention window: everything is exactly as it was. */
+/** More time was added: the account is active again. Within the retention window everything is as it was; after it, the cloud starts empty. */
 export function resumeSubscription(ctx: Ctx, collab: Collab | null, username: string): boolean {
   const changed = !!ctx.db
-    .prepare("UPDATE users SET plan_status = 'active', retention_ends_at = NULL WHERE username = ? AND plan_status = 'read_only'")
+    .prepare("UPDATE users SET plan_status = 'active', retention_ends_at = NULL, data_purged_at = NULL WHERE username = ? AND plan_status = 'read_only'")
     .run(username).changes
   if (changed && collab) refreshAccess(ctx, collab, username)
   return changed
@@ -55,25 +55,31 @@ export function endExpiredSubscriptions(ctx: Ctx, collab: Collab | null, now = D
   return due.filter((username) => endSubscription(ctx, collab, username, now))
 }
 
-/**
- * Permanently delete an account: the projects it owns (for every member), its memberships elsewhere, and
- * every upload it owns (the sweep then purges the bytes). Returns the ids of the deleted projects.
- */
-export function purgeAccount(ctx: Ctx, collab: Collab | null, username: string): string[] {
+/** Delete every project the user owns (for all its members) and tombstone every upload they own. Runs inside the caller's transaction. */
+function deleteCloudData(ctx: Ctx, username: string): string[] {
   const { db } = ctx
-  const user = getUser(db, username)
-  if (!user || user.account_role === 'dev') return []
   const projects = (db.prepare('SELECT id FROM projects WHERE owner_username = ?').all(username) as { id: string }[]).map((p) => p.id)
-  tx(db, () => {
-    for (const id of projects) {
-      db.prepare('DELETE FROM project_members WHERE project_id = ?').run(id)
-      db.prepare('DELETE FROM project_samples WHERE project_id = ?').run(id)
-      db.prepare('DELETE FROM documents WHERE name = ?').run(docName(id))
-      db.prepare('DELETE FROM projects WHERE id = ?').run(id)
-    }
-    db.prepare('DELETE FROM project_members WHERE username = ?').run(username)
-    tombstoneAllUploads(db, username)
-    db.prepare('DELETE FROM users WHERE username = ?').run(username)
+  for (const id of projects) {
+    db.prepare('DELETE FROM project_members WHERE project_id = ?').run(id)
+    db.prepare('DELETE FROM project_samples WHERE project_id = ?').run(id)
+    db.prepare('DELETE FROM documents WHERE name = ?').run(docName(id))
+    db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+  }
+  tombstoneAllUploads(db, username) // the sweep then deletes the bytes and refunds the quota
+  return projects
+}
+
+/**
+ * The retention window is over: delete the account's cloud audio and projects. The account itself stays (accounts are only
+ * ever deleted by their owner): it can sign in, and gets a clean start when more time is added. Returns the deleted project ids.
+ */
+export function purgeCloudData(ctx: Ctx, collab: Collab | null, username: string, now = Date.now()): string[] {
+  const user = getUser(ctx.db, username)
+  if (!user || user.account_role === 'dev') return []
+  const projects = tx(ctx.db, () => {
+    const deleted = deleteCloudData(ctx, username)
+    ctx.db.prepare('UPDATE users SET retention_ends_at = NULL, data_purged_at = ? WHERE username = ?').run(now, username)
+    return deleted
   })
   if (collab) {
     for (const id of projects) kick(collab, id)
@@ -82,12 +88,35 @@ export function purgeAccount(ctx: Ctx, collab: Collab | null, username: string):
   return projects
 }
 
-/** Purge every account whose retention window has ended, then sweep their bytes. Returns the purged usernames. */
-export async function purgeExpiredAccounts(ctx: Ctx, storage: Storage, collab: Collab | null, now = Date.now()) {
+/**
+ * The owner deletes their account, immediately: their cloud data, their memberships in other people's projects, and
+ * the account. Returns the ids of the deleted projects.
+ */
+export function deleteAccount(ctx: Ctx, collab: Collab | null, username: string): string[] {
+  const { db } = ctx
+  const user = getUser(db, username)
+  if (!user || user.account_role === 'dev') return []
+  const projects = tx(db, () => {
+    const deleted = deleteCloudData(ctx, username)
+    db.prepare('DELETE FROM project_members WHERE username = ?').run(username)
+    db.prepare('DELETE FROM users WHERE username = ?').run(username)
+    return deleted
+  })
+  if (collab) {
+    for (const id of projects) kick(collab, id)
+    kickUser(collab, username)
+  }
+  return projects
+}
+
+/** Delete the cloud data of every account whose retention window has ended, then sweep their bytes. Returns their usernames. */
+export async function purgeExpiredData(ctx: Ctx, storage: Storage, collab: Collab | null, now = Date.now()) {
   const due = (
-    ctx.db.prepare("SELECT username FROM users WHERE plan_status = 'read_only' AND retention_ends_at <= ?").all(now) as { username: string }[]
+    ctx.db
+      .prepare("SELECT username FROM users WHERE plan_status = 'read_only' AND retention_ends_at IS NOT NULL AND retention_ends_at <= ?")
+      .all(now) as { username: string }[]
   ).map((u) => u.username)
-  for (const username of due) purgeAccount(ctx, collab, username)
+  for (const username of due) purgeCloudData(ctx, collab, username, now)
   if (due.length) await sweepSamples(ctx, storage)
   return due
 }

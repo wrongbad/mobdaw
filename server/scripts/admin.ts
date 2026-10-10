@@ -1,5 +1,5 @@
 import { audit, isClean } from '../src/audit.ts'
-import { RETENTION_MS, endExpiredSubscriptions, endSubscription, giftMonths, purgeExpiredAccounts, resumeSubscription } from '../src/accounts.ts'
+import { RETENTION_MS, endExpiredSubscriptions, endSubscription, giftMonths, purgeExpiredData, resumeSubscription } from '../src/accounts.ts'
 import { createUser, getUser, userExists } from '../src/auth.ts'
 import { loadConfig } from '../src/config.ts'
 import { openDb } from '../src/db.ts'
@@ -78,7 +78,7 @@ if (cmd === 'create-invite') {
   if (!userExists(ctx, username)) throw new Error(`no such user: ${username}`)
   if (args[1] === 'ended') {
     if (!endSubscription(ctx, null, username)) throw new Error(`${username} is not an active account`)
-    console.log(`${username} is read-only; their data is purged in ${RETENTION_MS / 86400_000} days (a running server enforces it within a minute)`)
+    console.log(`${username} is read-only; their cloud data is deleted in ${RETENTION_MS / 86400_000} days unless time is added (a running server enforces read-only within a minute)`)
   } else if (args[1] === 'active') {
     console.log(resumeSubscription(ctx, null, username) ? `${username} is active again` : `${username} was already active`)
     const { paid_through } = getUser(ctx.db, username)!
@@ -87,14 +87,14 @@ if (cmd === 'create-invite') {
 } else if (cmd === 'purge-expired') {
   const ended = endExpiredSubscriptions(ctx, null)
   if (ended.length) console.log(`subscription ended (pre-paid time ran out): ${ended.join(', ')}`)
-  const purged = await purgeExpiredAccounts(ctx, createStorage(config, () => undefined), null)
-  console.log(purged.length ? `purged: ${purged.join(', ')}` : 'nothing to purge')
+  const purged = await purgeExpiredData(ctx, createStorage(config, () => undefined), null)
+  console.log(purged.length ? `cloud data deleted for: ${purged.join(', ')} (their accounts remain)` : 'nothing to purge')
 } else if (cmd === 'tree') {
   const q = <T>(sql: string, ...p: string[]) => ctx.db.prepare(sql).all(...p) as T[]
   const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`
   const users = q<{ username: string; is_admin: number; bytes_used: number; plan_status: string; retention_ends_at: number | null; paid_through: number }>('SELECT * FROM users ORDER BY username')
   console.log('users')
-  for (const u of users) console.log(`  ${u.username}${u.is_admin ? ' (admin)' : ''}${u.plan_status === 'read_only' ? ` (read-only, purged ${new Date(u.retention_ends_at!).toISOString().slice(0, 10)})` : ''}  ${kb(u.bytes_used)} used, paid through ${new Date(u.paid_through).toISOString().slice(0, 10)}`)
+  for (const u of users) console.log(`  ${u.username}${u.is_admin ? ' (admin)' : ''}${u.plan_status === 'read_only' ? (u.retention_ends_at ? ` (read-only, cloud data deleted ${new Date(u.retention_ends_at).toISOString().slice(0, 10)})` : ' (lapsed: cloud data deleted)') : ''}  ${kb(u.bytes_used)} used, paid through ${new Date(u.paid_through).toISOString().slice(0, 10)}`)
   console.log('projects')
   for (const u of users) {
     const projects = q<{ id: string; name: string }>('SELECT id, name FROM projects WHERE owner_username = ? ORDER BY created_at', u.username)

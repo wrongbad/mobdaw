@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { addTrack, getTracks } from '@mobdaw/shared'
-import { RETENTION_MS, endSubscription, purgeExpiredAccounts, resumeSubscription } from '../src/accounts.ts'
+import { RETENTION_MS, endSubscription, giftMonths, purgeExpiredData, resumeSubscription } from '../src/accounts.ts'
 import { enforceReadOnly } from '../src/collab.ts'
 import { ADMIN, admit, client, connect, login, pw, startTest, until, type Client } from './helpers.ts'
 
@@ -127,7 +127,7 @@ describe('read-only accounts (subscription ended)', () => {
 })
 
 describe('retention window and purge', () => {
-  it('purges an account 30 days after its subscription ends: its projects, memberships and uploads, nothing else', async () => {
+  it("30 days after the subscription ends the account's cloud data is deleted, but the account never is", async () => {
     const vic = await admit(t.base, admin, 'vic'), wes = await admit(t.base, admin, 'wes')
     const V = await mk(vic, 'Vic project'), W = await mk(wes, 'Wes project')
     await vic.post(`/api/projects/${V}/members`, { username: 'wes' })
@@ -139,13 +139,17 @@ describe('retention window and purge', () => {
 
     const at = Date.now()
     endSubscription(t.ctx, t.collab, 'vic', at)
-    expect(await purgeExpiredAccounts(t.ctx, t.storage, t.collab, at + RETENTION_MS - 1000)).toEqual([]) // not yet
-    expect(await purgeExpiredAccounts(t.ctx, t.storage, t.collab, at + RETENTION_MS)).toEqual(['vic'])
+    expect(await purgeExpiredData(t.ctx, t.storage, t.collab, at + RETENTION_MS - 1000)).toEqual([]) // not yet
+    expect(await purgeExpiredData(t.ctx, t.storage, t.collab, at + RETENTION_MS)).toEqual(['vic'])
+    expect(await purgeExpiredData(t.ctx, t.storage, t.collab, at + 2 * RETENTION_MS)).toEqual([]) // only once
 
-    expect(t.ctx.db.prepare("SELECT 1 FROM users WHERE username = 'vic'").get()).toBeUndefined()
-    expect((await client(t.base, vic.token).get('/api/me')).status).toBe(401) // the session is gone with the account
+    // the account is still there: same password, same session, nothing owed
+    expect(t.ctx.db.prepare("SELECT 1 FROM users WHERE username = 'vic'").get()).toBeTruthy()
+    expect((await login(t.base, 'vic')).token).toBeTruthy()
+    expect((await vic.get('/api/me')).body).toMatchObject({ planStatus: 'lapsed', retentionEndsAt: null, bytesUsed: 0 })
+    // ... but its cloud data is gone
+    expect((await vic.get('/api/uploads')).body).toEqual([])
     expect((await wes.get(`/api/projects/${V}`)).status).toBe(404) // vic's project is deleted for its members
-    expect((await wes.get(`/api/projects/${W}`)).body.members).toEqual([{ username: 'wes', role: 'owner' }])
     expect(await t.storage.size(mine)).toBeNull() // vic's audio is gone, even from wes's project
     expect((await wes.get(`${P(W)}/${mine}/url`)).status).toBe(404)
     expect((await wes.get(P(W))).body.map((s: any) => s.hash)).toEqual([wesOwn])
@@ -153,6 +157,15 @@ describe('retention window and purge', () => {
     expect(await t.storage.size(wesInVic)).toBe(22) // ... including audio he put in vic's deleted project
     expect((await wes.get('/api/me')).body.bytesUsed).toBe(wesBefore)
     expect(t.ctx.db.prepare("SELECT COUNT(*) AS n FROM uploads WHERE owner = 'vic'").get()).toEqual({ n: 0 })
+    // still a (read-only) member of the project someone else owns
+    expect((await wes.get(`/api/projects/${W}`)).body.members).toContainEqual({ username: 'vic', role: 'editor' })
+    expect((await vic.post('/api/projects', { name: 'x' })).body.error).toBe('account_read_only')
+
+    // coming back next year: add time and the account works again, starting empty
+    giftMonths(t.ctx, t.collab, 'vic', 1, at + 365 * 86_400_000)
+    expect((await vic.get('/api/me')).body).toMatchObject({ planStatus: 'active', retentionEndsAt: null })
+    expect((await vic.post('/api/projects', { name: 'Fresh start' })).status).toBe(201)
+    expect(await upload(vic, W, Buffer.alloc(23, 10))).toBeTruthy()
   })
 
   it('resubscribing before the window ends keeps the account', async () => {
@@ -161,11 +174,11 @@ describe('retention window and purge', () => {
     const at = Date.now()
     endSubscription(t.ctx, t.collab, 'una', at)
     resumeSubscription(t.ctx, t.collab, 'una')
-    expect(await purgeExpiredAccounts(t.ctx, t.storage, t.collab, at + 2 * RETENTION_MS)).toEqual([])
+    expect(await purgeExpiredData(t.ctx, t.storage, t.collab, at + 2 * RETENTION_MS)).toEqual([])
     expect((await una.get(`/api/projects/${A}`)).status).toBe(200)
   })
 
-  it('the dev account is never purged and cannot be put on a retention clock', async () => {
+  it('the dev account cannot be put on a retention clock', async () => {
     t.ctx.db.prepare("INSERT INTO users(username, password_hash, account_role, created_at) VALUES('devacct', '', 'dev', 1)").run()
     expect(endSubscription(t.ctx, t.collab, 'devacct')).toBe(false)
   })

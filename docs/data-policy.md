@@ -24,13 +24,16 @@ mode, your data never leaves your device.
 7. **Cancelling doesn't delete your data right away.** When your subscription ends, your
    account becomes read-only for **30 days**. You can still sign in, play and download
    everything, and resubscribing restores everything as it was.
-8. **After 30 days, your data is permanently deleted.** This covers your uploads (including
-   in other people's projects), the projects you own, and your account. It can't be recovered.
-9. **You can delete your account at any time.** This skips the 30-day window.
+8. **After 30 days, your cloud data is permanently deleted.** This covers your uploads
+   (including in other people's projects) and the projects you own. It can't be recovered.
+   **Your account is never deleted automatically.** You can sign in whenever you like, and
+   when you subscribe again you start with an empty cloud.
+9. **You can delete your account at any time.** This deletes your cloud data immediately,
+   without waiting for the 30 days.
 
 ## Open questions
 
 - Should deleted uploads go to a trash for a few days first?
 - Accounts have no email, so warnings are in-app only. Collect an email?
 - Grace period for failed payments?
-- Should projects owned by a purged account be deleted, or handed to an editor?
+- Should a project be deleted with the owner's cloud data, or handed to an editor?

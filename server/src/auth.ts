@@ -41,7 +41,7 @@ export function verifySession(secret: string, token: string | undefined | null):
 
 export type UserRow = {
   username: string; password_hash: string | null; is_admin: number; account_role: 'user' | 'dev'; bytes_used: number
-  plan_status: 'active' | 'read_only'; retention_ends_at: number | null; paid_through: number
+  plan_status: 'active' | 'read_only'; retention_ends_at: number | null; paid_through: number; data_purged_at: number | null
 }
 export const getUser = (db: Db, username: string) =>
   db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined
@@ -82,7 +82,7 @@ export type WriteBlock = 'account_read_only' | 'project_frozen'
 
 /**
  * Why `username` may not change `projectId`, or null if they may. A read-only account can't write anywhere;
- * a project whose owner is read-only is frozen for everyone until the owner resubscribes or it is purged.
+ * a project whose owner is read-only is frozen for everyone until the owner resubscribes or its retention window ends and it is deleted.
  */
 export function writeBlock(ctx: Ctx, projectId: string, username: string): WriteBlock | null {
   if (isDevUser(ctx, username)) return null
@@ -114,7 +114,9 @@ export function getMe(ctx: Ctx, username: string): Me {
   const u = getUser(ctx.db, username)!
   return {
     username, isAdmin: !!u.is_admin, bytesUsed: u.bytes_used, quotaBytes: ctx.config.userQuotaBytes,
-    planStatus: u.plan_status, retentionEndsAt: u.plan_status === 'read_only' ? u.retention_ends_at : null,
+    // 'lapsed': the retention window is over and the cloud data is gone, but the account lives on.
+    planStatus: u.plan_status === 'read_only' && u.data_purged_at ? 'lapsed' : u.plan_status,
+    retentionEndsAt: u.plan_status === 'read_only' && !u.data_purged_at ? u.retention_ends_at : null,
     paidThrough: u.paid_through,
   }
 }

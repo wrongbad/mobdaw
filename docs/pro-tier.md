@@ -56,8 +56,9 @@ Pricing and limits may change at any time.
   can be gifted to an account later.
 - Months stack: gifting 3 months to an account with 5 left makes 8.
 - When the pre-paid time runs out and nothing else is paid, the subscription ends: the account becomes read-only for 30
-  days, then it is deleted, as described in the [Data Policy](data-policy.md). Adding months during those 30 days restores
-  the account.
+  days, then its cloud audio and projects are deleted, as described in the [Data Policy](data-policy.md). The account
+  itself is never deleted automatically and works again whenever you add time. Adding months during the 30 days restores
+  everything; after that you start with an empty cloud.
 - Your account page shows what you are paid through and how many months are left, and a banner appears in the last two
   weeks.
 

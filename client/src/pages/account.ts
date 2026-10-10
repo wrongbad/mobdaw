@@ -12,19 +12,20 @@ import { nav } from '../ui/nav'
 /** Plan and storage, and the way to delete the account. */
 export function accountPage(me: Me) {
   const err = h('p', { className: 'error' })
-  const readOnly = me.planStatus === 'read_only'
   const password = h('input', { type: 'password', placeholder: 'your password', autocomplete: 'current-password' })
 
   const months = monthsLeft(me.paidThrough)
-  const plan = readOnly && me.retentionEndsAt
+  const plan = me.planStatus === 'read_only' && me.retentionEndsAt
     ? h('p', {}, 'Your pre-paid time has run out. Your account is read-only until ', h('strong', {}, dateOf(me.retentionEndsAt)),
-        ` (${daysLeft(me.retentionEndsAt)} days). After that, everything you own is permanently deleted.`)
+        ` (${daysLeft(me.retentionEndsAt)} days). After that, your cloud audio and projects are permanently deleted. Your account stays, and you can use the cloud again whenever you add time.`)
+    : me.planStatus === 'lapsed'
+    ? h('p', {}, 'Your pre-paid time ran out and your cloud audio and projects have been deleted. Your account is still here: add time to use the cloud again, starting fresh.')
     : h('div', {},
         h('p', {}, 'mobdaw Pro is active.'),
         h('p', {}, 'Paid through ', h('strong', {}, dateOf(me.paidThrough)),
           ` (${months} ${months === 1 ? 'month' : 'months'} of pre-paid time).`),
         h('p', { className: 'dim' },
-          'When pre-paid time runs out, your account becomes read-only for 30 days so you can download your data, and is then deleted. ' +
+          'When pre-paid time runs out, your account becomes read-only for 30 days so you can download your data, and then your cloud audio and projects are deleted. Your account is never deleted automatically. ' +
           'Payments are not set up yet; time comes from invites and gifts.'))
 
   const progress = h('p', { className: 'dim' })
@@ -77,7 +78,7 @@ export function accountPage(me: Me) {
     h('div', { className: 'row' }, ...buttons),
     progress,
     h('h3', {}, 'Delete account'),
-    h('p', { className: 'dim' }, 'Deletes everything immediately, without waiting for the 30-day window. Download anything you want to keep first.'),
+    h('p', { className: 'dim' }, 'Deletes your account, your cloud audio and your projects immediately. This is the only way an account is ever deleted. Download anything you want to keep first.'),
     h('div', { className: 'row' }, password, del),
     err))
 }

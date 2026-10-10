@@ -83,6 +83,8 @@ const migrations: (string | ((db: Db) => void))[] = [
     db.prepare('UPDATE users SET paid_through = ?').run(addMonths(Date.now(), GRANDFATHERED_MONTHS))
     db.prepare('UPDATE invites SET gift_months = ? WHERE redeemed_by IS NULL').run(GRANDFATHERED_MONTHS)
   },
+  // Accounts are never deleted automatically: when the retention window ends only the cloud data goes, and this records when.
+  `ALTER TABLE users ADD COLUMN data_purged_at INTEGER;`,
 ]
 
 export function openDb(path: string): Db {
