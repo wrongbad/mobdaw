@@ -50,6 +50,17 @@ theirs, not yours.
 
 Pricing and limits may change at any time.
 
+## Pre-paid time
+
+- Pro accounts hold pre-paid time, counted in months. An invite can start a new account with some free months, and months
+  can be gifted to an account later.
+- Months stack: gifting 3 months to an account with 5 left makes 8.
+- When the pre-paid time runs out and nothing else is paid, the subscription ends: the account becomes read-only for 30
+  days, then it is deleted, as described in the [Data Policy](data-policy.md). Adding months during those 30 days restores
+  the account.
+- Your account page shows what you are paid through and how many months are left, and a banner appears in the last two
+  weeks.
+
 ## Open source
 
 - All of mobdaw's code is open source under the [Apache License 2.0](../LICENSE.md).

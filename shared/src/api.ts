@@ -21,9 +21,12 @@ export type Me = {
   /** 'read_only' once the subscription has ended: play, download and delete only, until `retentionEndsAt`. */
   planStatus: 'active' | 'read_only'
   retentionEndsAt: number | null
+  /** Pre-paid time: the account stays active until this (ms). When it passes, the subscription ends. */
+  paidThrough: number
 }
 
-export type CreateInviteRequest = { expiresInDays?: number }
+/** `giftMonths`: pre-paid months the new account starts with (0-999, default 1). */
+export type CreateInviteRequest = { expiresInDays?: number; giftMonths?: number }
 export type CreateInviteResponse = { token: string; url: string }
 export type InviteInfo = {
   token: string
@@ -32,6 +35,7 @@ export type InviteInfo = {
   expiresAt: number | null
   redeemedBy: string | null
   redeemedAt: number | null
+  giftMonths: number
 }
 
 export type UserInfo = { username: string }

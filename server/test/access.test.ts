@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { addTrack, getTracks } from '@mobdaw/shared'
+import { addMonths, addTrack, getTracks } from '@mobdaw/shared'
 import { audit } from '../src/audit.ts'
 import { openDb } from '../src/db.ts'
 import { createStorage } from '../src/storage/index.ts'
@@ -162,6 +162,7 @@ describe('migration', () => {
       PRAGMA user_version = 1;`)
     const [h1, h2, h3] = ['1', '2', '3'].map((c) => c.repeat(64))
     raw.prepare("INSERT INTO users(email, name, created_at) VALUES('o', 'Old', 1)").run()
+    raw.prepare("INSERT INTO invites(token, created_by, created_at, redeemed_by, redeemed_at) VALUES('open', 'o', 1, NULL, NULL), ('used', 'o', 1, 'o', 2)").run()
     raw.prepare("INSERT INTO projects VALUES('p1','P','o',1)").run()
     raw.prepare("INSERT INTO project_members VALUES('p1','o','owner')").run()
     for (const [h, c] of [[h1, 1], [h2, 1], [h3, 0]] as const) raw.prepare('INSERT INTO samples VALUES(?,?,?,?,?,?)').run(h, 5, 'audio/wav', 'o', 1, c)
@@ -178,6 +179,12 @@ describe('migration', () => {
       // Google-era identities are kept as usernames, with no password until an admin sets one.
       expect(db.prepare('SELECT * FROM users').all()).toMatchObject([{ username: 'o', password_hash: null }])
       expect(db.prepare('SELECT owner_username FROM projects').all()).toMatchObject([{ owner_username: 'o' }])
+      // Pre-existing accounts are grandfathered with 999 months of pre-paid time; so are invites nobody has used yet.
+      const { paid_through } = db.prepare('SELECT paid_through FROM users').get() as { paid_through: number }
+      expect(Math.abs(paid_through - addMonths(Date.now(), 999))).toBeLessThan(60_000)
+      expect(db.prepare('SELECT token, gift_months FROM invites ORDER BY token').all()).toMatchObject([
+        { token: 'open', gift_months: 999 }, { token: 'used', gift_months: 0 },
+      ])
       // Uploads belong to the old uploader; library links name the upload they point at.
       expect(db.prepare('SELECT owner, hash, state FROM uploads ORDER BY hash').all()).toMatchObject([
         { owner: 'o', state: 'complete' }, { owner: 'o', state: 'complete' }, { owner: 'o', state: 'pending' },

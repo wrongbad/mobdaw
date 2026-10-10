@@ -73,7 +73,11 @@ Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Ru
   sharing and editing do not, and the projects it owns are frozen for their members. After 30 days the account is purged:
   its projects (for every member) and uploads are deleted. Resubscribing before then restores everything. There is no
   payment provider yet: `set-plan` (or `endSubscription`/`resumeSubscription` in `server/src/accounts.ts`) is the seam
-  to call from a payment webhook. `POST /api/me/delete {password}` deletes an account immediately.
+  to call from a payment webhook.
+- Pre-paid time: `users.paid_through` (ms) is how long an account is paid for. Invites carry `gift_months` (default 1, set with
+  `create-invite --months N` or the invites page) that the new account starts with; `gift <username> <months>` adds more
+  (months stack, and a lapsed account still in its retention window is restored). The sweep ends the subscription of any
+  active account past `paid_through`. The migration gave every pre-existing account, and every still-open invite, 999 months. `POST /api/me/delete {password}` deletes an account immediately.
 - Upgrading a pass-1 database: the migration converts `samples.complete` to `state` and links
   each project's library by scanning its stored doc for referenced hashes. Samples referenced by
   no doc stay unlinked (shown by `audit` as unreferenced).

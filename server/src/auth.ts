@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { Context, MiddlewareHandler } from 'hono'
 import { getCookie } from 'hono/cookie'
-import type { Me, Role } from '@mobdaw/shared'
+import { GRANDFATHERED_MONTHS, addMonths, type Me, type Role } from '@mobdaw/shared'
 import type { Config } from './config.ts'
 import type { Db } from './db.ts'
 import { hashPassword } from './password.ts'
@@ -41,7 +41,7 @@ export function verifySession(secret: string, token: string | undefined | null):
 
 export type UserRow = {
   username: string; password_hash: string | null; is_admin: number; account_role: 'user' | 'dev'; bytes_used: number
-  plan_status: 'active' | 'read_only'; retention_ends_at: number | null
+  plan_status: 'active' | 'read_only'; retention_ends_at: number | null; paid_through: number
 }
 export const getUser = (db: Db, username: string) =>
   db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined
@@ -55,7 +55,9 @@ function devAccount(ctx: Ctx): string {
   const found = ctx.db.prepare("SELECT username FROM users WHERE account_role = 'dev' LIMIT 1").get() as { username: string } | undefined
   if (found) return found.username
   const username = userExists(ctx, 'dev') ? 'dev_local' : 'dev'
-  ctx.db.prepare("INSERT INTO users(username, password_hash, is_admin, account_role, created_at) VALUES(?, '', 1, 'dev', ?)").run(username, Date.now())
+  ctx.db
+    .prepare("INSERT INTO users(username, password_hash, is_admin, account_role, created_at, paid_through) VALUES(?, '', 1, 'dev', ?, ?)")
+    .run(username, Date.now(), addMonths(Date.now(), GRANDFATHERED_MONTHS))
   return username
 }
 export const isAdmin = (ctx: Ctx, username: string) => !!getUser(ctx.db, username)?.is_admin
@@ -96,14 +98,16 @@ export const accountBlocked = (ctx: Ctx, username: string) =>
   !isDevUser(ctx, username) && getUser(ctx.db, username)?.plan_status === 'read_only'
 
 /** Insert a user with an already-hashed password (sync, so it can run inside a transaction). Throws if taken. */
-export function insertUser(ctx: Ctx, username: string, passwordHash: string, admin = false) {
+export function insertUser(ctx: Ctx, username: string, passwordHash: string, admin = false, months = 0) {
+  const now = Date.now()
   ctx.db
-    .prepare('INSERT INTO users(username, password_hash, is_admin, created_at) VALUES(?, ?, ?, ?)')
-    .run(username, passwordHash, admin ? 1 : 0, Date.now())
+    .prepare('INSERT INTO users(username, password_hash, is_admin, created_at, paid_through) VALUES(?, ?, ?, ?, ?)')
+    .run(username, passwordHash, admin ? 1 : 0, now, addMonths(now, months))
 }
 
-export async function createUser(ctx: Ctx, username: string, password: string, admin = false) {
-  insertUser(ctx, username, await hashPassword(password), admin)
+/** Create an account directly (admin CLI, bootstrap). `months` of pre-paid time, like the grandfathered accounts by default. */
+export async function createUser(ctx: Ctx, username: string, password: string, admin = false, months = GRANDFATHERED_MONTHS) {
+  insertUser(ctx, username, await hashPassword(password), admin, months)
 }
 
 export function getMe(ctx: Ctx, username: string): Me {
@@ -111,6 +115,7 @@ export function getMe(ctx: Ctx, username: string): Me {
   return {
     username, isAdmin: !!u.is_admin, bytesUsed: u.bytes_used, quotaBytes: ctx.config.userQuotaBytes,
     planStatus: u.plan_status, retentionEndsAt: u.plan_status === 'read_only' ? u.retention_ends_at : null,
+    paidThrough: u.paid_through,
   }
 }
 

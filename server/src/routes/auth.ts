@@ -19,7 +19,7 @@ const recentFails = (u: string) => {
   return list
 }
 
-type InviteRow = { token: string; expires_at: number | null; redeemed_by: string | null }
+type InviteRow = { token: string; expires_at: number | null; redeemed_by: string | null; gift_months: number }
 const inviteProblem = (inv: InviteRow | undefined) =>
   !inv ? 'invite_invalid' : inv.redeemed_by ? 'invite_used' : inv.expires_at && inv.expires_at < Date.now() ? 'invite_expired' : null
 
@@ -54,10 +54,11 @@ export function authRoutes(ctx: Ctx) {
     const passwordHash = await hashPassword(password)
     const result = tx(db, () => {
       // Re-check inside the transaction: another request may have used the invite or name meanwhile.
-      const again = inviteProblem(find())
+      const invite = find()
+      const again = inviteProblem(invite)
       if (again) return again
       if (userExists(ctx, username)) return 'username_taken'
-      insertUser(ctx, username, passwordHash)
+      insertUser(ctx, username, passwordHash, false, invite!.gift_months)
       db.prepare('UPDATE invites SET redeemed_by = ?, redeemed_at = ? WHERE token = ?').run(username, Date.now(), token)
       return null
     })

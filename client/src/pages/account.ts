@@ -1,4 +1,4 @@
-import type { Me } from '@mobdaw/shared'
+import { monthsLeft, type Me } from '@mobdaw/shared'
 import { api } from '../api'
 import { go } from '../router'
 import { h, mount } from '../dom'
@@ -15,10 +15,17 @@ export function accountPage(me: Me) {
   const readOnly = me.planStatus === 'read_only'
   const password = h('input', { type: 'password', placeholder: 'your password', autocomplete: 'current-password' })
 
+  const months = monthsLeft(me.paidThrough)
   const plan = readOnly && me.retentionEndsAt
-    ? h('p', {}, 'Subscription ended. Your account is read-only until ', h('strong', {}, dateOf(me.retentionEndsAt)),
+    ? h('p', {}, 'Your pre-paid time has run out. Your account is read-only until ', h('strong', {}, dateOf(me.retentionEndsAt)),
         ` (${daysLeft(me.retentionEndsAt)} days). After that, everything you own is permanently deleted.`)
-    : h('p', {}, 'mobdaw Pro is active.')
+    : h('div', {},
+        h('p', {}, 'mobdaw Pro is active.'),
+        h('p', {}, 'Paid through ', h('strong', {}, dateOf(me.paidThrough)),
+          ` (${months} ${months === 1 ? 'month' : 'months'} of pre-paid time).`),
+        h('p', { className: 'dim' },
+          'When pre-paid time runs out, your account becomes read-only for 30 days so you can download your data, and is then deleted. ' +
+          'Payments are not set up yet; time comes from invites and gifts.'))
 
   const progress = h('p', { className: 'dim' })
   const buttons: HTMLButtonElement[] = []

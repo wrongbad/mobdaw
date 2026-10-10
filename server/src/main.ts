@@ -1,7 +1,7 @@
 import { getRequestListener } from '@hono/node-server'
 import { createApp } from './app.ts'
 import type { Ctx } from './auth.ts'
-import { purgeExpiredAccounts } from './accounts.ts'
+import { endExpiredSubscriptions, purgeExpiredAccounts } from './accounts.ts'
 import { createCollab, enforceReadOnly } from './collab.ts'
 import { loadConfig, type Config } from './config.ts'
 import { openDb } from './db.ts'
@@ -21,7 +21,8 @@ export async function startServer(config: Config) {
   collab.httpServer.on('request', getRequestListener(createApp(ctx, storage, collab).fetch))
   await collab.listen()
   const sweep = () =>
-    purgeExpiredAccounts(ctx, storage, collab)
+    Promise.resolve(endExpiredSubscriptions(ctx, collab))
+      .then(() => purgeExpiredAccounts(ctx, storage, collab))
       .then(() => sweepSamples(ctx, storage))
       .catch((e) => console.error('sweep failed', e))
   const sweeper = setInterval(sweep, 15 * 60 * 1000).unref()

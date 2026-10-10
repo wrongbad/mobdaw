@@ -1,4 +1,4 @@
-import { docName } from '@mobdaw/shared'
+import { addMonths, docName } from '@mobdaw/shared'
 import { getUser, type Ctx } from './auth.ts'
 import { kick, kickUser, type Collab } from './collab.ts'
 import { tx } from './db.ts'
@@ -31,6 +31,28 @@ export function resumeSubscription(ctx: Ctx, collab: Collab | null, username: st
 export function refreshAccess(ctx: Ctx, collab: Collab, username: string) {
   kickUser(collab, username)
   for (const { id } of ctx.db.prepare('SELECT id FROM projects WHERE owner_username = ?').all(username) as { id: string }[]) kick(collab, id)
+}
+
+/**
+ * Add pre-paid months to an account. Time stacks on whatever is left (or starts from now if the account has run out). An
+ * account that was read-only because its time ran out is restored, as long as the new time reaches into the future.
+ * Returns the new paid-through date, or null if there is no such account.
+ */
+export function giftMonths(ctx: Ctx, collab: Collab | null, username: string, months: number, now = Date.now()): number | null {
+  const user = getUser(ctx.db, username)
+  if (!user) return null
+  const paidThrough = addMonths(Math.max(user.paid_through, now), months)
+  ctx.db.prepare('UPDATE users SET paid_through = ? WHERE username = ?').run(paidThrough, username)
+  if (paidThrough > now) resumeSubscription(ctx, collab, username)
+  return paidThrough
+}
+
+/** End the subscription of every active account whose pre-paid time has run out. Returns their usernames. */
+export function endExpiredSubscriptions(ctx: Ctx, collab: Collab | null, now = Date.now()): string[] {
+  const due = (
+    ctx.db.prepare("SELECT username FROM users WHERE plan_status = 'active' AND account_role = 'user' AND paid_through <= ?").all(now) as { username: string }[]
+  ).map((u) => u.username)
+  return due.filter((username) => endSubscription(ctx, collab, username, now))
 }
 
 /**

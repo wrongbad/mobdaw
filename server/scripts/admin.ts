@@ -1,9 +1,9 @@
 import { audit, isClean } from '../src/audit.ts'
-import { RETENTION_MS, endSubscription, purgeExpiredAccounts, resumeSubscription } from '../src/accounts.ts'
-import { createUser, userExists } from '../src/auth.ts'
+import { RETENTION_MS, endExpiredSubscriptions, endSubscription, giftMonths, purgeExpiredAccounts, resumeSubscription } from '../src/accounts.ts'
+import { createUser, getUser, userExists } from '../src/auth.ts'
 import { loadConfig } from '../src/config.ts'
 import { openDb } from '../src/db.ts'
-import { createInvite, listInvites } from '../src/routes/invites.ts'
+import { DEFAULT_GIFT_MONTHS, createInvite, listInvites, validGiftMonths } from '../src/routes/invites.ts'
 import { PASSWORD_MAX, PASSWORD_MIN, USERNAME_RE, hashPassword } from '../src/password.ts'
 import { createStorage } from '../src/storage/index.ts'
 
@@ -37,17 +37,23 @@ if (cmd === 'create-invite') {
   const i = args.indexOf('--days')
   const days = i >= 0 ? Number(args[i + 1]) : undefined
   if (i >= 0 && !(days! > 0)) throw new Error('--days needs a positive number')
-  console.log(createInvite(ctx, 'cli', days).url)
+  const m = args.indexOf('--months')
+  const months = m >= 0 ? Number(args[m + 1]) : DEFAULT_GIFT_MONTHS
+  if (!validGiftMonths(months)) throw new Error('--months needs a whole number from 0 to 999')
+  console.log(createInvite(ctx, 'cli', days, months).url)
 } else if (cmd === 'list-invites') {
   for (const i of listInvites(ctx)) {
     const status = i.redeemedBy ? `redeemed by ${i.redeemedBy}` : i.expiresAt && i.expiresAt < Date.now() ? 'expired' : 'open'
-    console.log(`${i.token}  ${new Date(i.createdAt).toISOString()}  ${status}`)
+    console.log(`${i.token}  ${new Date(i.createdAt).toISOString()}  ${i.giftMonths} months  ${status}`)
   }
 } else if (cmd === 'create-user') {
   const username = needUser(args[0])
   if (!USERNAME_RE.test(username)) throw new Error('username must be 3-32 chars of a-z 0-9 _ . - (starting with a letter or digit)')
   if (userExists(ctx, username)) throw new Error(`${username} already exists`)
-  await createUser(ctx, username, await askPassword(), args.includes('--admin'))
+  const m = args.indexOf('--months')
+  const months = m >= 0 ? Number(args[m + 1]) : undefined
+  if (months !== undefined && !validGiftMonths(months)) throw new Error('--months needs a whole number from 0 to 999')
+  await createUser(ctx, username, await askPassword(), args.includes('--admin'), months)
   console.log(`created ${username}${args.includes('--admin') ? ' (admin)' : ''}`)
 } else if (cmd === 'passwd') {
   const username = needUser(args[0])
@@ -58,6 +64,14 @@ if (cmd === 'create-invite') {
   const username = needUser(args[0])
   if (!ctx.db.prepare('UPDATE users SET is_admin = 1 WHERE username = ?').run(username).changes) throw new Error(`no such user: ${username}`)
   console.log(`${username} is now an admin`)
+} else if (cmd === 'gift') {
+  // Add pre-paid months to an account (also restores one that ran out, if it is still within its retention window).
+  const username = needUser(args[0])
+  const months = Number(args[1])
+  if (!validGiftMonths(months) || months < 1) throw new Error('usage: gift <username> <months, 1-999>')
+  const until = giftMonths(ctx, null, username, months)
+  if (until == null) throw new Error(`no such user: ${username}`)
+  console.log(`${username} is now paid through ${new Date(until).toISOString().slice(0, 10)}`)
 } else if (cmd === 'set-plan') {
   // Until a payment provider is wired in, this is how a subscription is ended or restored.
   const username = needUser(args[0])
@@ -67,16 +81,20 @@ if (cmd === 'create-invite') {
     console.log(`${username} is read-only; their data is purged in ${RETENTION_MS / 86400_000} days (a running server enforces it within a minute)`)
   } else if (args[1] === 'active') {
     console.log(resumeSubscription(ctx, null, username) ? `${username} is active again` : `${username} was already active`)
+    const { paid_through } = getUser(ctx.db, username)!
+    if (paid_through <= Date.now()) console.log(`warning: ${username}'s pre-paid time has run out, so the next sweep ends the subscription again; use \`gift\` to add months`)
   } else throw new Error('usage: set-plan <username> active|ended')
 } else if (cmd === 'purge-expired') {
+  const ended = endExpiredSubscriptions(ctx, null)
+  if (ended.length) console.log(`subscription ended (pre-paid time ran out): ${ended.join(', ')}`)
   const purged = await purgeExpiredAccounts(ctx, createStorage(config, () => undefined), null)
   console.log(purged.length ? `purged: ${purged.join(', ')}` : 'nothing to purge')
 } else if (cmd === 'tree') {
   const q = <T>(sql: string, ...p: string[]) => ctx.db.prepare(sql).all(...p) as T[]
   const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`
-  const users = q<{ username: string; is_admin: number; bytes_used: number; plan_status: string; retention_ends_at: number | null }>('SELECT * FROM users ORDER BY username')
+  const users = q<{ username: string; is_admin: number; bytes_used: number; plan_status: string; retention_ends_at: number | null; paid_through: number }>('SELECT * FROM users ORDER BY username')
   console.log('users')
-  for (const u of users) console.log(`  ${u.username}${u.is_admin ? ' (admin)' : ''}${u.plan_status === 'read_only' ? ` (read-only, purged ${new Date(u.retention_ends_at!).toISOString().slice(0, 10)})` : ''}  ${kb(u.bytes_used)} used`)
+  for (const u of users) console.log(`  ${u.username}${u.is_admin ? ' (admin)' : ''}${u.plan_status === 'read_only' ? ` (read-only, purged ${new Date(u.retention_ends_at!).toISOString().slice(0, 10)})` : ''}  ${kb(u.bytes_used)} used, paid through ${new Date(u.paid_through).toISOString().slice(0, 10)}`)
   console.log('projects')
   for (const u of users) {
     const projects = q<{ id: string; name: string }>('SELECT id, name FROM projects WHERE owner_username = ? ORDER BY created_at', u.username)
@@ -108,6 +126,6 @@ if (cmd === 'create-invite') {
   // --fix repairs leaks and drift; only broken/orphan-link findings remain a failure.
   process.exit(isClean(fix ? { ...r, leaked: [], drift: [] } : r) ? 0 : 1)
 } else {
-  console.error('usage: npm run admin -- create-invite [--days N] | list-invites | create-user <username> [--admin] | passwd <username> | make-admin <username> | set-plan <username> active|ended | purge-expired | tree | audit [--fix]')
+  console.error('usage: npm run admin -- create-invite [--days N] [--months N] | list-invites | create-user <username> [--admin] [--months N] | gift <username> <months> | passwd <username> | make-admin <username> | set-plan <username> active|ended | purge-expired | tree | audit [--fix]')
   process.exit(1)
 }

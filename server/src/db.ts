@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import * as Y from 'yjs'
+import { addMonths, GRANDFATHERED_MONTHS } from '@mobdaw/shared'
 
 export type Db = DatabaseSync
 
@@ -73,6 +74,15 @@ const migrations: (string | ((db: Db) => void))[] = [
   // Subscription lifecycle: an ended subscription leaves the account 'read_only' until retention_ends_at, then it is purged.
   `ALTER TABLE users ADD COLUMN plan_status TEXT NOT NULL DEFAULT 'active' CHECK(plan_status IN ('active','read_only'));
    ALTER TABLE users ADD COLUMN retention_ends_at INTEGER;`,
+  // Pre-paid time: an account is paid through `paid_through` (ms; 0 = nothing paid). When it passes, the subscription ends
+  // (accounts.ts). Everyone who exists today is grandfathered with 999 months, and so are invites that are still open
+  // (they were full accounts when issued). An invite's `gift_months` is what its new account starts with.
+  (db) => {
+    db.exec(`ALTER TABLE users ADD COLUMN paid_through INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE invites ADD COLUMN gift_months INTEGER NOT NULL DEFAULT 0;`)
+    db.prepare('UPDATE users SET paid_through = ?').run(addMonths(Date.now(), GRANDFATHERED_MONTHS))
+    db.prepare('UPDATE invites SET gift_months = ? WHERE redeemed_by IS NULL').run(GRANDFATHERED_MONTHS)
+  },
 ]
 
 export function openDb(path: string): Db {

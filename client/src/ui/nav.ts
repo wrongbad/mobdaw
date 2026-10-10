@@ -16,7 +16,10 @@ export function nav(me: Me | null): HTMLElement {
     me ? h('span', { className: 'dim' }, me.username) : null,
     me ? h('a', { href: '#/login', onclick: () => api.logout() }, 'log out') : h('a', { href: '#/login' }, 'sign in to Pro'),
   )
-  const banner = me?.planStatus === 'read_only' && me.retentionEndsAt ? retentionBanner(me.retentionEndsAt) : null
+  const banner = !me ? null
+    : me.planStatus === 'read_only' && me.retentionEndsAt ? retentionBanner(me.retentionEndsAt)
+    : me.paidThrough - Date.now() < 14 * 86_400_000 ? endingBanner(me.paidThrough)
+    : null
   return h('div', { className: 'top' }, bar, banner)
 }
 
@@ -27,4 +30,12 @@ function retentionBanner(endsAt: number) {
     `Your subscription has ended. Your account is read-only, and everything you own will be permanently deleted on ${dateOf(endsAt)} ` +
     `(${n} ${n === 1 ? 'day' : 'days'} left). `,
     h('a', { href: '#/account' }, 'Download your data'), '. Resubscribe before then to keep everything.')
+}
+
+/** Shown in the last two weeks of pre-paid time. */
+function endingBanner(paidThrough: number) {
+  const n = daysLeft(paidThrough)
+  return h('p', { className: 'banner' },
+    `Your pre-paid time ends on ${dateOf(paidThrough)} (${n} ${n === 1 ? 'day' : 'days'}). After that your account becomes read-only for 30 days, then your data is deleted. `,
+    h('a', { href: '#/account' }, 'Account'))
 }
