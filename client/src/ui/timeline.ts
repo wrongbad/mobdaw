@@ -38,7 +38,7 @@ type Card = ReturnType<typeof deviceCard>
 /** A scope's automation: one collapsible section holding a lane per automated param (absent when there are none). */
 type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
-  el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; mute: HTMLButtonElement
+  el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; mute: HTMLButtonElement; solo: HTMLButtonElement
   gain: HTMLInputElement; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
   synthMore: HTMLButtonElement; synthRow: HTMLElement; synth: HTMLElement; cards: Map<string, Card>
   loopMore: HTMLButtonElement; loopRow: HTMLElement; loops: HTMLElement
@@ -105,13 +105,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   const rulerBody = h('div', { className: 'ruler-body' })
   ruler.append(rulerBody)
   const laneBox = h('div', { className: 'lanes' })
-  // "Upload": one new audio track per chosen file, clip at the playhead.
-  const fileInput = h('input', { type: 'file', accept: 'audio/*', multiple: true, hidden: true })
-  fileInput.onchange = async () => {
-    const files = audioFiles(fileInput.files)
-    fileInput.value = ''
-    for (const f of files) await dropFiles([f], null, pb?.position() ?? 0)
-  }
   // Background menu "Upload": files go into the clicked track at the clicked position.
   let bgTarget: { trackId: string; at: number } | null = null
   const bgPicker = h('input', { type: 'file', accept: 'audio/*', multiple: true, hidden: true })
@@ -124,12 +117,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     e.preventDefault()
     const n = getTracks(doc).length + 1
     popover(addLink, [
-      ['Empty', () => addTrack(doc, `Track ${n}`)],
-      ['Upload', () => fileInput.click()],
-      ['Soundscape', () => addTrack(doc, `Soundscape ${n}`, 'soundscape')],
+      ['Audio', () => addTrack(doc, `Track ${n}`)],
       ['MIDI', () => {
         doc.transact(() => addDevice(doc, addTrack(doc, `MIDI ${n}`, 'midi'), FINNWAVE))
       }],
+      ['Soundscape', () => addTrack(doc, `Soundscape ${n}`, 'soundscape')],
     ])
   } }, '+ track')
   const overlay = h('div', { className: 'overlay' })
@@ -140,7 +132,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   overlay.append(playhead)
   const hint = h('div', { className: 'hint dim' }, readOnly ? 'Nothing here yet.' : 'Drop audio files here, or use + track.')
   const masterAuto = makeAutoSection(MASTER_TRACK, 'global automation')
-  const content = h('div', { className: 'content' }, ruler, laneBox, masterAuto.el, hint, readOnly ? null : addLink, fileInput, bgPicker, overlay)
+  const content = h('div', { className: 'content' }, ruler, laneBox, masterAuto.el, hint, readOnly ? null : addLink, bgPicker, overlay)
   const scroll = h('div', { className: 'scroll' }, content)
   // Drops outside any lane start a new track.
   scroll.ondragover = (e) => e.preventDefault()
@@ -355,6 +347,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       updateTrack(doc, t.id, { muted: !tracksMap(doc).get(t.id)?.get('muted') })
     } }, 'M')
     mute.disabled = readOnly
+    const solo = h('button', { className: 'solo', title: 'solo', onclick: () => {
+      updateTrack(doc, t.id, { soloed: !tracksMap(doc).get(t.id)?.get('soloed') })
+    } }, 'S')
+    solo.disabled = readOnly
+    // TODO: wire up once recording exists.
+    const record = h('button', { className: 'record', title: 'record' }, 'R')
+    record.disabled = readOnly
     const gain = h('input', { type: 'range', min: 0, max: 1, step: 0.01, title: 'gain', disabled: readOnly })
     gain.oninput = () => updateTrack(doc, t.id, { gain: Number(gain.value) })
     gain.onpointerdown = () => undo.stopCapturing()
@@ -364,7 +363,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     } }, 'fx')
     const delTrack = () => confirm('Delete this track and its clips?') && deleteTrack(doc, t.id)
     const del = h('button', { className: 'x', title: 'delete track', onclick: delTrack }, '×')
-    const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl' }, mute, gain), readOnly ? null : del)
+    const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl' }, mute, solo, record), h('div', { className: 'ctl' }, gain), readOnly ? null : del)
     deleteMenu(head, 'Delete track', delTrack, () => !readOnly)
     const body = h('div', { className: 'lane-body', 'data-track': t.id })
     body.onpointerdown = (e) => {
@@ -421,7 +420,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     const row = h('div', { className: 'lane-row' }, head, body)
     const auto = makeAutoSection(t.id)
     l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el), row, body, name, mute, gain, more,
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el), row, body, name, mute, solo, gain, more,
       fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
       pads: new Map(), auto, loopTc, src,
     }
@@ -850,6 +849,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       l.el.classList.toggle('editing', t.id === editTrack)
       if (l.name.textContent !== t.name) l.name.textContent = t.name
       l.mute.classList.toggle('on', t.muted)
+      l.solo.classList.toggle('on', t.soloed)
       if (document.activeElement !== l.gain) l.gain.value = String(t.gain)
       drawFx(l, t, devices)
       drawLoopers(l, t, loopers)
