@@ -48,6 +48,8 @@
 Storage counts the audio you upload. Audio other people add to your projects counts toward
 theirs, not yours.
 
+Pricing and limits may change at any time.
+
 ## Open source
 
 - All of mobdaw's code is open source, under a GPL license (exact version TBD).
