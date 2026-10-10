@@ -16,8 +16,9 @@ cp .env.example .env
 npm run admin -- create-user you --admin    # prompts for a password
 npm run dev
 ```
-Open http://localhost:5173 and log in. Create an invite on the invites page, open its link
-(`#/register/<code>`) in a private window and register a second user. Share a project and edit together.
+Open http://localhost:5173. Without an account you land on **projects on this device** (no server involved). To use
+the cloud, log in at `#/login`, create an invite on the invites page, open its link (`#/register/<code>`) in a
+private window and register a second user. Share a cloud project and edit together.
 
 The API and the `/collab` WebSocket share one port (8787); Vite proxies both in dev.
 
@@ -42,6 +43,11 @@ Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Ru
 - `node:sqlite` is built into Node 24; it may print an ExperimentalWarning.
 - Without `SESSION_SECRET` in dev, a random secret is used per boot, so a server restart logs
   everyone out. Set one in `.env`.
+- **Free / Pro** ([`docs/pro-tier.md`](docs/pro-tier.md)): with no account the editor runs entirely in the browser. A local
+  project's document is saved with `y-indexeddb` and its audio as blobs in IndexedDB (per project, keyed by SHA-256); the
+  list of projects is in `localStorage`. A `.mobdaw` file (`client/src/projectFile.ts`) holds a project with its audio and is
+  how projects are exported, imported and moved between "on this device" and the cloud (`client/src/transfer.ts`). Local
+  project ids start with `local-`; `samples.ts` reads and writes audio on the device for those and in the cloud otherwise.
 - Roles: owner, editor, viewer. Viewers can open, play and download but their WebSocket is
   read-only and they can't upload. Anyone can "save a copy" into a new project they own; only
   the owner renames, deletes, or manages members. Editors and viewers can leave.
