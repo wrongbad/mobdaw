@@ -297,9 +297,8 @@ button.danger:hover { color: var(--danger); }
 nav a.on { color: var(--fg); }
 
 /* recording */
-.rec { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--dim); }
+.rec { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--danger); }
 .rec::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); border-radius: 50%; background: currentColor; }
-.rec.armed { color: var(--danger); }
 .rec.on { color: #fff; }
 .rec.on::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent); }
 .ctl button.record.on { color: #fff; background: var(--danger); }
