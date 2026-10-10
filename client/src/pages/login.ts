@@ -20,7 +20,7 @@ export function loginPage(done: () => void) {
   const password = h('input', { type: 'password', placeholder: 'password', required: true, autocomplete: 'current-password' })
   mount(h('main', { className: 'center' },
     h('div', { className: 'card' },
-      h('h1', {}, 'mobdaw'),
+      h('h1', { className: 'logo' }, 'mobdaw'),
       h('form', {
         onsubmit: (e: Event) => {
           e.preventDefault()

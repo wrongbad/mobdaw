@@ -6,7 +6,7 @@ import { dateOf, daysLeft } from '../format'
 /** Top bar for every page except the editor. `me` is null when working locally without an account. */
 export function nav(me: Me | null): HTMLElement {
   const bar = h('nav', {},
-    h('a', { href: me ? '#/projects' : '#/local' }, 'mobdaw'),
+    h('a', { href: me ? '#/projects' : '#/local', className: 'logo' }, 'mobdaw'),
     h('a', { href: '#/local' }, 'on this device'),
     me ? h('a', { href: '#/projects' }, 'cloud') : null,
     me ? h('a', { href: '#/uploads' }, 'uploads') : null,

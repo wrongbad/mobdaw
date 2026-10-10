@@ -11,7 +11,7 @@ export function registerPage(invite: string, done: () => void) {
   const again = h('input', { type: 'password', placeholder: 'password again', required: true, autocomplete: 'new-password' })
   mount(h('main', { className: 'center' },
     h('div', { className: 'card' },
-      h('h1', {}, 'mobdaw'),
+      h('h1', { className: 'logo' }, 'mobdaw'),
       h('p', { className: 'dim' }, 'Invite only for now. Ask the owner for an invite link.'),
       h('form', {
         onsubmit: (e: Event) => {
