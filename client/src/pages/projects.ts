@@ -5,7 +5,8 @@ import { describeError } from '../errors'
 import { deleteProjectAudio } from '../local/audio'
 import { dateOf } from '../format'
 import { cloudToLocal } from '../transfer'
-import { projectTile, type TileAction } from '../ui/tile'
+import { silliName } from '../projectName'
+import { newProjectTile, projectTile, type TileAction } from '../ui/tile'
 
 /** A cloud project we no longer have: drop the takes this device staged for it (docs/engine.md §9.3). */
 const forgetTakes = (id: string) => deleteProjectAudio(id).catch(() => {})
@@ -14,7 +15,9 @@ const forgetTakes = (id: string) => deleteProjectAudio(id).catch(() => {})
 export function cloudSection(me: Me): HTMLElement {
   const list = h('ul', { className: 'tiles' })
   const err = h('p', { className: 'error' })
-  const name = h('input', { placeholder: 'new project', required: true, disabled: me.planStatus !== 'active' })
+  const create = newProjectTile(
+    () => api.createProject({ name: silliName() }).then((p) => (location.hash = `#/project/${p.id}`), (e) => (err.textContent = describeError(e))),
+    { title: me.planStatus === 'active' ? 'start a new cloud project' : 'your subscription has ended', disabled: me.planStatus !== 'active' })
 
   // Run an action, then refresh the list; show any error.
   const act = (fn: () => Promise<unknown>) =>
@@ -23,7 +26,7 @@ export function cloudSection(me: Me): HTMLElement {
   async function render() {
     const [projects, users] = await Promise.all([api.projects(), api.users()])
     const details = await Promise.all(projects.map((p) => (p.role === 'owner' ? api.project(p.id) : null)))
-    list.replaceChildren(...projects.map((p, i) => row(p, details[i], users.map((u) => u.username))))
+    list.replaceChildren(create, ...projects.map((p, i) => row(p, details[i], users.map((u) => u.username))))
   }
 
   function row(p: ProjectSummary, d: ProjectDetail | null, usernames: string[]) {
@@ -82,13 +85,6 @@ export function cloudSection(me: Me): HTMLElement {
 
   const section = h('details', { className: 'section', open: true },
     h('summary', {}, h('h2', {}, 'Cloud')),
-    h('form', {
-      className: 'row',
-      onsubmit: (e: Event) => {
-        e.preventDefault()
-        api.createProject({ name: name.value }).then((p) => (location.hash = `#/project/${p.id}`), (e) => (err.textContent = describeError(e)))
-      },
-    }, name, h('button', { disabled: me.planStatus !== 'active' }, 'Create')),
     err, list)
   render().catch((e) => (err.textContent = describeError(e)))
   return section

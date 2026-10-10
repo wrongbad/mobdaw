@@ -1,6 +1,6 @@
 import { h, mount } from '../dom'
 import { homeLink } from '../router'
-import { getLocal } from '../local/projects'
+import { getLocal, renameLocal } from '../local/projects'
 import { openLocalSession } from '../local/session'
 import { mountTimeline } from '../ui/timeline'
 
@@ -12,7 +12,7 @@ export function localProjectPage(id: string) {
     return
   }
   const session = openLocalSession(id)
-  const tl = mountTimeline(session, project.name)
+  const tl = mountTimeline(session, project.name, false, (n) => renameLocal(id, n))
   mount(tl.el)
   return () => {
     tl.destroy()

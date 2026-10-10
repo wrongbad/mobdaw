@@ -60,7 +60,8 @@ type Src = {
   end: number // where the source audio ends (samples)
 }
 
-export function mountTimeline(s: Session, projectName: string, readOnly = false) {
+/** `renameProject`: when given, clicking the project's name in the bar edits it (it saves the new name). */
+export function mountTimeline(s: Session, projectName: string, readOnly = false, renameProject?: (name: string) => Promise<unknown> | void) {
   const { doc, undo } = s
   let rate = DEFAULT_SAMPLE_RATE
   let pb: Playback | null = null // created once the doc has synced (needs meta.sampleRate)
@@ -106,8 +107,35 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     doc, user: s.user, readOnly,
     onUnread: (n) => (chatBtn.textContent = n ? `chat (${n})` : 'chat'),
   })
+  /** The project's name in the bar; click to rename when allowed. */
+  function projectTitle() {
+    let current = projectName
+    const el = h('strong', { title: renameProject ? 'click to rename' : '', className: renameProject ? 'project-name' : '' }, current)
+    if (!renameProject) return el
+    el.onclick = () => {
+      const input = h('input', { value: current, className: 'rename' })
+      const done = (ok: boolean) => {
+        if (!input.isConnected) return
+        const n = input.value.trim()
+        input.replaceWith(el)
+        if (!ok || !n || n === current) return
+        const before = current
+        el.textContent = current = n
+        Promise.resolve(renameProject(n)).catch((err) => {
+          el.textContent = current = before
+          status.textContent = `rename: ${(err as Error).message}`
+        })
+      }
+      input.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false) }
+      input.onblur = () => done(true)
+      el.replaceWith(input)
+      input.focus()
+      input.select()
+    }
+    return el
+  }
   const bar = h('header', { className: 'bar' },
-    h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'All projects' }, 'mobdaw'), h('strong', {}, projectName),
+    h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'All projects' }, 'mobdaw'), projectTitle(),
       readOnly ? h('span', { className: 'dim' }, 'view only') : null,
       s.local ? h('span', { className: 'dim', title: 'Saved in this browser, on this device' }, 'on this device') : null),
     transport.el,

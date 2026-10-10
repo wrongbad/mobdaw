@@ -22,6 +22,12 @@ function previewSvg(p: ProjectPreview) {
   return root
 }
 
+/** The big + tile that starts a new project, shown first in the list. */
+export function newProjectTile(onclick: () => void, o: { title: string; disabled?: boolean }): HTMLElement {
+  return h('li', { className: 'tile tile-new' },
+    h('button', { title: o.title, disabled: o.disabled, onclick }, '+', h('span', { className: 'small' }, 'new project')))
+}
+
 /**
  * A project in the list: a big link (picture, name, details) with its actions in a drop-down.
  * `preview` is loaded lazily and failures just leave the tile blank.

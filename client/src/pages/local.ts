@@ -7,7 +7,8 @@ import { createLocal, listLocal, removeLocal, renameLocal, type LocalProject } f
 import { readLocalPreview } from '../local/session'
 import { PROJECT_FILE_EXT, writeProjectFile } from '../projectFile'
 import { collectLocal, importProjectFile, localToCloud } from '../transfer'
-import { projectTile } from '../ui/tile'
+import { silliName } from '../projectName'
+import { newProjectTile, projectTile } from '../ui/tile'
 
 /**
  * Projects on this device. Works with no account: nothing here is sent to the server. A signed-in account can also
@@ -17,7 +18,6 @@ export function localSection(me: Me | null): HTMLElement {
   const list = h('ul', { className: 'tiles' })
   const err = h('p', { className: 'error' })
   const status = h('p', { className: 'dim' })
-  const name = h('input', { placeholder: 'new project', required: true })
   const picker = h('input', { type: 'file', accept: `${PROJECT_FILE_EXT},application/x-mobdaw-project`, hidden: true })
 
   const busy = async (msg: string, fn: () => Promise<unknown>) => {
@@ -66,7 +66,9 @@ export function localSection(me: Me | null): HTMLElement {
 
   function render() {
     const all = listLocal()
-    list.replaceChildren(...(all.length ? all.map(row) : [h('li', { className: 'dim' }, 'No projects on this device yet.')]))
+    list.replaceChildren(
+      newProjectTile(() => (location.hash = `#/local/${createLocal(silliName()).id}`), { title: 'start a new project on this device' }),
+      ...all.map(row))
   }
 
   picker.onchange = () => {
@@ -80,13 +82,7 @@ export function localSection(me: Me | null): HTMLElement {
     h('p', { className: 'dim' },
       'These projects are saved in this browser, on this device only. Nothing is sent to a server, and no account is needed. ' +
       'Clearing your browser\'s site data deletes them, so export a project file to keep a backup.'),
-    h('form', {
-      className: 'row',
-      onsubmit: (e: Event) => {
-        e.preventDefault()
-        location.hash = `#/local/${createLocal(name.value).id}`
-      },
-    }, name, h('button', {}, 'Create'), h('button', { type: 'button', onclick: () => picker.click() }, 'Import file')),
+    h('div', { className: 'row' }, h('button', { type: 'button', onclick: () => picker.click() }, 'Import file')),
     picker, status, err, list,
     me ? null : h('p', { className: 'dim' }, 'Want cloud storage and to edit with others in real time? ', h('a', { href: '#/login' }, 'Sign in to mobdaw Pro'), '.'))
   render()
