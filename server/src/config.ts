@@ -41,7 +41,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     s3Bucket: env.S3_BUCKET ?? '',
     s3Region: env.S3_REGION ?? '',
     maxUploadBytes: Number(env.MAX_UPLOAD_BYTES ?? 4294967296),
-    userQuotaBytes: Number(env.USER_QUOTA_BYTES ?? 107374182400),
+    userQuotaBytes: Number(env.USER_QUOTA_BYTES ?? 42949672960),
     devNoAuth,
   }
 }

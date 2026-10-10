@@ -42,7 +42,7 @@
 
 | Limit | Amount |
 |---|---|
-| Cloud storage per account | 100 GiB |
+| Cloud storage per account | 40 GiB |
 | Largest single upload | 4 GiB (about an hour of 96 kHz / 24-bit stereo) |
 
 Storage counts the audio you upload. Audio other people add to your projects counts toward

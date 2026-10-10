@@ -72,7 +72,7 @@ deploy/Caddyfile, deploy/mobdaw.service, deploy/README.md
 | STORAGE_DIR | ./data/samples | Used by the local driver. |
 | S3_BUCKET, S3_REGION | — | Used by the s3 driver. Credentials come from the standard AWS chain (EC2 instance role). |
 | MAX_UPLOAD_BYTES | 4294967296 | 4 GiB, enough for an hour at 96k/24-bit stereo. S3 single PUT max is 5 GB. |
-| USER_QUOTA_BYTES | 107374182400 | 100 GiB. |
+| USER_QUOTA_BYTES | 42949672960 | 40 GiB. |
 
 ## Auth model
 - **Accounts:**
