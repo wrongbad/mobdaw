@@ -554,7 +554,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     } }, 'fx')
     const delTrack = () => !locks.has(t.id) && confirm('Delete this track and its clips?') && deleteTrack(doc, t.id)
     const del = h('button', { className: 'x', title: 'delete track', onclick: delTrack }, '×')
-    const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl' }, mute, solo, record), h('div', { className: 'ctl' }, gain), meter, readOnly ? null : del)
+    const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl' }, mute, solo, record, meter), h('div', { className: 'ctl' }, gain), readOnly ? null : del)
     deleteMenu(head, 'Delete track', delTrack, () => !readOnly && !locks.has(t.id))
     const body = h('div', { className: 'lane-body', 'data-track': t.id })
     body.onpointerdown = (e) => {
