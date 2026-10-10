@@ -1,7 +1,9 @@
 # mobdaw Data Policy
 
-**Status:** Draft, for when subscriptions launch. Not fully built yet.
 **Last updated:** 2026-10-10
+
+This policy covers data stored in the cloud with [mobdaw Pro](pro-tier.md). In free local
+mode, your data never leaves your device.
 
 ## The policy
 
@@ -25,20 +27,6 @@
 8. **After 30 days, your data is permanently deleted.** This covers your uploads (including
    in other people's projects), the projects you own, and your account. It can't be recovered.
 9. **You can delete your account at any time.** This skips the 30-day window.
-
-## Developer notes
-
-Supersedes the ["Pass 2"](spec.md#pass-2-ownership--access-policy) section of `spec.md`
-where they conflict. Main changes:
-
-- Each upload has exactly one owner. Two users uploading identical bytes get two uploads.
-  Storage may still dedupe by hash, but that must not affect ownership, deletion or quota.
-- Uploaders can delete their uploads, which unlinks them from every project.
-- Deleting a project no longer garbage-collects its audio.
-- Quota is charged per owner and refunded on delete (today: charged once, to the first uploader).
-- New account states: active → read-only (30 days) → purged.
-- New: "My uploads" page, full data export, in-app warnings during the 30-day window
-  (also shown to members of that user's projects).
 
 ## Open questions
 

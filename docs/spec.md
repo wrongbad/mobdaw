@@ -265,8 +265,8 @@ and register a second user. Share a project and edit together.
 This section **supersedes** earlier sections wherever they conflict. Decided with the owner
 on 2026-10-06.
 
-> Upload ownership, deletion and retention are being reworked for subscriptions. See
-> [`data-policy.md`](data-policy.md), which supersedes this section where they conflict.
+> Upload ownership, deletion and retention are defined by [`data-policy.md`](data-policy.md),
+> which supersedes this section where they conflict.
 
 ## Principles
 - **Audio is immutable and append-only per project.**

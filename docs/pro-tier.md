@@ -1,6 +1,5 @@
 # mobdaw Free & Pro
 
-**Status:** Plan. Not built yet.
 **Last updated:** 2026-10-10
 
 ## The short version
@@ -44,21 +43,6 @@
 - All of mobdaw's code is open source, under a GPL license (exact version TBD).
 - Anyone can read, modify and run it, including running their own server.
 - Pro pays for hosting, not for features locked away in the code.
-
-## Implementation plan
-
-1. **Local mode without a server.** Make the client work with no login or API:
-   - persist each project's Yjs doc in the browser (e.g. `y-indexeddb`) instead of
-     syncing through Hocuspocus
-   - store audio in the browser (OPFS or IndexedDB), keyed by SHA-256 as today; the existing
-     sample cache in `client/src/samples.ts` is a starting point
-   - a local projects page, with no members, roles or sharing UI
-2. **Project export/import** as a single file (doc state plus audio).
-3. **Pro accounts.** Today's server becomes the Pro backend: login, cloud projects,
-   collaboration. Add subscription state and the account lifecycle from the data policy.
-4. **Upgrade and downgrade.** Upload local projects to the cloud on upgrade; download cloud
-   projects to local on cancel.
-5. **License.** Add a `LICENSE` file and `license` fields in each `package.json` and `Cargo.toml`.
 
 ## Open questions
 
