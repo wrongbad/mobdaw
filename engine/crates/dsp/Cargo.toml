@@ -3,6 +3,7 @@ name = "dsp"
 description = "Pure DSP building blocks (no wasm dependencies; tested natively)."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dev-dependencies]

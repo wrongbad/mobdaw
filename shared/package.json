@@ -1,6 +1,7 @@
 {
   "name": "@mobdaw/shared",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "version": "0.0.0",
   "exports": { ".": "./src/index.ts", "./schema": "./src/schema.ts", "./api": "./src/api.ts" },

@@ -3,6 +3,7 @@ name = "engine"
 description = "Real-time engine compiled to engine.wasm (plain extern \"C\" API, no wasm-bindgen)."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [lib]

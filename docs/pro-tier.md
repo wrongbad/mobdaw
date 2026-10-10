@@ -52,13 +52,11 @@ Pricing and limits may change at any time.
 
 ## Open source
 
-- All of mobdaw's code is open source, under a GPL license (exact version TBD).
+- All of mobdaw's code is open source under the [Apache License 2.0](../LICENSE.md).
 - Anyone can read, modify and run it, including running their own server.
 - Pro pays for hosting, not for features locked away in the code.
 
 ## Open questions
 
-- **Which license?** AGPL-3.0 means anyone running a modified mobdaw server must publish their
-  changes; GPL-3.0 doesn't require that for server code.
 - Can free users **join** someone's Pro project as a collaborator, or does every collaborator
   need Pro?
