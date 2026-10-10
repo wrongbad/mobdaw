@@ -77,14 +77,14 @@ export function localSection(me: Me | null): HTMLElement {
     if (file) void busy(`Importing ${file.name}…`, async () => void (location.hash = `#/local/${(await importProjectFile(file)).id}`))
   }
 
-  const section = h('details', { className: 'section', open: true },
-    h('summary', {}, h('h2', {}, 'On this device')),
+  const section = h('section', { className: 'section' },
+    h('h2', {}, 'On this device'),
     h('p', { className: 'dim' },
       'These projects are saved in this browser, on this device only. Nothing is sent to a server, and no account is needed. ' +
       'Clearing your browser\'s site data deletes them, so export a project file to keep a backup.'),
     h('div', { className: 'row' }, h('button', { type: 'button', onclick: () => picker.click() }, 'Import file')),
     picker, status, err, list,
-    me ? null : h('p', { className: 'dim' }, 'Want cloud storage and to edit with others in real time? ', h('a', { href: '#/login' }, 'Sign in to mobdaw Pro'), '.'))
+    me ? null : h('p', { className: 'dim' }, h('a', { href: '#/login' }, 'Sign in'), ' or ', h('a', { href: '#/register' }, 'create a free account'), '. Cloud storage and real-time editing with others are part of mobdaw Pro.'))
   render()
   return section
 }

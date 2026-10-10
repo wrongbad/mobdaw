@@ -83,8 +83,8 @@ export function cloudSection(me: Me): HTMLElement {
       h('div', { className: 'row' }, pick, role))])
   }
 
-  const section = h('details', { className: 'section', open: true },
-    h('summary', {}, h('h2', {}, 'Cloud')),
+  const section = h('section', { className: 'section' },
+    h('h2', {}, 'Cloud'),
     err, list)
   render().catch((e) => (err.textContent = describeError(e)))
   return section

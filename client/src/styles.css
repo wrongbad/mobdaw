@@ -30,13 +30,11 @@ main.center { margin: auto; text-align: center; }
 .row input { flex: 1; }
 .list { list-style: none; padding: 0; margin: 0; }
 .list li { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--line); }
-.section > summary { cursor: pointer; list-style: none; }
-.section > summary::-webkit-details-marker { display: none; }
-.section > summary h2 { display: inline; }
-.section > summary::before { content: '▾'; margin-right: 8px; color: var(--dim); }
-.section:not([open]) > summary::before { content: '▸'; }
+summary { cursor: pointer; list-style: none; }
+summary::-webkit-details-marker { display: none; }
 .menu { position: relative; }
 .menu > summary { cursor: pointer; }
+.menu > summary.dim:hover, .menu[open] > summary.dim { color: var(--fg); }
 .menu > div {
   position: absolute; right: 0; top: 100%; z-index: 10; margin-top: 6px; min-width: 120px;
   display: flex; flex-direction: column; gap: 10px; padding: 10px 14px;

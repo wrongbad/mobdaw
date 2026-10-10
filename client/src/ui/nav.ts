@@ -16,7 +16,7 @@ export function nav(me: Me | null): HTMLElement {
         h('a', { href: '#/uploads' }, 'uploads'),
         me.isAdmin ? h('a', { href: '#/admin' }, 'invites') : null,
         h('a', { href: '#/login', onclick: () => api.logout() }, 'log out')))
-      : h('a', { href: '#/login' }, 'sign in to Pro'),
+      : h('a', { href: '#/login' }, 'sign in'),
   )
   const banner = !me ? null
     : me.planStatus === 'read_only' && me.retentionEndsAt ? retentionBanner(me.retentionEndsAt)
