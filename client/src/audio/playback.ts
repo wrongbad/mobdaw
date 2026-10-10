@@ -3,11 +3,13 @@ import type * as Y from 'yjs'
 import { Bridge, type Drag, type PreviewMode, type PreviewTransport } from './bridge'
 import { getCtx } from './context'
 import { EngineHost } from './engine-host'
+import { Recorder } from './recording'
 import { getSampleBuffer, playable } from '../samples'
 
 export type Playback = ReturnType<typeof openPlayback>
 
-export function openPlayback(doc: Y.Doc, projectId: string, rate: number) {
+/** `me` is the signed-in user's id: it may load its own 'incoming' takes, which are only on this device. */
+export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: number | null) {
   const ctx = getCtx(rate)
   const hostP = EngineHost.create(ctx).then((h) => {
     h.node.connect(ctx.destination)
@@ -25,14 +27,18 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number) {
       source: (h, ch, frames) => void hostP.then((x) => x.source(h, ch, frames), () => {}),
     },
     async (hash, meta) => {
-      if (!playable(meta)) return null
-      const buf = await getSampleBuffer(projectId, hash, rate)
+      if (!playable(meta) || meta.status === 'missing') return null
+      const buf = await getSampleBuffer(projectId, hash, rate, meta.status === 'incoming')
       return Array.from({ length: buf.numberOfChannels }, (_, i) => buf.getChannelData(i).slice())
     },
     rate,
+    undefined,
+    me,
   )
+  const recorder = new Recorder(ctx, hostP, rate)
   return {
     rate,
+    recorder,
     get playing() { return bridge.isPlaying },
     position: () => bridge.position(),
     play(from?: number) {
@@ -60,6 +66,7 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number) {
     live: (deviceId: string, paramId: number, v: number) => bridge.live(deviceId, paramId, v),
     setOverrides: (d: Drag[]) => bridge.setOverrides(d),
     destroy() {
+      recorder.disarm(true)
       bridge.stop()
       bridge.destroy()
       void hostP.then((h) => h.dispose(), () => {})

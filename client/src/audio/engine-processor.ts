@@ -42,6 +42,8 @@ class EngineProcessor extends AudioWorkletProcessor {
   private loopers = new Set<number>()
   private loopersSounding = false
   private warned = new Set<string>()
+  /** Input capture (docs/engine.md §9.2): armed by a 'record' message, begins with the engine playing. */
+  private rec: { channels: number; buf: Float32Array[]; fill: number; started: boolean; next: number; ended: boolean } | null = null
 
   constructor(options: { processorOptions: { wasmBytes: ArrayBuffer } }) {
     super()
@@ -57,6 +59,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (m?.type === 'param') this.x.engine_set_param(this.e, m.id, m.value)
       else if (m?.type === 'call') this.call(m.fn, m.args)
       else if (m?.type === 'source') this.loadSource(m.h, m.channels, m.frames)
+      else if (m?.type === 'record') this.record(m.on, m.channels)
     }
     this.port.postMessage({ type: 'ready' })
   }
@@ -108,15 +111,61 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.x.engine_source_ready(this.e, h)
   }
 
+  private record(on: boolean, channels = 1) {
+    if (on) {
+      this.rec = { channels, buf: [], fill: 0, started: false, next: 0, ended: false }
+      this.rec.buf = this.fresh(this.rec)
+    } else if (this.rec) {
+      this.flush(true)
+      this.rec = null
+    }
+  }
+
+  private fresh(r: { channels: number }) {
+    return Array.from({ length: r.channels }, () => new Float32Array(sampleRate)) // ~1 s chunks
+  }
+
+  /** Hand the captured frames to the main thread (transferred, not copied). */
+  private flush(final = false) {
+    const r = this.rec!
+    const ch = r.buf.map((b) => (r.fill < b.length ? b.slice(0, r.fill) : b))
+    this.port.postMessage({ type: 'rec', channels: ch, frames: r.fill, final }, ch.map((c) => c.buffer))
+    r.buf = this.fresh(r)
+    r.fill = 0
+  }
+
+  /** Copy this call's input into the take. Runs in the same call that advances the engine, so frame i is timeline sample start+i. */
+  private capture(input: Float32Array[] | undefined, frames: number) {
+    const r = this.rec!
+    for (let c = 0; c < r.channels; c++) {
+      const src = input?.[c] // an unconnected or narrower input records silence
+      if (src) r.buf[c].set(src.subarray(0, frames), r.fill)
+    }
+    r.fill += frames
+    if (r.fill >= r.buf[0].length) this.flush()
+  }
+
   private report() {
     if (typeof this.x.engine_position !== 'function') return
     this.sinceReport = 0
     this.port.postMessage({ type: 'pos', pos: this.x.engine_position(this.e), playing: this.x.engine_is_playing(this.e) === 1 })
   }
 
-  process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
+  process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
     const out = outputs[0]
     const total = out[0].length
+    const r = this.rec
+    if (r && !r.ended && this.x.engine_is_playing(this.e) === 1) {
+      const pos = this.x.engine_position(this.e)
+      if (!r.started) {
+        r.started = true
+        r.next = pos
+        this.port.postMessage({ type: 'recstart', pos }) // the timeline sample of the first captured frame
+      }
+      // A take is one continuous stretch of the timeline: if the transport jumped, capture ends here.
+      if (pos === r.next) this.capture(inputs[0], total), (r.next = pos + total)
+      else r.ended = true
+    } else if (r?.started) r.ended = true // stopped: a later play must not append to this take
     for (let at = 0; at < total; at += BLOCK) {
       const n = Math.min(BLOCK, total - at)
       this.x.engine_process(this.e, n)

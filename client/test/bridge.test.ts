@@ -4,7 +4,7 @@ import {
   addAudioClip, addDevice, MASTER_TRACK, devicesMap, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
   addLane, addPoint, deleteLane, evalPoints, getLanes, getPoints, laneOf, setLaneEnabled, setLaneState, updateLaneLfo, updatePoint, resolveTarget,
   getClips, getLoopers, getSampleRate, getTracks, migrateToV2, notesMap, setParam, splitClip, sweepOrphans, tracksMap,
-  updateClip, updateLooper, updateNote, updateTrack, type SampleMeta,
+  updateClip, updateLooper, updateNote, updateTrack, type SampleMeta, setSampleStatus, discardSample, getSamples, undoScope,
 } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 
@@ -136,6 +136,64 @@ describe('bridge', () => {
     await new Promise((r) => setTimeout(r))
     expect(loads).toEqual(['h'])
     expect(sources).toEqual([[3, 2, 4]]) // handles: track 1, clip 2, source 3
+  })
+
+  it('does not request incoming or missing sources, except incoming ones of the local user', async () => {
+    const loads: string[] = []
+    const mk = (me?: number) => {
+      const doc = new Y.Doc()
+      const t = addTrack(doc, 'a')
+      for (const h of ['mine', 'theirs', 'gone', 'plain']) addAudioClip(doc, { trackId: t, sourceHash: h, start: 0, length: 10 })
+      addSample(doc, { ...meta('mine'), status: 'incoming', by: 1 })
+      addSample(doc, { ...meta('theirs'), status: 'incoming', by: 2 })
+      addSample(doc, { ...meta('gone'), status: 'missing' })
+      addSample(doc, meta('plain'))
+      const b = new Bridge(doc, { call() {}, source() {} }, async (hash) => (loads.push(hash), null), 48000, () => 0, me)
+      return { doc, b }
+    }
+    mk(1)
+    await new Promise((r) => setTimeout(r))
+    expect(loads.sort()).toEqual(['mine', 'plain'])
+    loads.length = 0
+    const { doc } = mk(2)
+    await new Promise((r) => setTimeout(r))
+    expect(loads.sort()).toEqual(['plain', 'theirs'])
+    // once uploaded (status cleared) everyone's engine fetches it
+    loads.length = 0
+    setSampleStatus(doc, 'mine', undefined)
+    await new Promise((r) => setTimeout(r))
+    expect(loads).toEqual(['mine'])
+  })
+
+  it('discardSample deletes the sample and every clip that plays it', () => {
+    const { doc } = setup()
+    const t = addTrack(doc, 'a')
+    addSample(doc, { ...meta('x'), status: 'incoming', by: 1 })
+    addAudioClip(doc, { trackId: t, sourceHash: 'x', start: 0, length: 10 })
+    addAudioClip(doc, { trackId: t, sourceHash: 'x', start: 20, length: 10 })
+    const keep = addAudioClip(doc, { trackId: t, sourceHash: 'y', start: 40, length: 10 })
+    discardSample(doc, 'x')
+    expect(getClips(doc).map((c) => c.id)).toEqual([keep])
+    expect(getSamples(doc).x).toBeUndefined()
+  })
+
+  it('discardSample with an untracked origin is not undoable (the clips would come back without their audio)', () => {
+    const doc = new Y.Doc()
+    const undo = new Y.UndoManager(undoScope(doc))
+    const t = addTrack(doc, 'a')
+    addSample(doc, meta('x'))
+    addAudioClip(doc, { trackId: t, sourceHash: 'x', start: 0, length: 10 })
+    undo.stopCapturing()
+    discardSample(doc, 'x', 'takes')
+    undo.undo()
+    expect(getClips(doc)).toEqual([])
+  })
+
+  it('setSampleStatus clears who recorded a take along with its status', () => {
+    const doc = new Y.Doc()
+    addSample(doc, { ...meta('x'), status: 'incoming', by: 1, byName: 'kyle', peaks: 'AA==' })
+    setSampleStatus(doc, 'x', undefined)
+    expect(getSamples(doc).x).toEqual({ ...meta('x'), peaks: 'AA==' })
   })
 
   it('transport extrapolates between engine position reports', () => {

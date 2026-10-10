@@ -2,9 +2,13 @@ import type { Me, ProjectDetail, ProjectSummary } from '@mobdaw/shared'
 import { api } from '../api'
 import { h } from '../dom'
 import { describeError } from '../errors'
+import { deleteProjectAudio } from '../local/audio'
 import { dateOf } from '../format'
 import { cloudToLocal } from '../transfer'
 import { projectTile, type TileAction } from '../ui/tile'
+
+/** A cloud project we no longer have: drop the takes this device staged for it (docs/engine.md §9.3). */
+const forgetTakes = (id: string) => deleteProjectAudio(id).catch(() => {})
 
 /** The account's cloud projects: owned, shared with you, and the way to create one. */
 export function cloudSection(me: Me): HTMLElement {
@@ -45,7 +49,7 @@ export function cloudSection(me: Me): HTMLElement {
       href: `#/project/${p.id}`, name: p.name, details, preview: () => api.projectPreview(p.id), actions, extra,
     })
     if (!d) {
-      actions.push({ label: 'Leave', danger: true, onclick: () => confirm(`Leave "${p.name}"?`) && act(() => api.leaveProject(p.id)) })
+      actions.push({ label: 'Leave', danger: true, onclick: () => confirm(`Leave "${p.name}"?`) && act(() => api.leaveProject(p.id).then(() => forgetTakes(p.id))) })
       return tile()
     }
     actions.push(
@@ -54,7 +58,7 @@ export function cloudSection(me: Me): HTMLElement {
         if (n && n !== p.name) act(() => api.renameProject(p.id, n))
       } },
       { label: 'Delete', danger: true, onclick: () => {
-        if (confirm(`Delete "${p.name}"? This deletes it for all members and cannot be undone.`)) act(() => api.deleteProject(p.id))
+        if (confirm(`Delete "${p.name}"? This deletes it for all members and cannot be undone.`)) act(() => api.deleteProject(p.id).then(() => forgetTakes(p.id)))
       } })
 
     // Members: change role / remove, and share with someone new.

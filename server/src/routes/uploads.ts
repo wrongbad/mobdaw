@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
 import type { UploadAnalysis, UploadInfo } from '@mobdaw/shared'
 import { isDevUser, memberRole, requireSignedIn, type Ctx, type Env } from '../auth.ts'
+import { markMissing, type Collab } from '../collab.ts'
 import { isHash, type Storage } from '../storage/index.ts'
-import { getUpload, tombstoneUpload } from '../uploads.ts'
+import { getUpload, linksOf, tombstoneUpload } from '../uploads.ts'
 import { sweepSamples } from './samples.ts'
 
 const str = (v: unknown, max: number) => (typeof v === 'string' && v.length <= max ? v : null)
@@ -22,7 +23,7 @@ export function validAnalysis(b: unknown): UploadAnalysis | null {
 }
 
 /** The caller's own uploads, mounted at /uploads. Only the owner can see, download or delete an upload. */
-export function uploadRoutes(ctx: Ctx, storage: Storage) {
+export function uploadRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
   const { db } = ctx
   const r = new Hono<Env>()
   r.use('*', requireSignedIn)
@@ -54,8 +55,10 @@ export function uploadRoutes(ctx: Ctx, storage: Storage) {
 
   r.delete('/:hash', (c) => {
     const hash = c.req.param('hash')
+    const links = isHash(hash) ? linksOf(db, c.var.session!.id, hash) : []
     if (!isHash(hash) || !tombstoneUpload(db, c.var.session!.id, hash)) return c.json({ error: 'not_found' }, 404)
     void sweepSamples(ctx, storage).catch((e) => console.error('sweep failed', e))
+    void markMissing(ctx, collab, links)
     return c.json({ ok: true })
   })
 

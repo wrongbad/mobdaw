@@ -14,6 +14,8 @@ export type Session = {
   awareness: Awareness
   undo: Y.UndoManager
   user: AwarenessState['user']
+  /** The signed-in account's id; null in a project on this device. */
+  userId: number | null
   /** Resolves once the document is loaded (from the server, or from this device). */
   synced: Promise<void>
   setLocal(patch: Partial<Omit<AwarenessState, 'user'>>): void
@@ -22,7 +24,7 @@ export type Session = {
 }
 
 /** Y.Doc + provider + awareness + undo for one project. Call destroy() on route leave. */
-export function openSession(projectId: string, me: Pick<Me, 'username'>): Session {
+export function openSession(projectId: string, me: Pick<Me, 'id' | 'username'>): Session {
   const doc = new Y.Doc()
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const provider = new HocuspocusProvider({
@@ -38,7 +40,7 @@ export function openSession(projectId: string, me: Pick<Me, 'username'>): Sessio
   const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
   const synced = new Promise<void>((resolve) => (provider.synced ? resolve() : provider.on('synced', () => resolve())))
   return {
-    projectId, doc, provider, local: false, awareness, undo, user, synced,
+    projectId, doc, provider, local: false, awareness, undo, user, userId: me.id, synced,
     setLocal: (patch) => {
       for (const [k, v] of Object.entries(patch)) awareness.setLocalStateField(k, v)
     },

@@ -6,14 +6,16 @@ import {
   deleteDevice, deleteLooper, addNextLooper, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
-  type Point, type Track,
+  type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
 import { homeLink } from '../router'
-import { drawWave, onPeaks, peaksFor } from '../audio/peaks'
+import { drawWave, onPeaks, peaksFor, storedPeaks } from '../audio/peaks'
+import { getInputOffset, setInputOffset, type Captured } from '../audio/recording'
 import type { PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
 import { h } from '../dom'
-import { importFile, playable } from '../samples'
+import { importFile, playable, PLAYBACK_MAX_BYTES } from '../samples'
+import { discardTake, finishTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, takeJournal, uploadAll, uploadTake, type TakeCtx } from '../takes'
 import type { Session } from '../project/session'
 import { chatPanel } from './chat'
 import { NO_AUTO, autoRow, automateMenu, type AutoInfo } from './automation'
@@ -39,7 +41,7 @@ type Card = ReturnType<typeof deviceCard>
 type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
   el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; mute: HTMLButtonElement; solo: HTMLButtonElement
-  gain: HTMLInputElement; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
+  record: HTMLButtonElement | null; gain: HTMLInputElement; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
   synthMore: HTMLButtonElement; synthRow: HTMLElement; synth: HTMLElement; cards: Map<string, Card>
   loopMore: HTMLButtonElement; loopRow: HTMLElement; loops: HTMLElement
   loopCards: Map<string, ReturnType<typeof looperCard>>; boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
@@ -66,6 +68,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   let editing: string | null = null // MIDI clip zoomed into its note editor
   let noteSel: string | null = null
   const expanded = new Set<string>() // local UI state: tracks showing their FX chain
+  let armedTrack: string | null = null // audio track armed for recording (local UI state, never in the doc)
+  let take: { trackId: string; trackName: string; start: number; journal: ReturnType<typeof takeJournal> } | null = null // the take being recorded
+  let locks = new Map<string, string>() // track id -> who is recording on it (someone else)
+  const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
+  const recRegions = new Map<string, HTMLElement>()
   let armed: string | null = null // looper whose region is being drawn (local UI state)
   let padSel: string | null = null // selected pad
   const srcClosed = new Set<string>() // soundscapes with the source lane collapsed (open by default)
@@ -83,7 +90,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
   let destroyed = false
 
   // --- static structure
-  const transport = transportControls({ title: 'play / pause (space)', onToggle: () => toggle() })
+  const transport = transportControls({
+    title: 'play / pause (space)', onToggle: () => toggle(),
+    record: readOnly ? undefined : { onToggle: () => void toggleRecord(), onMenu: (e) => offsetMenu(e) },
+  })
   const status = h('span', { className: 'dim' })
   const presence = h('span', { className: 'presence' })
   const chatBtn = h('button', { className: 'chat-btn', title: 'chat', onclick: () => {
@@ -176,15 +186,124 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     }
   }
   function stop() {
+    const t = take
+    take = null
+    const captured = t ? pb?.recorder.stop() : undefined // (asks the worklet to end the take before the engine stops)
     pb?.stop()
     transport.setPlaying(false)
-    s.setLocal({ playhead: null })
+    s.setLocal({ playhead: null, ...(t ? { recording: null } : {}) })
     draw()
     ensurePreviewTick() // let the loopers' playheads clear
+    if (t && captured) void saveTake(t, captured)
+  }
+
+  // --- recording (docs/engine.md §9)
+  /** R: arm this audio track (the first time, ask for the microphone) or disarm it. */
+  async function arm(id: string) {
+    if (!pb || take) return
+    if (armedTrack === id) {
+      armedTrack = null
+      pb.recorder.disarm()
+      return draw()
+    }
+    try {
+      await pb.recorder.arm()
+    } catch (err) {
+      status.textContent = `record: ${(err as Error).message}`
+      return
+    }
+    status.textContent = ''
+    armedTrack = id
+    draw()
+  }
+
+  /** ●: play and capture from the playhead; again to stop. */
+  async function toggleRecord() {
+    if (!pb || readOnly) return
+    if (take) return stop()
+    const trackId = armedTrack
+    if (!trackId || !tracksMap(doc).has(trackId)) {
+      status.textContent = 'arm an audio track with R, then record'
+      return
+    }
+    const from = Math.round(position()) // (while playing, capture begins at the engine's next block: the recorder reports where)
+    const info = { trackId, trackName: String(tracksMap(doc).get(trackId)!.get('name')) }
+    const journal = takeJournal(s.projectId, info, rate, pb.recorder.info!.channels)
+    try {
+      pb.recorder.start((pcm, seq) => journal.chunk(pcm, seq), (pos) => journal.header(pos, pb!.recorder.latency()))
+    } catch (err) {
+      status.textContent = `record: ${(err as Error).message}`
+      return
+    }
+    take = { ...info, start: from, journal }
+    status.textContent = ''
+    s.setLocal({ recording: { trackId, start: from } })
+    if (!pb.playing) pb.play(from)
+    transport.setPlaying(true)
+    tick()
+    ensurePreviewTick()
+    draw()
+  }
+
+  async function saveTake(t: NonNullable<typeof take>, captured: Promise<Captured | null>) {
+    const cap = await captured
+    if (!cap) return t.journal.discard(), t.journal.release()
+    status.textContent = 'saving take…'
+    undo.stopCapturing()
+    try {
+      await finishTake(takeCtx(), { ...cap, trackId: t.trackId, trackName: t.trackName })
+      status.textContent = ''
+      await t.journal.settled()
+      t.journal.discard() // (on failure the backup stays, and is recovered next time)
+    } catch (err) {
+      status.textContent = `take: ${(err as Error).message}`
+    }
+    t.journal.release()
+    undo.stopCapturing()
+  }
+
+  const takeCtx = (): TakeCtx => ({ doc, projectId: s.projectId, me: s.userId == null ? null : { id: s.userId, name: s.user.username }, rate })
+
+  /** Right-click on ●: the manual input delay for the microphone in use (added to the automatic compensation). */
+  function offsetMenu(e: MouseEvent) {
+    const info = pb?.recorder.info
+    if (!info) {
+      status.textContent = 'arm a track to set the input offset of its microphone'
+      return
+    }
+    popover(e.currentTarget as HTMLElement, [[`Input offset: ${getInputOffset(info.deviceId)} ms (change…)`, () => {
+      const v = prompt(`Extra input delay in ms for "${info.label || 'this microphone'}".\nPositive if takes land late, negative if early.`, String(getInputOffset(info.deviceId)))
+      if (v != null && Number.isFinite(Number(v))) setInputOffset(info.deviceId, Number(v))
+    }]])
+  }
+
+  /** The growing regions of takes in progress: ours, and other people's (from their awareness). */
+  function drawRecRegions() {
+    const want = new Map<string, { trackId: string; start: number; end: number; label: string }>()
+    if (take) want.set('me', { trackId: take.trackId, start: take.start, end: position(), label: 'recording' })
+    for (const r of s.remoteStates()) {
+      if (r.recording) want.set(`${r.user.username}:${r.recording.trackId}`, { ...r.recording, end: r.playhead ?? r.recording.start, label: `${r.user.username} is recording` })
+    }
+    for (const [k, e] of recRegions) if (!want.has(k)) { e.remove(); recRegions.delete(k) }
+    for (const [k, w] of want) {
+      const body = lanes.get(w.trackId)?.body
+      if (!body) continue
+      let e = recRegions.get(k)
+      if (!e) recRegions.set(k, (e = h('div', { className: 'clip recording' }, w.label)))
+      if (e.parentElement !== body) body.append(e)
+      e.style.left = `${x(w.start)}px`
+      e.style.width = `${Math.max(2, x(Math.max(w.start, w.end) - w.start))}px`
+    }
   }
   let lastAware = 0
   function tick() {
     if (destroyed || !pb?.playing) return
+    // A take over the playback limit couldn't be played back: end it there (16-bit, so 2 bytes a sample).
+    if (take && (position() - take.start) * pb.recorder.info!.channels * 2 >= PLAYBACK_MAX_BYTES - 1024 * 1024) {
+      stop()
+      status.textContent = 'take stopped: it reached the longest take that can be played back yet'
+      return
+    }
     drawPlayhead()
     const now = performance.now()
     if (now - lastAware > 100) {
@@ -199,8 +318,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     playhead.style.left = `${HEADER + x(p)}px`
     rulerHead.style.left = `${x(p)}px`
     transport.setTime(p / rate)
+    drawRecRegions()
   }
   function seek(smp: number) {
+    if (take) return // a take is one continuous stretch of the timeline
     pb?.seek(smp)
     drawPlayhead()
   }
@@ -351,9 +472,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       updateTrack(doc, t.id, { soloed: !tracksMap(doc).get(t.id)?.get('soloed') })
     } }, 'S')
     solo.disabled = readOnly
-    // TODO: wire up once recording exists.
-    const record = h('button', { className: 'record', title: 'record' }, 'R')
-    record.disabled = readOnly
+    const record = t.kind === 'audio' ? h('button', { className: 'record', title: 'arm for recording', onclick: () => void arm(t.id) }, 'R') : null
+    if (record) record.disabled = readOnly
     const gain = h('input', { type: 'range', min: 0, max: 1, step: 0.01, title: 'gain', disabled: readOnly })
     gain.oninput = () => updateTrack(doc, t.id, { gain: Number(gain.value) })
     gain.onpointerdown = () => undo.stopCapturing()
@@ -361,10 +481,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       if (!expanded.delete(t.id)) expanded.add(t.id)
       draw()
     } }, 'fx')
-    const delTrack = () => confirm('Delete this track and its clips?') && deleteTrack(doc, t.id)
+    const delTrack = () => !locks.has(t.id) && confirm('Delete this track and its clips?') && deleteTrack(doc, t.id)
     const del = h('button', { className: 'x', title: 'delete track', onclick: delTrack }, '×')
     const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl' }, mute, solo, record), h('div', { className: 'ctl' }, gain), readOnly ? null : del)
-    deleteMenu(head, 'Delete track', delTrack, () => !readOnly)
+    deleteMenu(head, 'Delete track', delTrack, () => !readOnly && !locks.has(t.id))
     const body = h('div', { className: 'lane-body', 'data-track': t.id })
     body.onpointerdown = (e) => {
       if (e.target !== body) return
@@ -420,7 +540,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     const row = h('div', { className: 'lane-row' }, head, body)
     const auto = makeAutoSection(t.id)
     l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el), row, body, name, mute, solo, gain, more,
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el), row, body, name, mute, solo, record, gain, more,
       fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
       pads: new Map(), auto, loopTc, src,
     }
@@ -833,6 +953,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       if (d) remoteDrags.set(d.deviceId, (remoteDrags.get(d.deviceId) ?? new Map()).set(d.paramId, d.value))
     }
     pb?.setOverrides(remote.flatMap((r) => (r.dragging ? [r.dragging] : [])))
+    locks = new Map(remote.flatMap((r) => (r.recording ? [[r.recording.trackId, r.user.username] as [string, string]] : [])))
 
     if (editing && clipsMap(doc).get(editing)?.get('kind') !== 'midi') editing = null
     const editTrack = editing ? clips.find((c) => c.id === editing)?.trackId : undefined
@@ -841,6 +962,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     hint.hidden = tracks.length > 0
     const ids = new Set(tracks.map((t) => t.id))
     for (const [id, l] of lanes) if (!ids.has(id)) { l.el.remove(); lanes.delete(id) }
+    if (armedTrack && !ids.has(armedTrack)) { // the armed track was deleted
+      armedTrack = null
+      if (!take) pb?.recorder.disarm()
+    }
+    transport.setRecord(!!armedTrack, !!take)
     tracks.forEach((t, i) => {
       const l = laneFor(t)
       if (laneBox.children[i] !== l.el) laneBox.insertBefore(l.el, laneBox.children[i] ?? null)
@@ -848,6 +974,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       l.el.dataset.kind = t.kind
       l.el.classList.toggle('editing', t.id === editTrack)
       if (l.name.textContent !== t.name) l.name.textContent = t.name
+      l.el.classList.toggle('locked', locks.has(t.id))
+      l.record?.classList.toggle('on', armedTrack === t.id)
       l.mute.classList.toggle('on', t.muted)
       l.solo.classList.toggle('on', t.soloed)
       if (document.activeElement !== l.gain) l.gain.value = String(t.gain)
@@ -887,11 +1015,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
           e.append(w.cv, w.label)
         }
         e.onpointerdown = (ev) => clipDown(ev, c.id)
-        deleteMenu(e, 'Delete clip', () => { // the whole selection if this clip is in it
-          const ids = selection.includes(c.id) ? [...selection] : [c.id]
-          doc.transact(() => ids.forEach((id) => deleteClip(doc, id)))
-          select([])
-        }, () => !readOnly)
+        e.addEventListener('contextmenu', (ev) => {
+          ev.preventDefault()
+          ev.stopPropagation() // not the lane's background menu underneath
+          const trackId = String(clipsMap(doc).get(c.id)?.get('trackId'))
+          if (!readOnly && !locks.has(trackId)) popover(e!, clipMenu(c.id), [ev.clientX, ev.clientY])
+        })
         clipEls.set(c.id, e)
       }
       const host = lane.src ? lane.src.body : lane.body // source clips are drawn in the source lane's own scale
@@ -904,10 +1033,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       if (c.kind === 'audio') {
         const meta = samples[c.sourceHash]
         canPlay = !!meta && playable(meta)
-        const label = meta ? (canPlay ? meta.name : `${meta.name} · too long to play yet`) : '…'
+        const st = meta?.status // incoming and missing audio is drawn from the stored peaks (docs/engine.md §9.3)
+        let label = meta ? (canPlay ? meta.name : `${meta.name} · too long to play yet`) : '…'
+        if (st === 'incoming') label = `${meta.name} · ${incomingLabel(meta)}`
+        else if (st === 'missing') label = `${meta.name} · audio deleted`
+        e.classList.toggle('incoming', st === 'incoming')
+        e.classList.toggle('missing', st === 'missing')
         const w = waves.get(c.id)!
         if (w.label.textContent !== label) w.label.textContent = label
-        const pk = pb && canPlay ? peaksFor(s.projectId, c.sourceHash, rate) : undefined
+        const pk = !pb || !canPlay ? undefined : st ? storedPeaks(meta, rate) : peaksFor(s.projectId, c.sourceHash, rate)
         if (pk) drawVisibleWave(c, w, pk, width, lane.src ? { pps: cpps, scroller: lane.src.view, off: 0 } : { pps, scroller: scroll, off: HEADER })
         else w.cv.style.display = 'none'
       } else drawMidiClip(e, c, notes.filter((n) => n.clipId === c.id), c.id === editing)
@@ -1019,7 +1153,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       draw()
     }
     select([id])
-    if (readOnly || lane0?.src) return zoom() // source audio stays anchored: only the loop windows move
+    if (readOnly || lane0?.src || locks.has(clip.trackId)) return zoom() // source audio stays anchored: only the loop windows move
     undo.stopCapturing()
     ev.preventDefault()
     const grab = ev.clientX - box.left // where in the clip it was picked up
@@ -1092,8 +1226,55 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     return l?.src ? { el: l.src.body, pps: l.src.pps } : { el: l?.body ?? content, pps }
   }
 
+  // --- incoming takes (docs/engine.md §9.3)
+  /** Whether this device still has the audio of an incoming take of ours (assumed while the check runs). */
+  function stagedHere(hash: string) {
+    if (!staged.has(hash)) {
+      staged.set(hash, true)
+      void hasStaged(s.projectId, hash).then((v) => v === staged.get(hash) || (staged.set(hash, v), schedule()))
+    }
+    return staged.get(hash)!
+  }
+  function incomingLabel(m: SampleMeta) {
+    const mine = isMine(takeCtx(), m)
+    if (mine && stagedHere(m.hash)) return 'local only'
+    return `incoming from ${m.byName ?? 'someone'}${mine ? ', not on this device' : ''}`
+  }
+  const failed = (err: unknown) => (status.textContent = (err as Error).message)
+  function clipMenu(clipId: string): [string, () => void][] {
+    const items: [string, () => void][] = [['Delete clip', () => { // the whole selection if this clip is in it
+      const ids = selection.includes(clipId) ? [...selection] : [clipId]
+      doc.transact(() => ids.forEach((id) => deleteClip(doc, id)))
+      select([])
+    }]]
+    const hash = String(clipsMap(doc).get(clipId)?.get('sourceHash'))
+    const meta = getSamples(doc)[hash]
+    if (meta?.status !== 'incoming') return items
+    const ctx = takeCtx()
+    if (isMine(ctx, meta)) {
+      items.push(['Upload', () => {
+        status.textContent = 'uploading take…'
+        uploadTake(ctx, hash).then(() => (status.textContent = ''), failed)
+      }])
+      if (myTakes(ctx).length > 1) items.push(['Upload all', () => {
+        status.textContent = 'uploading takes…'
+        uploadAll(ctx).then((r) => (status.textContent = r.gone ? `${r.up} uploaded, ${r.gone} not on this device` : ''), failed)
+      }])
+    }
+    items.push(['Discard take', () => {
+      if (!confirm(`Discard "${meta.name}" and every clip that plays it?`)) return
+      discardTake(ctx, hash)
+      select([])
+    }])
+    return items
+  }
+
   // --- file drop
   async function dropFiles(files: File[], trackId: string | null, at: number) {
+    if (trackId && locks.has(trackId)) {
+      status.textContent = `${locks.get(trackId)} is recording on that track`
+      return
+    }
     for (const f of files) {
       status.textContent = `uploading ${f.name}…`
       try {
@@ -1128,14 +1309,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     const tag = (e.target as HTMLElement).tagName
     if (tag === 'SELECT' || (tag === 'INPUT' && (e.target as HTMLInputElement).type !== 'range')) return
     const mod = e.metaKey || e.ctrlKey
-    if (e.code === 'Space') { e.preventDefault(); toggle() }
+    if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void toggleRecord() : toggle() }
     else if (e.key === 'Escape' && (editing || armed || padSel)) { editing = null; noteSel = null; armed = null; padSel = null; draw() }
     else if (readOnly) return
     else if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? undo.redo() : undo.undo() }
     else if (!mod && e.key.toLowerCase() === 's') {
       const at = Math.round(position())
       // (source clips have their own time axis: the playhead means nothing there)
-      doc.transact(() => selection.filter((id) => !lanes.get(String(clipsMap(doc).get(id)?.get('trackId')))?.src).forEach((id) => splitClip(doc, id, at)))
+      doc.transact(() => unlocked(selection).filter((id) => !lanes.get(String(clipsMap(doc).get(id)?.get('trackId')))?.src).forEach((id) => splitClip(doc, id, at)))
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault()
       if (noteSel) {
@@ -1147,11 +1328,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
         padSel = null
         draw()
       } else {
-        doc.transact(() => selection.forEach((id) => deleteClip(doc, id)))
+        doc.transact(() => unlocked(selection).forEach((id) => deleteClip(doc, id)))
         select([])
       }
     }
   }
+  /** The clips not on a track someone is recording on. */
+  const unlocked = (ids: string[]) => ids.filter((id) => !locks.has(String(clipsMap(doc).get(id)?.get('trackId'))))
   addEventListener('keydown', key)
 
   // --- sync
@@ -1172,8 +1355,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     }
     chat.markSeen()
     rate = getSampleRate(doc)
-    pb = openPlayback(doc, s.projectId, rate)
+    pb = openPlayback(doc, s.projectId, rate, s.userId)
     draw()
+    if (!readOnly) sweepUnusedTakes(takeCtx())
+    if (!readOnly) recoverTakes(takeCtx()).then((n) => {
+      if (n && !destroyed) status.textContent = `recovered ${n} unfinished take${n > 1 ? 's' : ''}`
+    }, (err) => console.warn('take recovery:', err))
   })
   draw()
 
@@ -1185,6 +1372,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
       cancelAnimationFrame(previewRaf)
       removeEventListener('keydown', key)
       removeEventListener('resize', schedule)
+      if (take) s.setLocal({ recording: null }), take.journal.release() // (its backup is recovered on the next open)
       watched.forEach((m) => m.unobserveDeep(schedule))
       s.awareness.off('change', schedule)
       offPeaks()

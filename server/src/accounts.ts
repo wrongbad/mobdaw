@@ -1,10 +1,10 @@
 import { addMonths, docName } from '@mobdaw/shared'
 import { getUser, type Ctx } from './auth.ts'
-import { kick, kickUser, type Collab } from './collab.ts'
+import { kick, kickUser, markMissing, type Collab } from './collab.ts'
 import { tx } from './db.ts'
 import { sweepSamples } from './routes/samples.ts'
 import type { Storage } from './storage/index.ts'
-import { tombstoneAllUploads } from './uploads.ts'
+import { linksOf, tombstoneAllUploads, type Link } from './uploads.ts'
 
 /** How long an account stays read-only after its subscription ends, before its cloud data is deleted (docs/data-policy.md). */
 export const RETENTION_MS = 30 * 24 * 3600 * 1000
@@ -56,8 +56,9 @@ export function endExpiredSubscriptions(ctx: Ctx, collab: Collab | null, now = D
 }
 
 /** Delete every project the user owns (for all its members) and tombstone every upload they own. Runs inside the caller's transaction. */
-function deleteCloudData(ctx: Ctx, userId: number): string[] {
+function deleteCloudData(ctx: Ctx, userId: number): { projects: string[]; links: Link[] } {
   const { db } = ctx
+  const links = linksOf(db, userId) // (the ones in their own projects go with the projects)
   const projects = (db.prepare('SELECT id FROM projects WHERE owner_id = ?').all(userId) as { id: string }[]).map((p) => p.id)
   for (const id of projects) {
     db.prepare('DELETE FROM project_members WHERE project_id = ?').run(id)
@@ -66,7 +67,7 @@ function deleteCloudData(ctx: Ctx, userId: number): string[] {
     db.prepare('DELETE FROM projects WHERE id = ?').run(id)
   }
   tombstoneAllUploads(db, userId) // the sweep then deletes the bytes and refunds the quota
-  return projects
+  return { projects, links }
 }
 
 /**
@@ -76,7 +77,7 @@ function deleteCloudData(ctx: Ctx, userId: number): string[] {
 export function purgeCloudData(ctx: Ctx, collab: Collab | null, userId: number, now = Date.now()): string[] {
   const user = getUser(ctx.db, userId)
   if (!user || user.account_role === 'dev') return []
-  const projects = tx(ctx.db, () => {
+  const { projects, links } = tx(ctx.db, () => {
     const deleted = deleteCloudData(ctx, userId)
     ctx.db.prepare('UPDATE users SET retention_ends_at = NULL, data_purged_at = ? WHERE id = ?').run(now, userId)
     return deleted
@@ -84,6 +85,7 @@ export function purgeCloudData(ctx: Ctx, collab: Collab | null, userId: number, 
   if (collab) {
     for (const id of projects) kick(collab, id)
     kickUser(collab, userId)
+    void markMissing(ctx, collab, links)
   }
   return projects
 }
@@ -96,7 +98,7 @@ export function deleteAccount(ctx: Ctx, collab: Collab | null, userId: number): 
   const { db } = ctx
   const user = getUser(db, userId)
   if (!user || user.account_role === 'dev') return []
-  const projects = tx(db, () => {
+  const { projects, links } = tx(db, () => {
     const deleted = deleteCloudData(ctx, userId)
     db.prepare('DELETE FROM project_members WHERE user_id = ?').run(userId)
     db.prepare('DELETE FROM users WHERE id = ?').run(userId)
@@ -105,6 +107,7 @@ export function deleteAccount(ctx: Ctx, collab: Collab | null, userId: number): 
   if (collab) {
     for (const id of projects) kick(collab, id)
     kickUser(collab, userId)
+    void markMissing(ctx, collab, links)
   }
   return projects
 }

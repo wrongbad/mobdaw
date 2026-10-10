@@ -21,7 +21,7 @@ export function openLocalSession(projectId: string): Session {
   }
   doc.on('update', onUpdate)
   return {
-    projectId, doc, provider: null, local: true, awareness, undo, user,
+    projectId, doc, provider: null, local: true, awareness, undo, user, userId: null,
     synced: persistence.whenSynced.then(() => {}),
     setLocal: (patch) => {
       for (const [k, v] of Object.entries(patch)) awareness.setLocalStateField(k, v)

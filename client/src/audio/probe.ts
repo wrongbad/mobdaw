@@ -6,7 +6,7 @@ import type { AudioInfo } from '@mobdaw/shared'
 /** Columns in a stored waveform. One byte each: the bar height (0..255) on the dB-ish scale `shape` gives. */
 export const PEAK_BUCKETS = 192
 /** Amplitude at (or below) which the drawn wave has zero height. */
-const FLOOR_DB = -48
+export const FLOOR_DB = -48
 /** Above this a compressed file is not decoded just to draw it (decoding holds the whole thing as floats). */
 export const DECODE_MAX_BYTES = 200 * 1024 * 1024
 

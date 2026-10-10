@@ -30,7 +30,11 @@ export class EngineHost {
     const [bytes] = await Promise.all([loadWasm(), addProcessor(ctx)])
     // Each node gets its own copy of the bytes (cloned, not transferred, so we can reuse them).
     const node = new AudioWorkletNode(ctx, 'mobdaw-engine', {
-      numberOfInputs: 0,
+      // One input for recording (never reaches the wasm engine); 'max' takes the mic's own channel count.
+      numberOfInputs: 1,
+      channelCount: 2,
+      channelCountMode: 'max',
+      channelInterpretation: 'discrete',
       numberOfOutputs: 1,
       outputChannelCount: [2],
       processorOptions: { wasmBytes: bytes },
@@ -45,6 +49,8 @@ export class EngineHost {
       if (ev.data?.type === 'pos') host.onpos?.(ev.data)
       else if (ev.data?.type === 'preview') host.onpreview?.(ev.data)
       else if (ev.data?.type === 'loopers') host.onloopers?.(ev.data)
+      else if (ev.data?.type === 'recstart') host.onrecstart?.(ev.data)
+      else if (ev.data?.type === 'rec') host.onrec?.(ev.data)
     }
     return host
   }
@@ -56,6 +62,16 @@ export class EngineHost {
 
   /** Called with the processor's {type:'loopers'} messages: `[handle, source sample]` per sounding looper. */
   onloopers: ((m: { heads: [number, number][] }) => void) | null = null
+
+  /** Capture began: `pos` is the timeline sample of the first captured frame. */
+  onrecstart: ((m: { pos: number }) => void) | null = null
+  /** A chunk of captured input: planar, one array per channel. The last one has `final`. */
+  onrec: ((m: { channels: Float32Array[]; frames: number; final: boolean }) => void) | null = null
+
+  /** Start (`on`, with the channel count to capture) or end capturing the node's input. Capture begins once the engine plays. */
+  record(on: boolean, channels = 1) {
+    this.node.port.postMessage({ type: 'record', on, channels })
+  }
 
   /** Call `exports[fn](enginePtr, ...args)` in the worklet; calls apply in order. */
   call(fn: string, args: number[] = []) {

@@ -117,7 +117,7 @@ export async function createUser(ctx: Ctx, username: string, password: string, a
 export function getMe(ctx: Ctx, userId: number): Me {
   const u = getUser(ctx.db, userId)!
   return {
-    username: u.username, isAdmin: !!u.is_admin, bytesUsed: u.bytes_used, quotaBytes: ctx.config.userQuotaBytes,
+    id: u.id, username: u.username, isAdmin: !!u.is_admin, bytesUsed: u.bytes_used, quotaBytes: ctx.config.userQuotaBytes,
     // 'lapsed': the retention window is over and the cloud data is gone, but the account lives on.
     planStatus: u.plan_status === 'read_only' && u.data_purged_at ? 'lapsed' : u.plan_status,
     retentionEndsAt: u.plan_status === 'read_only' && !u.data_purged_at ? u.retention_ends_at : null,

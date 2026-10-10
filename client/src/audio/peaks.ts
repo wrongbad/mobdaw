@@ -1,6 +1,6 @@
 // Waveform peaks for clip rendering: max |x| per BUCKET frames (channels folded), drawn on a dB-ish scale.
 import { getSampleBuffer } from '../samples'
-import { shape } from './probe'
+import { FLOOR_DB, peaksFromBase64, shape } from './probe'
 
 export const BUCKET = 64
 
@@ -44,6 +44,29 @@ export function peaksFor(projectId: string, hash: string, rate: number): Float32
       listeners.forEach((fn) => fn())
     })
   return undefined
+}
+
+const stored = new Map<string, Float32Array>()
+
+/**
+ * Peaks from a sample's stored waveform (`SampleMeta.peaks`, 192 columns on the drawn scale), for audio this device can't
+ * read: someone's incoming take, or a deleted upload. Undefined when there are none.
+ */
+export function storedPeaks(meta: { hash: string; duration: number; peaks?: string }, rate: number): Float32Array | undefined {
+  if (!meta.peaks) return
+  const k = `${rate}:${meta.hash}`
+  let out = stored.get(k)
+  if (!out) {
+    const cols = peaksFromBase64(meta.peaks)
+    if (!cols.length) return
+    out = new Float32Array(Math.max(1, Math.ceil((meta.duration * rate) / BUCKET)))
+    for (let i = 0; i < out.length; i++) {
+      const v = cols[Math.min(cols.length - 1, Math.floor((i / out.length) * cols.length))] / 255
+      out[i] = v <= 0 ? 0 : 10 ** (((v - 1) * -FLOOR_DB) / 20) // undo probe's `shape`
+    }
+    stored.set(k, out)
+  }
+  return out
 }
 
 /** One 1px column per canvas pixel, mirrored about the centre line. */

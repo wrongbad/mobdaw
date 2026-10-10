@@ -1,8 +1,8 @@
 // Moving whole projects between "on this device", the cloud, and `.mobdaw` files.
-import { samplesMap, type Me } from '@mobdaw/shared'
+import { samplesMap, setSampleStatus, type Me } from '@mobdaw/shared'
 import * as Y from 'yjs'
 import { api } from './api'
-import { listAudio, putAudio } from './local/audio'
+import { getAudio, listAudio, putAudio } from './local/audio'
 import { createLocal, getLocal, removeLocal, type LocalProject } from './local/projects'
 import { readLocalState, writeLocalState } from './local/session'
 import { readProjectFile, type ProjectContents } from './projectFile'
@@ -20,16 +20,26 @@ export async function collectLocal(id: string): Promise<ProjectContents> {
 }
 
 /** Everything in a cloud project: the live document and the audio it uses (downloaded from the project's library). */
-export async function collectCloud(id: string, me: Pick<Me, 'username'>, progress?: Progress): Promise<ProjectContents> {
+export async function collectCloud(id: string, me: Pick<Me, 'id' | 'username'>, progress?: Progress): Promise<ProjectContents> {
   const detail = await api.project(id)
   const session = openSession(id, me)
   try {
     await session.synced
-    const state = Y.encodeStateAsUpdate(session.doc)
     const metas = Object.values(samplesMap(session.doc).toJSON())
     const audio: ProjectContents['audio'] = []
+    // The copy owns its audio: our own incoming takes come from this device and are ready there (docs/engine.md §9.3).
+    const copy = new Y.Doc()
+    Y.applyUpdate(copy, Y.encodeStateAsUpdate(session.doc))
     for (const [i, m] of metas.entries()) {
       progress?.(`${detail.name}: downloading audio ${i + 1} of ${metas.length}…`)
+      if (m.status === 'incoming') {
+        const row = m.by === me.id ? await getAudio(id, m.hash).catch(() => undefined) : undefined
+        if (row) {
+          audio.push({ hash: m.hash, mime: row.mime, name: row.name, blob: row.blob })
+          setSampleStatus(copy, m.hash, undefined)
+        }
+        continue // someone else's take: not uploaded yet, so it stays incoming in the copy
+      }
       try {
         const { url } = await api.sampleUrl(id, m.hash)
         const res = await fetch(url)
@@ -38,7 +48,7 @@ export async function collectCloud(id: string, me: Pick<Me, 'username'>, progres
         // The audio's owner deleted it: it is simply missing from the project now, as it is for everyone.
       }
     }
-    return { name: detail.name, state, audio }
+    return { name: detail.name, state: Y.encodeStateAsUpdate(copy), audio }
   } finally {
     session.destroy()
   }
@@ -65,7 +75,7 @@ export async function importProjectFile(file: File): Promise<LocalProject> {
  * Put a project from this device into the cloud: a new cloud project owned by the signed-in account, with all of its
  * audio uploaded (each file becomes one of the account's own uploads). The device copy is left in place.
  */
-export async function localToCloud(id: string, me: Pick<Me, 'username'>, progress?: Progress): Promise<string> {
+export async function localToCloud(id: string, me: Pick<Me, 'id' | 'username'>, progress?: Progress): Promise<string> {
   const c = await collectLocal(id)
   const project = await api.createProject({ name: c.name })
   try {
@@ -91,6 +101,6 @@ export async function localToCloud(id: string, me: Pick<Me, 'username'>, progres
 }
 
 /** Copy a cloud project to this device (for working offline, or to keep after a subscription ends). */
-export async function cloudToLocal(id: string, me: Pick<Me, 'username'>, progress?: Progress): Promise<LocalProject> {
+export async function cloudToLocal(id: string, me: Pick<Me, 'id' | 'username'>, progress?: Progress): Promise<LocalProject> {
   return importToLocal(await collectCloud(id, me, progress))
 }

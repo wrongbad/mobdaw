@@ -98,6 +98,8 @@ export class Bridge {
     private loadSource: SourceLoader,
     private rate: number,
     private now: () => number = () => performance.now(),
+    /** The local user's id: an 'incoming' take is only on its recorder's device, so only they may load it. */
+    private me?: number | null,
   ) {
     const watch = (m: Y.AbstractType<any>, fn: (evs: Y.YEvent<any>[]) => void) => {
       m.observeDeep(fn)
@@ -433,6 +435,8 @@ export class Bridge {
     if (this.requested.has(hash)) return
     const meta = samplesMap(this.doc).get(hash)
     if (!meta) return // metadata not synced yet; retried when the samples map changes
+    // Not requested (so retried when the sample changes, e.g. once the take is uploaded): silence until then.
+    if (meta.status === 'missing' || (meta.status === 'incoming' && (meta.by == null || meta.by !== this.me))) return
     this.requested.add(hash)
     const h = this.handle('source', hash)
     this.loadSource(hash, meta).then(

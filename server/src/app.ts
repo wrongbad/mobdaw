@@ -17,7 +17,7 @@ export function createApp(ctx: Ctx, storage: Storage, collab: Collab) {
   api.route('/', accountRoutes(ctx, storage, collab))
   api.route('/projects', projectRoutes(ctx, collab))
   api.route('/projects/:id/samples', sampleRoutes(ctx, storage))
-  api.route('/uploads', uploadRoutes(ctx, storage))
+  api.route('/uploads', uploadRoutes(ctx, storage, collab))
   if (storage.routes) api.route('/storage', storage.routes) // local driver; signature-authorized
   api.notFound((c) => c.json({ error: 'not_found' }, 404))
   api.onError((e, c) => {

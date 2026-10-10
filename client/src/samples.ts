@@ -25,14 +25,15 @@ async function decode(bytes: ArrayBuffer, hash: string, rate: number) {
   return buf
 }
 
-export function getSampleBuffer(projectId: string, hash: string, rate: number): Promise<AudioBuffer> {
+/** `staged`: an incoming take, which is only in this device's store, even in a cloud project. */
+export function getSampleBuffer(projectId: string, hash: string, rate: number, staged = false): Promise<AudioBuffer> {
   const mk = memKey(hash, rate)
   const hit = mem.get(mk)
   if (hit) return Promise.resolve(hit)
   let p = inflight.get(mk)
   if (!p) {
     p = (async () => {
-      if (isLocalId(projectId)) {
+      if (staged || isLocalId(projectId)) {
         const row = await getAudio(projectId, hash)
         if (!row) throw new Error(`sample ${hash.slice(0, 8)}: missing from this device`)
         return decode(await row.blob.arrayBuffer(), hash, rate)
@@ -60,7 +61,7 @@ export const PLAYBACK_MAX_BYTES = 200 * 1024 * 1024
 export const playable = (m: Pick<SampleMeta, 'size'>) => m.size <= PLAYBACK_MAX_BYTES
 
 /** Incremental SHA-256: files can be GBs, so never hold the whole thing in memory. */
-async function sha256Hex(file: File) {
+export async function sha256Hex(file: Blob) {
   const h = await createSHA256()
   const CHUNK = 16 * 1024 * 1024
   for (let i = 0; i < file.size; i += CHUNK) h.update(new Uint8Array(await file.slice(i, i + CHUNK).arrayBuffer()))

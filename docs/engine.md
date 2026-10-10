@@ -61,13 +61,13 @@ uses fractional `order` numbers. As a result:
 | map | key → value (Y.Map unless noted) |
 |---|---|
 | `meta` | `schemaVersion: 2`, `sampleRate`, `guideBpm?` |
-| `tracks` | `{ id, name, kind: 'audio'\|'midi', order, gain, pan, muted, soloed }` |
+| `tracks` | `{ id, name, kind: 'audio'\|'midi'\|'soundscape', order, gain, pan, muted, soloed }` |
 | `clips` | Audio clips: `{ id, trackId, kind:'audio', start, length, sourceHash, sourceOffset, gain, fadeIn, fadeOut, fadeShape }`. MIDI clips: `{ id, trackId, kind:'midi', start, bpm, ppq, lengthTicks }` |
 | `notes` | `{ id, clipId, tick, durTicks, pitch, velocity }` |
 | `devices` | `{ id, trackId, type, order, bypass, params: Y.Map<paramId, number> }` |
 | `lanes` | Automation lanes, one per automated param: `{ id, enabled, order, scope, kind: 'synth'\|'effect'\|'looper', owner, param }`. `scope` is a track id, or `'master'` for the global fx chain; `owner` is the device or looper id; `param` is the device's param id (as a string) or the looper's field name (`gain`, `speed`, `sat`, `cutoff`, `warble`). The registry (`shared/src/params.ts`) resolves it to a range and scale. While `enabled` the lane *replaces* the param's value; the doc keeps the static value, and it comes back when the lane is disabled or deleted. |
 | `points` | `{ id, laneId, pos (timeline samples), value (normalised 0..1 along the param's own scale), curve: 'linear'\|'hold' }`. `curve` shapes the segment *after* the point. |
-| `samples` | Plain objects: `hash → { hash, name, frames, channels, format: 'pcm16'\|'pcm24'\|'f32', size }` |
+| `samples` | Plain objects: `hash → { hash, name, duration, size, mime, status?: 'incoming'\|'missing', by?, peaks? }` (`by` is the recorder's username; `peaks` a base64 waveform). No `status` means the audio is in storage and anyone in the project can load it. See §9 for `incoming` and `missing`. |
 
 - **Track kinds:**
   - An `audio` track sums its audio clips into its device chain.
@@ -254,3 +254,112 @@ existing server tests passing.
    amp envelope, with rolloff modulatable by the envelope.
 7. **Offline bounce/export:** the same engine in a worker, faster than real time, written to
    a WAV file.
+8. **Recording** (§9).
+
+## 9. Recording
+Record from the microphone into an audio track, sample-aligned with the timeline, and share
+the take only when the person who recorded it chooses to.
+
+### 9.1 What the user does
+- **R arms a track.** Arming is only on that user's screen; it's never written to the doc,
+  because it's about *their* microphone. Only one track is armed at a time; arming another
+  disarms the first. R appears on audio tracks only (MIDI recording comes later). The first
+  arm asks for microphone access.
+- **● (next to play, or shift+space) records.** Playback and capture start together from the
+  playhead; pressed while playing, capture starts there (punch in). Plain play never records.
+- **Stop ends the take.** It becomes an audio clip on the armed track, as one undo step.
+- **A take is one continuous stretch of the timeline.** Seeking is ignored while recording,
+  and the worklet ends capture if the engine position ever jumps (or the transport stops), so
+  audio can't land in the wrong place.
+- **Length limit:** a take stops itself just under the playback limit (`PLAYBACK_MAX_BYTES`,
+  about 17 minutes of stereo at 48 kHz), so it can always be played back. This goes away with
+  streaming.
+- Viewers, and accounts that are read-only, can't arm.
+
+### 9.2 Capture
+- **Microphone:** `getUserMedia` with `echoCancellation`, `noiseSuppression` and
+  `autoGainControl` off (call-style processing ruins music). **Channels follow the device:**
+  after permission, apply `channelCount = getCapabilities().channelCount.max`. A stereo mic
+  records stereo; reducing it to mono is an editing operation, not a capture setting.
+- **In the engine's worklet.** The mic source connects to the engine's `AudioWorkletNode`
+  (one input, `channelCountMode: 'max'`). While recording, `process()` copies `inputs[0]`
+  into a buffer in the same call that advances the engine position, so every captured frame
+  maps to a known timeline sample, with no clock matching between threads. Chunks (~1 s)
+  are posted to the main thread, as transferables. Input audio never enters the wasm engine
+  and is not monitored (use direct monitoring on the interface).
+- **Latency.** A take arrives late by output latency + input latency. The clip is placed at
+  `start = position at record start - round((outputLatency + baseLatency + inputLatency + manual) * rate)`,
+  where `inputLatency` is `track.getSettings().latency` (0 when the browser doesn't say) and
+  `manual` is a per-device offset in ms kept in `localStorage` (set from the right-click
+  menu on ●). Anything that would land before sample 0 is trimmed off the front of the take
+  (`sourceOffset`). Automatic loopback calibration comes later.
+- **Format:** 16-bit PCM WAV at the project sample rate, with the device's channel count.
+  Decoding needs no resampling, and it costs ~5.8 MB/min per channel at 48 kHz.
+  Device settings (bit depth, input choice, channel picking) come later.
+- **Crash safety:** a header (track, start position, latency) and each chunk are appended to
+  the `takes` store in `mobdaw-local` (IndexedDB) as they arrive. The recording tab holds a
+  Web Lock named for the take until it's saved. On the next open of the project, backups whose
+  lock is free are finished as normal takes, named "Recovered take", so a take another tab is
+  still recording (or recovering) is never touched. Without Web Locks, a backup idle for 10 s
+  counts as abandoned. The rows are deleted once the take is saved, and with the project
+  (local projects; cloud projects this device deletes or leaves).
+- To verify: whether every browser (Firefox historically) accepts a mic source in a context
+  at a different rate from the device. If one doesn't, resample in the capture path.
+
+### 9.3 Incoming takes (cloud projects)
+A take is staged on the recorder's device and uploaded only when they choose, so they can
+trim junk off it first. It is still a **normal clip in the doc** from the moment recording
+stops, so trimming, moving and fx are ordinary, collaborative, undoable edits, even for
+people who can't hear the audio yet.
+
+- **On stop:** hash the WAV, store it on the device (the same per-project audio store local
+  projects use), and in one transaction add the sample with `status: 'incoming'`, `by` (the
+  recorder's user id, which never changes; usernames can), `byName` (their name, for the
+  label), `peaks` (a low-resolution waveform, base64 via `peaksToBase64`) and the clip.
+- **Playback:** the bridge does not request `incoming` sources, except on the recorder's own
+  device, where it loads them from on-device storage. Everyone else hears silence there and
+  sees the clip drawn from `peaks`, labelled "incoming from <name>".
+- **UI:** an incoming clip pulses (a static dashed outline under `prefers-reduced-motion`),
+  labelled "local only" for its recorder. Its menu offers **Upload** (`uploadToProject`, then
+  clear `status`; every engine then fetches it; the staged copy is then deleted from the
+  device) and **Discard** (delete the sample and every clip using it, in one transaction,
+  after a confirm). Discard is not undoable: the samples map isn't in the undo scope, so undo
+  would bring the clips back without their audio. An **Upload all** action covers a session's
+  worth of takes. Read-only accounts can't edit the doc at all, so they get no menu; their
+  takes stay on the device until they can upload or discard again.
+- **Undone takes:** undoing a take removes its clip but leaves the sample (redo needs it).
+  Upload all only uploads takes some clip plays, and when the project next opens (no undo
+  history left), the recorder's unused incoming samples and their staged audio are deleted.
+- **The whole file is uploaded**, not just the trimmed part: trims change the clip's
+  `sourceOffset` and `length`, not the audio. Consolidating before upload (which changes the
+  hash) can come later.
+- **Lost staging:** if the recorder's device no longer has the audio (storage cleared, or
+  another computer), the clip shows "incoming from <name>, not on this device" and any
+  editor can discard it.
+- **`missing`** reuses the same placeholder for audio whose upload was deleted:
+  silence, peaks if known, labelled "audio deleted". The server sets it: when an upload is
+  deleted (by its owner, or with their account), each project that no longer has anyone's copy
+  of that file gets `status: 'missing'` on the sample, through a Hocuspocus direct connection
+  (`markMissing`, best effort; the admin CLI, which has no live server, doesn't). Importing the
+  same file again replaces the sample and clears it.
+- **Copying to this device** (`collectCloud`): the recorder's own incoming takes come from the
+  device and are ready in the copy; other people's stay `incoming` (silent) there.
+- **Local projects skip all of this:** on stop, the take is imported directly (`importFile`
+  already stores audio on the device) and gets no `status`.
+
+### 9.4 Collaboration: a soft lock
+Yjs has no locks: it accepts and merges every update. A server-enforced lock would mean
+rejecting updates in Hocuspocus, which can't be done partially and leaves the rejected
+client diverged, so we don't.
+
+- While recording, the recorder publishes `recording: { trackId, start }` in **awareness**.
+- Collaborators' UI treats that track as read-only (no deleting it, editing its clips or
+  changing its fx), shows "<name> is recording", and draws the growing region from `start`
+  to the recorder's playhead (also in awareness).
+- It releases itself: awareness is cleared when the connection closes, so a crashed tab
+  can't hold a lock.
+- It isn't airtight: edits made before the lock arrives merge as usual. Recording only adds
+  one clip, so the one damaging race is the track being deleted mid-take; at stop, if the
+  track is gone, the take goes into a new track with the same name.
+- The lock covers recording only. Once stopped, the take is a normal clip and `incoming`
+  says it isn't shared yet.

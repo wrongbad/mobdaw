@@ -13,6 +13,8 @@ export type RegisterRequest = { username: string; password: string; invite: stri
 export type LoginResponse = { token: string; me: Me }
 
 export type Me = {
+  /** Never reused; `username` can change. */
+  id: number
   username: string
   isAdmin: boolean
   bytesUsed: number

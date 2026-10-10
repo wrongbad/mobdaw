@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openDb, type Db } from '../src/db.ts'
 import { createStorage, type Storage } from '../src/storage/index.ts'
-import { ADMIN, admit, login, pw, startTest, until, userId, client, type Client } from './helpers.ts'
+import { addSample, samplesMap } from '@mobdaw/shared'
+import { ADMIN, admit, connect, login, pw, startTest, until, userId, client, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 let admin: Client, alice: Client, bob: Client
@@ -131,6 +132,27 @@ describe('upload ownership', () => {
     expect(await storage.size(id, h)).toBe(15)
     expect((await client(t.base).post('/api/auth/login', { username: 'carol', password: pw('carol') })).status).toBe(401)
     expect((await client(t.base).post('/api/auth/login', { username: 'carol2', password: pw('carol') })).status).toBe(200)
+  })
+})
+
+describe('deleted audio in project documents', () => {
+  it("marks a sample missing in the documents that lose their last copy of it, and leaves the others", async () => {
+    const A = await mk(alice, 'Gone'), B = await mk(alice, 'Kept')
+    await share(alice, B, 'bob')
+    const d = Buffer.alloc(14, 5)
+    const h = await upload(alice, A, d)
+    await upload(alice, B, d)
+    await upload(bob, B, d) // bob's own copy keeps it in B
+    const docs = [A, B].map((id) => connect(t.port, id, alice.token!))
+    for (const { provider } of docs) await until(() => provider.synced)
+    for (const { doc } of docs) addSample(doc, { hash: h, name: 'x', duration: 1, size: 14, mime: 'audio/wav' })
+    for (const { provider } of docs) await until(() => provider.unsyncedChanges === 0)
+
+    expect((await alice.del(`/api/uploads/${h}`)).body).toEqual({ ok: true })
+    await until(() => samplesMap(docs[0].doc).get(h)?.status === 'missing')
+    await new Promise((r) => setTimeout(r, 300)) // (projects are marked one after another)
+    expect(samplesMap(docs[1].doc).get(h)?.status).toBeUndefined()
+    for (const { provider } of docs) provider.destroy()
   })
 })
 

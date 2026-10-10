@@ -81,7 +81,13 @@ export const laneState = (l: Pick<Lane, 'enabled' | 'mode'>): LaneState => (!l.e
 export type AutoCurve = 'linear' | 'hold'
 export type Point = { id: string; laneId: string; pos: number; value: number; curve: AutoCurve }
 export type ChatMessage = { id: string; username: string; color: string; text: string; ts: number }
-export type SampleMeta = { hash: string; name: string; duration: number; size: number; mime: string }
+/**
+ * `status`: absent means the audio is in storage and anyone in the project can load it. 'incoming' is a take still only on
+ * the recorder's device (`by`, their user id; `byName`, their name when recorded); 'missing' is audio whose upload was deleted. `peaks`: base64 waveform
+ * (probe.ts `peaksToBase64`), so clips can be drawn without the audio. See docs/engine.md §9.
+ */
+export type SampleStatus = 'incoming' | 'missing'
+export type SampleMeta = { hash: string; name: string; duration: number; size: number; mime: string; status?: SampleStatus; by?: number; byName?: string; peaks?: string }
 
 export type AwarenessState = {
   user: { username: string; color: string }
@@ -89,6 +95,8 @@ export type AwarenessState = {
   selection?: string[]
   /** In-progress parameter drag; collaborators apply it as a transient override. */
   dragging?: { deviceId: string; paramId: number; value: number } | null
+  /** A take in progress: collaborators treat the track as read-only and draw a growing region from `start` (timeline samples). */
+  recording?: { trackId: string; start: number } | null
 }
 
 export const docName = (projectId: string) => `project:${projectId}`
@@ -349,6 +357,25 @@ export function deleteChatMessage(doc: Y.Doc, id: string) {
 // --- samples
 export function addSample(doc: Y.Doc, s: SampleMeta) {
   samplesMap(doc).set(s.hash, s)
+}
+
+/** Replace a sample's `status`. Undefined clears it (an incoming take was uploaded), along with who recorded it. */
+export function setSampleStatus(doc: Y.Doc, hash: string, status: SampleStatus | undefined) {
+  const m = samplesMap(doc).get(hash)
+  if (!m) return
+  const { status: _, by, byName, ...rest } = m
+  samplesMap(doc).set(hash, status ? { ...rest, ...(status === 'incoming' ? { by, byName } : {}), status } : rest)
+}
+
+/**
+ * Delete a sample and every clip that plays it, in one transaction. `origin` lets the caller keep it out of undo (the
+ * samples map isn't in the undo scope, so undoing would bring the clips back without their audio).
+ */
+export function discardSample(doc: Y.Doc, hash: string, origin?: unknown) {
+  doc.transact(() => {
+    for (const c of getClips(doc)) if (c.kind === 'audio' && c.sourceHash === hash) deleteClip(doc, c.id)
+    samplesMap(doc).delete(hash)
+  }, origin)
 }
 
 /**

@@ -284,3 +284,21 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .small { font-size: 12px; }
 button.danger:hover { color: var(--danger); }
 nav a.on { color: var(--fg); }
+
+/* recording */
+.rec { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--dim); }
+.rec::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); border-radius: 50%; background: currentColor; }
+.rec.armed { color: var(--danger); }
+.rec.on { color: #fff; }
+.rec.on::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent); }
+.ctl button.record.on { color: #fff; background: var(--danger); }
+.clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); box-shadow: inset 0 0 0 1px var(--danger); pointer-events: none; z-index: 1; }
+.clip.incoming { background: #3a3358; animation: incoming 1.6s ease-in-out infinite; }
+.clip.missing { opacity: 0.55; background: repeating-linear-gradient(135deg, #2d3a5c 0 6px, #232c47 6px 12px); }
+@keyframes incoming { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  .clip.incoming { animation: none; box-shadow: none; outline: 1px dashed var(--dim); outline-offset: -2px; }
+}
+/* a track someone else is recording on is read-only */
+.lane.locked .clip, .lane.locked .fx, .lane.locked .x { pointer-events: none; }
+.lane.locked .fx { opacity: 0.6; }
