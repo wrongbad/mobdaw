@@ -115,7 +115,8 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .corner { border-right: 1px solid var(--line); }
 .ruler-body { position: relative; height: 100%; overflow: hidden; }
 .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
-.add-track { display: block; padding: 10px 12px; font-size: 12px; color: var(--dim); position: sticky; left: 0; width: 140px; }
+.add-track { display: block; position: sticky; left: 0; margin: 12px 16px; width: 64px; height: 40px; padding: 0; font-size: 22px; line-height: 1; color: var(--dim); background: none; border: 1px dashed var(--line); }
+.add-track:hover { color: var(--fg); border-color: var(--dim); background: none; }
 .overlay { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
 .playhead, .remote-head { position: absolute; top: 0; bottom: 0; width: 1px; }
 .playhead { background: var(--fg); }

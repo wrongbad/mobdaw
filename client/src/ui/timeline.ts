@@ -152,8 +152,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     bgPicker.value = ''
     if (bgTarget && files.length) void dropFiles(files, bgTarget.trackId, bgTarget.at)
   }
-  const addLink = h('a', { className: 'add-track', href: '#', onclick: (e: Event) => {
-    e.preventDefault()
+  const addLink = h('button', { className: 'add-track', title: 'new track', onclick: () => {
     const n = getTracks(doc).length + 1
     popover(addLink, [
       ['Audio', () => addTrack(doc, `Track ${n}`)],
@@ -162,7 +161,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       }],
       ['Soundscape', () => addTrack(doc, `Soundscape ${n}`, 'soundscape')],
     ])
-  } }, '+ track')
+  } }, '+')
   const overlay = h('div', { className: 'overlay' })
   const playhead = h('div', { className: 'playhead' })
   // The ruler is opaque and above the overlay, so it carries its own copies of the playhead lines.
