@@ -96,6 +96,12 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .transport { gap: 0; padding: 0; }
 .bar[data-status="disconnected"] strong::after { content: ' (offline)'; color: var(--dim); font-weight: normal; }
 .time { width: 64px; text-align: center; font-variant-numeric: tabular-nums; color: var(--dim); }
+.rewind { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--dim); }
+.rewind:hover { color: var(--fg); }
+.rewind::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%);
+  background: linear-gradient(to right, currentColor 0 2px, transparent 2px); }
+.rewind::after { content: ''; position: absolute; left: calc(50% - 4px); top: 50%; width: 10px; height: 12px; transform: translateY(-50%);
+  background: currentColor; clip-path: polygon(100% 0, 0 50%, 100% 100%); }
 .play { position: relative; width: 36px; height: 36px; padding: 0; border: 0; background: none; color: var(--fg); }
 .play::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 14px; transform: translate(-50%, -50%); background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
 .play[data-playing]::before { clip-path: none; background: linear-gradient(to right, currentColor 0 35%, transparent 35% 65%, currentColor 65%); }

@@ -93,7 +93,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
 
   // --- static structure
   const transport = transportControls({
-    title: 'play / pause (space)', onToggle: () => toggle(),
+    title: 'play / pause (space)', onToggle: () => toggle(), onRewind: () => { seek(0); scroll.scrollLeft = 0 },
     record: readOnly ? undefined : { onToggle: () => void toggleRecord(), onMenu: (e) => offsetMenu(e) },
   })
   const status = h('span', { className: 'dim' })

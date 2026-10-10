@@ -6,12 +6,13 @@ export const fmt = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).p
 
 export type TransportControls = ReturnType<typeof transportControls>
 
-export function transportControls(opts: { title: string; onToggle(): void; small?: boolean; record?: { onToggle(): void; onMenu(e: MouseEvent): void } }) {
+export function transportControls(opts: { title: string; onToggle(): void; small?: boolean; onRewind?(): void; record?: { onToggle(): void; onMenu(e: MouseEvent): void } }) {
   const btn = h('button', { className: 'play', title: opts.title, onclick: opts.onToggle })
   const time = h('span', { className: 'time' }, fmt(0))
   const rec = opts.record && h('button', { className: 'rec', title: 'record onto the armed track, or a new one (shift+space)', onclick: opts.record.onToggle })
   if (rec) rec.addEventListener('contextmenu', (e) => { e.preventDefault(); opts.record!.onMenu(e) })
-  const el = h('div', { className: `transport${opts.small ? ' sm' : ''}` }, btn, rec, time)
+  const rewind = opts.onRewind && h('button', { className: 'rewind', title: 'skip to the beginning', onclick: opts.onRewind })
+  const el = h('div', { className: `transport${opts.small ? ' sm' : ''}` }, rewind, btn, rec, time)
   return {
     el,
     /** Shows the pause icon while playing. */
