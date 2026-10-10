@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Collab } from './collab.ts'
 import { sessionMiddleware, type Ctx, type Env } from './auth.ts'
+import { accountRoutes } from './routes/account.ts'
 import { authRoutes } from './routes/auth.ts'
 import { inviteRoutes } from './routes/invites.ts'
 import { projectRoutes } from './routes/projects.ts'
@@ -13,6 +14,7 @@ export function createApp(ctx: Ctx, storage: Storage, collab: Collab) {
   api.use(sessionMiddleware(ctx))
   api.route('/', authRoutes(ctx))
   api.route('/', inviteRoutes(ctx))
+  api.route('/', accountRoutes(ctx, storage, collab))
   api.route('/projects', projectRoutes(ctx, collab))
   api.route('/projects/:id/samples', sampleRoutes(ctx, storage))
   api.route('/uploads', uploadRoutes(ctx, storage))

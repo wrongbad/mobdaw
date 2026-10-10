@@ -1,7 +1,8 @@
 import { getRequestListener } from '@hono/node-server'
 import { createApp } from './app.ts'
 import type { Ctx } from './auth.ts'
-import { createCollab } from './collab.ts'
+import { purgeExpiredAccounts } from './accounts.ts'
+import { createCollab, enforceReadOnly } from './collab.ts'
 import { loadConfig, type Config } from './config.ts'
 import { openDb } from './db.ts'
 import { sweepSamples } from './routes/samples.ts'
@@ -19,16 +20,22 @@ export async function startServer(config: Config) {
   collab.httpServer.removeAllListeners('request')
   collab.httpServer.on('request', getRequestListener(createApp(ctx, storage, collab).fetch))
   await collab.listen()
-  const sweep = () => sweepSamples(ctx, storage).catch((e) => console.error('sweep failed', e))
+  const sweep = () =>
+    purgeExpiredAccounts(ctx, storage, collab)
+      .then(() => sweepSamples(ctx, storage))
+      .catch((e) => console.error('sweep failed', e))
   const sweeper = setInterval(sweep, 15 * 60 * 1000).unref()
+  // Plan changes made outside this process (the admin CLI) reach open connections within a minute.
+  const enforcer = setInterval(() => enforceReadOnly(ctx, collab), 60 * 1000).unref()
   let closing: Promise<void> | undefined
   const close = () => (closing ??= (async () => {
     clearInterval(sweeper)
+    clearInterval(enforcer)
     collab.httpServer.closeAllConnections()
     await collab.destroy() // flushes pending document stores
     db.close()
   })())
-  return { port: collab.address.port, close }
+  return { port: collab.address.port, close, ctx, storage, collab }
 }
 
 if (import.meta.main) {

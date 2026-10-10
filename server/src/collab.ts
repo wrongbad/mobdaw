@@ -1,7 +1,7 @@
 import { Database } from '@hocuspocus/extension-database'
 import { Server } from '@hocuspocus/server'
 import { docName } from '@mobdaw/shared'
-import { memberRole, sessionUser, type Ctx } from './auth.ts'
+import { memberRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
 
 export type Collab = ReturnType<typeof createCollab>
 
@@ -11,6 +11,22 @@ export function kick(collab: Collab, projectId: string, username?: string) {
     if (!username || c.context.username === username) c.close({ code: 1000, reason: KICK_REASON })
 }
 export const KICK_REASON = 'access_changed'
+
+/** Close every open document connection a user has, across projects. */
+export function kickUser(collab: Collab, username: string) {
+  for (const doc of collab.hocuspocus.documents.values())
+    for (const c of doc.getConnections()) if (c.context.username === username) c.close({ code: 1000, reason: KICK_REASON })
+}
+
+/**
+ * Drop connections that can still write although their user or project is now read-only (a plan change made
+ * outside this process, e.g. by the admin CLI). The client reconnects and gets a read-only connection.
+ */
+export function enforceReadOnly(ctx: Ctx, collab: Collab) {
+  for (const [name, doc] of collab.hocuspocus.documents)
+    for (const c of doc.getConnections())
+      if (!c.readOnly && writeBlock(ctx, name.slice('project:'.length), c.context.username)) c.close({ code: 1000, reason: KICK_REASON })
+}
 
 /** Hocuspocus server; the caller swaps in its own HTTP request handler (see main.ts). */
 export function createCollab(ctx: Ctx) {
@@ -50,7 +66,7 @@ export function createCollab(ctx: Ctx) {
       if (!username) throw new Error('not_signed_in')
       const role = projectId && memberRole(ctx, projectId, username)
       if (!role) throw new Error('forbidden')
-      connectionConfig.readOnly = role === 'viewer'
+      connectionConfig.readOnly = role === 'viewer' || !!writeBlock(ctx, projectId!, username)
       return { username, role }
     },
   })

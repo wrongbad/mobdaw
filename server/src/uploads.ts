@@ -28,11 +28,12 @@ export function tombstoneUpload(db: Db, owner: string, hash: string): boolean {
   })
 }
 
-/** Tombstone everything a user uploaded (account deletion). Pending rows are dropped; the sweep reaps their bytes. */
+/**
+ * Tombstone everything a user uploaded (account deletion). Pending rows are marked stale so the sweep reaps
+ * them. Runs inside the caller's transaction.
+ */
 export function tombstoneAllUploads(db: Db, owner: string) {
-  tx(db, () => {
-    db.prepare('DELETE FROM project_samples WHERE owner = ?').run(owner)
-    db.prepare("UPDATE uploads SET state = 'deleting' WHERE owner = ? AND state = 'complete'").run(owner)
-    db.prepare("UPDATE uploads SET created_at = 0 WHERE owner = ? AND state = 'pending'").run(owner)
-  })
+  db.prepare('DELETE FROM project_samples WHERE owner = ?').run(owner)
+  db.prepare("UPDATE uploads SET state = 'deleting' WHERE owner = ? AND state = 'complete'").run(owner)
+  db.prepare("UPDATE uploads SET created_at = 0 WHERE owner = ? AND state = 'pending'").run(owner)
 }

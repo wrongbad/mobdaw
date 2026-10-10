@@ -1,4 +1,5 @@
 import { audit, isClean } from '../src/audit.ts'
+import { RETENTION_MS, endSubscription, purgeExpiredAccounts, resumeSubscription } from '../src/accounts.ts'
 import { createUser, userExists } from '../src/auth.ts'
 import { loadConfig } from '../src/config.ts'
 import { openDb } from '../src/db.ts'
@@ -57,12 +58,25 @@ if (cmd === 'create-invite') {
   const username = needUser(args[0])
   if (!ctx.db.prepare('UPDATE users SET is_admin = 1 WHERE username = ?').run(username).changes) throw new Error(`no such user: ${username}`)
   console.log(`${username} is now an admin`)
+} else if (cmd === 'set-plan') {
+  // Until a payment provider is wired in, this is how a subscription is ended or restored.
+  const username = needUser(args[0])
+  if (!userExists(ctx, username)) throw new Error(`no such user: ${username}`)
+  if (args[1] === 'ended') {
+    if (!endSubscription(ctx, null, username)) throw new Error(`${username} is not an active account`)
+    console.log(`${username} is read-only; their data is purged in ${RETENTION_MS / 86400_000} days (a running server enforces it within a minute)`)
+  } else if (args[1] === 'active') {
+    console.log(resumeSubscription(ctx, null, username) ? `${username} is active again` : `${username} was already active`)
+  } else throw new Error('usage: set-plan <username> active|ended')
+} else if (cmd === 'purge-expired') {
+  const purged = await purgeExpiredAccounts(ctx, createStorage(config, () => undefined), null)
+  console.log(purged.length ? `purged: ${purged.join(', ')}` : 'nothing to purge')
 } else if (cmd === 'tree') {
   const q = <T>(sql: string, ...p: string[]) => ctx.db.prepare(sql).all(...p) as T[]
   const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`
-  const users = q<{ username: string; is_admin: number; bytes_used: number }>('SELECT * FROM users ORDER BY username')
+  const users = q<{ username: string; is_admin: number; bytes_used: number; plan_status: string; retention_ends_at: number | null }>('SELECT * FROM users ORDER BY username')
   console.log('users')
-  for (const u of users) console.log(`  ${u.username}${u.is_admin ? ' (admin)' : ''}  ${kb(u.bytes_used)} used`)
+  for (const u of users) console.log(`  ${u.username}${u.is_admin ? ' (admin)' : ''}${u.plan_status === 'read_only' ? ` (read-only, purged ${new Date(u.retention_ends_at!).toISOString().slice(0, 10)})` : ''}  ${kb(u.bytes_used)} used`)
   console.log('projects')
   for (const u of users) {
     const projects = q<{ id: string; name: string }>('SELECT id, name FROM projects WHERE owner_username = ? ORDER BY created_at', u.username)
@@ -94,6 +108,6 @@ if (cmd === 'create-invite') {
   // --fix repairs leaks and drift; only broken/orphan-link findings remain a failure.
   process.exit(isClean(fix ? { ...r, leaked: [], drift: [] } : r) ? 0 : 1)
 } else {
-  console.error('usage: npm run admin -- create-invite [--days N] | list-invites | create-user <username> [--admin] | passwd <username> | make-admin <username> | tree | audit [--fix]')
+  console.error('usage: npm run admin -- create-invite [--days N] | list-invites | create-user <username> [--admin] | passwd <username> | make-admin <username> | set-plan <username> active|ended | purge-expired | tree | audit [--fix]')
   process.exit(1)
 }

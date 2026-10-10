@@ -6,6 +6,7 @@ export type ApiError = { error: string }
 // bad_username(400) bad_password(400) username_taken(409) invite_invalid(400) invite_used(410) invite_expired(410)
 // not_admitted(400, unknown user) not_found(404) too_large(413)
 // hash_mismatch(400) bad_request(400) sample_deleting(409) owner_cannot_leave(400) upload_expired(410)
+// account_read_only(403) project_frozen(403) wrong_password(403)
 // proof_required(409, re-request the upload URL and upload again)
 
 export type LoginRequest = { username: string; password: string }
@@ -17,6 +18,9 @@ export type Me = {
   isAdmin: boolean
   bytesUsed: number
   quotaBytes: number
+  /** 'read_only' once the subscription has ended: play, download and delete only, until `retentionEndsAt`. */
+  planStatus: 'active' | 'read_only'
+  retentionEndsAt: number | null
 }
 
 export type CreateInviteRequest = { expiresInDays?: number }
@@ -33,7 +37,12 @@ export type InviteInfo = {
 export type UserInfo = { username: string }
 
 export type Role = 'owner' | 'editor' | 'viewer'
-export type ProjectSummary = { id: string; name: string; ownerUsername: string; createdAt: number; role: Role }
+export type ProjectSummary = {
+  id: string; name: string; ownerUsername: string; createdAt: number; role: Role
+  /** The owner's subscription has ended: nobody can edit until they resubscribe, and it is deleted at `retentionEndsAt`. */
+  frozen: boolean
+  retentionEndsAt: number | null
+}
 export type Member = { username: string; role: Role }
 export type ProjectDetail = ProjectSummary & { members: Member[] }
 export type CreateProjectRequest = { name: string }

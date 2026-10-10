@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { LibrarySample, UploadUrlRequest } from '@mobdaw/shared'
-import { hmac, isDevUser, memberRole, requireSignedIn, type Ctx, type Env } from '../auth.ts'
+import { hmac, isDevUser, memberRole, requireSignedIn, writeBlock, type Ctx, type Env } from '../auth.ts'
 import { tx } from '../db.ts'
 import { isHash, type Storage } from '../storage/index.ts'
 import { completeElsewhere, getUpload } from '../uploads.ts'
@@ -41,11 +41,15 @@ export function sampleRoutes(ctx: Ctx, storage: Storage) {
   // Per-requester, per-project proof object (proofs/<hash>/<token>): only this user can PUT there.
   const proofOf = (project: string, username: string, hash: string) => hmac(config.sessionSecret, `proof:${project}:${username}:${hash}`)
 
-  // Membership gate: 404 for non-members; writes additionally refuse viewers.
+  // Membership gate: 404 for non-members; writes additionally refuse viewers, read-only accounts and frozen projects.
   r.use('/*', async (c, next) => {
     const role = memberRole(ctx, c.req.param('id')!, c.var.session!.username)
     if (!role) return c.json({ error: 'not_found' }, 404)
-    if (c.req.method !== 'GET' && role === 'viewer') return c.json({ error: 'forbidden' }, 403)
+    if (c.req.method !== 'GET') {
+      if (role === 'viewer') return c.json({ error: 'forbidden' }, 403)
+      const blocked = writeBlock(ctx, c.req.param('id')!, c.var.session!.username)
+      if (blocked) return c.json({ error: blocked }, 403)
+    }
     await next()
   })
 

@@ -27,7 +27,7 @@ export async function startTest(env: Record<string, string> = {}, dir = mkdtempS
   const server = await startServer(config)
   const base = `http://127.0.0.1:${server.port}`
   return {
-    dir, base, port: server.port, config,
+    dir, base, port: server.port, config, ctx: server.ctx, storage: server.storage, collab: server.collab,
     close: () => server.close(),
     cleanup: async () => { await server.close(); rmSync(dir, { recursive: true, force: true }) },
   }

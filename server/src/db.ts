@@ -70,6 +70,9 @@ const migrations: (string | ((db: Db) => void))[] = [
    CREATE INDEX project_samples_hash ON project_samples(hash);
    CREATE INDEX project_samples_owner ON project_samples(owner, hash);
    DROP TABLE samples;`,
+  // Subscription lifecycle: an ended subscription leaves the account 'read_only' until retention_ends_at, then it is purged.
+  `ALTER TABLE users ADD COLUMN plan_status TEXT NOT NULL DEFAULT 'active' CHECK(plan_status IN ('active','read_only'));
+   ALTER TABLE users ADD COLUMN retention_ends_at INTEGER;`,
 ]
 
 export function openDb(path: string): Db {

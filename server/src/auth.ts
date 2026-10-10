@@ -39,7 +39,10 @@ export function verifySession(secret: string, token: string | undefined | null):
   }
 }
 
-type UserRow = { username: string; password_hash: string | null; is_admin: number; account_role: 'user' | 'dev'; bytes_used: number }
+export type UserRow = {
+  username: string; password_hash: string | null; is_admin: number; account_role: 'user' | 'dev'; bytes_used: number
+  plan_status: 'active' | 'read_only'; retention_ends_at: number | null
+}
 export const getUser = (db: Db, username: string) =>
   db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined
 
@@ -72,6 +75,26 @@ export function memberRole(ctx: Ctx, projectId: string, username: string) {
     | undefined)?.role
 }
 
+
+export type WriteBlock = 'account_read_only' | 'project_frozen'
+
+/**
+ * Why `username` may not change `projectId`, or null if they may. A read-only account can't write anywhere;
+ * a project whose owner is read-only is frozen for everyone until the owner resubscribes or it is purged.
+ */
+export function writeBlock(ctx: Ctx, projectId: string, username: string): WriteBlock | null {
+  if (isDevUser(ctx, username)) return null
+  if (getUser(ctx.db, username)?.plan_status === 'read_only') return 'account_read_only'
+  const owner = ctx.db
+    .prepare('SELECT u.plan_status FROM projects p JOIN users u ON u.username = p.owner_username WHERE p.id = ?')
+    .get(projectId) as { plan_status: string } | undefined
+  return owner?.plan_status === 'read_only' ? 'project_frozen' : null
+}
+
+/** Account-level write check (creating projects, copying): read-only accounts can't. */
+export const accountBlocked = (ctx: Ctx, username: string) =>
+  !isDevUser(ctx, username) && getUser(ctx.db, username)?.plan_status === 'read_only'
+
 /** Insert a user with an already-hashed password (sync, so it can run inside a transaction). Throws if taken. */
 export function insertUser(ctx: Ctx, username: string, passwordHash: string, admin = false) {
   ctx.db
@@ -85,7 +108,10 @@ export async function createUser(ctx: Ctx, username: string, password: string, a
 
 export function getMe(ctx: Ctx, username: string): Me {
   const u = getUser(ctx.db, username)!
-  return { username, isAdmin: !!u.is_admin, bytesUsed: u.bytes_used, quotaBytes: ctx.config.userQuotaBytes }
+  return {
+    username, isAdmin: !!u.is_admin, bytesUsed: u.bytes_used, quotaBytes: ctx.config.userQuotaBytes,
+    planStatus: u.plan_status, retentionEndsAt: u.plan_status === 'read_only' ? u.retention_ends_at : null,
+  }
 }
 
 /** Reads the session from the cookie or `Authorization: Bearer`; sets c.var.session (or null). */
