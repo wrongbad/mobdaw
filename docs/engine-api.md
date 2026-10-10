@@ -251,6 +251,18 @@ on the louder channel, 6 dB soft knee, one shared gain for both channels.
 
 - Under the threshold with no makeup the gain is exactly 1. Bypass resets the envelope.
 
+**kind 5: Tremolo** (effect). Amplitude modulation by an LFO, `dsp::tremolo`: `gain = 1 - depth·(0.5 - 0.5·lfo)`,
+so the gain swings between `1 - depth` and 1 and the effect only takes level away.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| rate | 0 | 0.1..20 Hz | 4 | Smoothed (in log2). |
+| depth | 1 | 0..1 | 0.5 | Smoothed. 0 is a bit-exact passthrough. |
+| shape | 2 | 0..2 | 0 | 0 sine, 1 triangle, 2 soft square (edges a few ms long, so no clicks). Not smoothed. |
+| spread | 3 | 0..1 | 0 | Right channel's LFO lags the left's by `spread` half-cycles: 0 is a plain tremolo, 1 is an auto-pan. Smoothed. |
+
+- The LFO is free-running (not synced to the transport) and starts at its zero crossing going up. Bypass resets the phase.
+
 **kind 2: Finnwave synth** (instrument). The voice is `dsp::finnwave` → amp ADSR.
 
 | param | id | range | default | notes |

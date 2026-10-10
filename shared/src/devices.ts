@@ -17,6 +17,7 @@ export const SIMPLE_FILTER = 1
 export const FINNWAVE = 2
 export const REVERB = 3
 export const COMPRESSOR = 4
+export const TREMOLO = 5
 
 export const DEVICES: Record<number, DeviceDef> = {
   [SIMPLE_FILTER]: {
@@ -44,6 +45,15 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 2, name: 'attack', min: 0.1, max: 100, def: 10, scale: 'log', unit: 'ms' },
       { id: 3, name: 'release', min: 10, max: 1000, def: 100, scale: 'log', unit: 'ms' },
       { id: 4, name: 'makeup', min: 0, max: 24, def: 0, scale: 'lin', unit: 'dB' },
+    ],
+  },
+  [TREMOLO]: {
+    type: TREMOLO, name: 'Tremolo', instrument: false,
+    params: [
+      { id: 0, name: 'rate', min: 0.1, max: 20, def: 4, scale: 'log', unit: 'Hz' },
+      { id: 1, name: 'depth', min: 0, max: 1, def: 0.5, scale: 'lin' },
+      { id: 2, name: 'shape', min: 0, max: 2, def: 0, scale: 'lin', options: ['Sine', 'Triangle', 'Square'] },
+      { id: 3, name: 'spread', min: 0, max: 1, def: 0, scale: 'lin' },
     ],
   },
   [FINNWAVE]: {

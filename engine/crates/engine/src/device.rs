@@ -1,11 +1,12 @@
 //! Devices: the effect/instrument processors in a track's chain.
 
-use dsp::{CompParams, Compressor, Ramp, Reverb, Svf, Synth};
+use dsp::{CompParams, Compressor, Ramp, Reverb, Svf, Synth, TremParams, Tremolo};
 
 pub const KIND_FILTER: u32 = 1;
 pub const KIND_SYNTH: u32 = 2;
 pub const KIND_REVERB: u32 = 3;
 pub const KIND_COMPRESSOR: u32 = 4;
+pub const KIND_TREMOLO: u32 = 5;
 
 const SMOOTH_MS: f64 = 10.0;
 
@@ -25,6 +26,7 @@ pub enum DeviceKind {
     Synth(Box<Synth>),
     Reverb(Box<ReverbDevice>),
     Compressor(Box<CompressorDevice>),
+    Tremolo(Box<TremoloDevice>),
 }
 
 impl Device {
@@ -34,6 +36,7 @@ impl Device {
             KIND_SYNTH => DeviceKind::Synth(Box::new(Synth::new(sample_rate))),
             KIND_REVERB => DeviceKind::Reverb(Box::new(ReverbDevice::new(sample_rate))),
             KIND_COMPRESSOR => DeviceKind::Compressor(Box::new(CompressorDevice::new(sample_rate))),
+            KIND_TREMOLO => DeviceKind::Tremolo(Box::new(TremoloDevice::new(sample_rate))),
             _ => DeviceKind::Unknown,
         };
         Self { track, order, bypass, kind_id, kind }
@@ -49,6 +52,7 @@ impl Device {
             DeviceKind::Synth(s) => s.set_param(param, value),
             DeviceKind::Reverb(v) => v.set_param(param, value),
             DeviceKind::Compressor(c) => c.set_param(param, value),
+            DeviceKind::Tremolo(t) => t.set_param(param, value),
             DeviceKind::Unknown => {}
         }
     }
@@ -60,6 +64,7 @@ impl Device {
             DeviceKind::Synth(s) => s.set_param_smooth(param, value, 0.0),
             DeviceKind::Reverb(v) => v.set_param_smooth(param, value, 0.0),
             DeviceKind::Compressor(c) => c.set_param_smooth(param, value, 0.0),
+            DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, 0.0),
             DeviceKind::Unknown => {}
         }
     }
@@ -72,6 +77,7 @@ impl Device {
             DeviceKind::Synth(s) => s.reset(),
             DeviceKind::Reverb(v) => v.reset(),
             DeviceKind::Compressor(c) => c.reset(),
+            DeviceKind::Tremolo(t) => t.reset(),
             DeviceKind::Unknown => {}
         }
     }
@@ -89,6 +95,7 @@ impl Device {
             DeviceKind::Filter(f) => f.process(l, r, sample_rate),
             DeviceKind::Reverb(v) => v.process(l, r),
             DeviceKind::Compressor(c) => c.process(l, r, sample_rate),
+            DeviceKind::Tremolo(t) => t.process(l, r, sample_rate),
             DeviceKind::Synth(s) => {
                 let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
                 let mono = &mut mono[..l.len()];
@@ -291,5 +298,67 @@ impl CompressorDevice {
         self.ratio.advance(l.len());
         self.makeup.advance(l.len());
         self.comp.process(l, r, &p, sample_rate);
+    }
+}
+
+/// Kind 5: tremolo. Params: 0 rate (Hz), 1 depth (0..1), 2 shape (0 sine, 1 triangle, 2 soft
+/// square), 3 spread (0..1, left/right LFO offset). Rate (smoothed in the log2 domain, like the
+/// filter's cutoff), depth and spread are smoothed, with the values at each segment start used;
+/// shape jumps, which only changes the waveform's contour.
+pub struct TremoloDevice {
+    smooth_samples: f64,
+    rate_log2: Ramp,
+    depth: Ramp,
+    spread: Ramp,
+    shape: u32,
+    trem: Tremolo,
+}
+
+impl TremoloDevice {
+    pub fn new(sample_rate: f32) -> Self {
+        let d = TremParams::default();
+        Self {
+            smooth_samples: sample_rate as f64 * SMOOTH_MS * 1e-3,
+            rate_log2: Ramp::new((d.rate_hz as f64).log2()),
+            depth: Ramp::new(d.depth as f64),
+            spread: Ramp::new(d.spread as f64),
+            shape: d.shape,
+            trem: Tremolo::new(),
+        }
+    }
+
+    pub fn set_param(&mut self, param: u32, value: f32) {
+        self.set_param_smooth(param, value, self.smooth_samples);
+    }
+
+    pub fn set_param_smooth(&mut self, param: u32, value: f32, s: f64) {
+        use dsp::tremolo::*;
+        if !value.is_finite() {
+            return;
+        }
+        match param {
+            0 => self.rate_log2.set_target((value.clamp(RATE_MIN, RATE_MAX) as f64).log2(), s),
+            1 => self.depth.set_target(value.clamp(0.0, 1.0) as f64, s),
+            2 => self.shape = (value.round().clamp(0.0, (SHAPES - 1) as f32)) as u32,
+            3 => self.spread.set_target(value.clamp(0.0, 1.0) as f64, s),
+            _ => {}
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.trem.reset();
+    }
+
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+        let p = TremParams {
+            rate_hz: self.rate_log2.value().exp2() as f32,
+            depth: self.depth.value() as f32,
+            shape: self.shape,
+            spread: self.spread.value() as f32,
+        };
+        self.rate_log2.advance(l.len());
+        self.depth.advance(l.len());
+        self.spread.advance(l.len());
+        self.trem.process(l, r, &p, sample_rate);
     }
 }

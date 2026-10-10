@@ -925,3 +925,23 @@ fn a_compressor_device_tames_a_loud_clip_and_bypass_restores_it() {
     let back = rms(&render(&mut e, 12_000).0[4_000..]);
     assert!((back / clean - 1.0).abs() < 0.01, "bypassed: {back} vs {clean}");
 }
+
+#[test]
+fn a_tremolo_device_modulates_a_clip_and_bypass_restores_it() {
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&sine(440.0, 24_000)]);
+    e.track_upsert(1, 0, 1.0, 0.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 24_000, 0, 1.0, 0.0, 0.0, 0);
+    e.play(0);
+    let clean = rms(&render(&mut e, 12_000).0[4_000..]);
+    e.device_upsert(1, 1, 5, 1.0, false); // tremolo
+    e.param_set(1, 0, 8.0); // rate
+    e.param_set(1, 1, 1.0); // depth
+    e.seek(0);
+    let wobbly = rms(&render(&mut e, 12_000).0[4_000..]);
+    assert!(wobbly < 0.85 * clean, "tremolo: {wobbly} vs {clean}");
+    e.device_upsert(1, 1, 5, 1.0, true);
+    e.seek(0);
+    let back = rms(&render(&mut e, 12_000).0[4_000..]);
+    assert!((back / clean - 1.0).abs() < 0.01, "bypassed: {back} vs {clean}");
+}
