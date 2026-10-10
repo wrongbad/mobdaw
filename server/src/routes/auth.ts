@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono'
 import { deleteCookie, setCookie } from 'hono/cookie'
 import type { LoginResponse, UserInfo } from '@mobdaw/shared'
 import {
-  SESSION_COOKIE, SESSION_MS, getMe, getUser, insertUser, requireSignedIn, signSession, userExists,
+  SESSION_COOKIE, SESSION_MS, findUser, getMe, insertUser, requireSignedIn, signSession,
   type Ctx, type Env,
 } from '../auth.ts'
 import { tx } from '../db.ts'
@@ -27,8 +27,8 @@ export function authRoutes(ctx: Ctx) {
   const { config, db } = ctx
   const r = new Hono<Env>()
 
-  const startSession = (c: Context<Env>, username: string) => {
-    const token = signSession(config.sessionSecret, username)
+  const startSession = (c: Context<Env>, userId: number) => {
+    const token = signSession(config.sessionSecret, userId)
     setCookie(c, SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: 'Lax',
@@ -36,7 +36,7 @@ export function authRoutes(ctx: Ctx) {
       path: config.basePath || '/',
       maxAge: SESSION_MS / 1000,
     })
-    return c.json<LoginResponse>({ token, me: getMe(ctx, username) })
+    return c.json<LoginResponse>({ token, me: getMe(ctx, userId) })
   }
 
   r.post('/auth/register', async (c) => {
@@ -49,7 +49,7 @@ export function authRoutes(ctx: Ctx) {
     const find = () => db.prepare('SELECT * FROM invites WHERE token = ?').get(token) as InviteRow | undefined
     const problem = inviteProblem(find())
     if (problem) return c.json({ error: problem }, problem === 'invite_invalid' ? 400 : 410)
-    if (userExists(ctx, username)) return c.json({ error: 'username_taken' }, 409)
+    if (findUser(db, username)) return c.json({ error: 'username_taken' }, 409)
 
     const passwordHash = await hashPassword(password)
     const result = tx(db, () => {
@@ -57,13 +57,13 @@ export function authRoutes(ctx: Ctx) {
       const invite = find()
       const again = inviteProblem(invite)
       if (again) return again
-      if (userExists(ctx, username)) return 'username_taken'
-      insertUser(ctx, username, passwordHash, false, invite!.gift_months)
+      if (findUser(db, username)) return 'username_taken'
+      const id = insertUser(ctx, username, passwordHash, false, invite!.gift_months)
       db.prepare('UPDATE invites SET redeemed_by = ?, redeemed_at = ? WHERE token = ?').run(username, Date.now(), token)
-      return null
+      return id
     })
-    if (result) return c.json({ error: result }, result === 'username_taken' ? 409 : 410)
-    return startSession(c, username)
+    if (typeof result === 'string') return c.json({ error: result }, result === 'username_taken' ? 409 : 410)
+    return startSession(c, result)
   })
 
   r.post('/auth/login', async (c) => {
@@ -71,14 +71,15 @@ export function authRoutes(ctx: Ctx) {
     const username = String(body.username ?? '').trim().toLowerCase()
     const password = String(body.password ?? '')
     if (recentFails(username).length >= MAX_FAILS) return c.json({ error: 'too_many_attempts' }, 429)
-    const hash = getUser(db, username)?.password_hash
+    const user = findUser(db, username)
+    const hash = user?.password_hash
     const ok = password.length <= PASSWORD_MAX && (hash ? await verifyPassword(password, hash) : (await burnPasswordCheck(password), false))
     if (!ok) {
       fails.set(username, [...recentFails(username), Date.now()])
       return c.json({ error: 'invalid_credentials' }, 401)
     }
     fails.delete(username)
-    return startSession(c, username)
+    return startSession(c, user!.id)
   })
 
   r.post('/auth/logout', (c) => {
@@ -86,7 +87,7 @@ export function authRoutes(ctx: Ctx) {
     return c.json({ ok: true })
   })
 
-  r.get('/me', requireSignedIn, (c) => c.json(getMe(ctx, c.var.session!.username)))
+  r.get('/me', requireSignedIn, (c) => c.json(getMe(ctx, c.var.session!.id)))
 
   r.get('/users', requireSignedIn, (c) =>
     c.json<UserInfo[]>(

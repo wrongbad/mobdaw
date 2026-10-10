@@ -1,6 +1,6 @@
 import { audit, isClean } from '../src/audit.ts'
 import { RETENTION_MS, endExpiredSubscriptions, endSubscription, giftMonths, purgeExpiredData, resumeSubscription } from '../src/accounts.ts'
-import { createUser, getUser, userExists } from '../src/auth.ts'
+import { createUser, findUser, getUser } from '../src/auth.ts'
 import { loadConfig } from '../src/config.ts'
 import { openDb } from '../src/db.ts'
 import { DEFAULT_GIFT_MONTHS, createInvite, listInvites, validGiftMonths } from '../src/routes/invites.ts'
@@ -27,10 +27,18 @@ async function askPassword(): Promise<string> {
   if (pw.length < PASSWORD_MIN || pw.length > PASSWORD_MAX) throw new Error(`password must be ${PASSWORD_MIN}-${PASSWORD_MAX} characters`)
   return pw
 }
+/** The account named on the command line (usernames are lowercase). */
 const needUser = (name?: string) => {
-  const u = name?.trim().toLowerCase() ?? ''
-  if (!u) throw new Error('username required')
-  return u
+  const username = name?.trim().toLowerCase() ?? ''
+  if (!username) throw new Error('username required')
+  const user = findUser(ctx.db, username)
+  if (!user) throw new Error(`no such user: ${username}`)
+  return user
+}
+const usernameArg = (name?: string) => {
+  const username = name?.trim().toLowerCase() ?? ''
+  if (!username) throw new Error('username required')
+  return username
 }
 
 if (cmd === 'create-invite') {
@@ -47,64 +55,64 @@ if (cmd === 'create-invite') {
     console.log(`${i.token}  ${new Date(i.createdAt).toISOString()}  ${i.giftMonths} months  ${status}`)
   }
 } else if (cmd === 'create-user') {
-  const username = needUser(args[0])
+  const username = usernameArg(args[0])
   if (!USERNAME_RE.test(username)) throw new Error('username must be 3-32 chars of a-z 0-9 _ . - (starting with a letter or digit)')
-  if (userExists(ctx, username)) throw new Error(`${username} already exists`)
+  if (findUser(ctx.db, username)) throw new Error(`${username} already exists`)
   const m = args.indexOf('--months')
   const months = m >= 0 ? Number(args[m + 1]) : undefined
   if (months !== undefined && !validGiftMonths(months)) throw new Error('--months needs a whole number from 0 to 999')
-  await createUser(ctx, username, await askPassword(), args.includes('--admin'), months)
-  console.log(`created ${username}${args.includes('--admin') ? ' (admin)' : ''}`)
+  const id = await createUser(ctx, username, await askPassword(), args.includes('--admin'), months)
+  console.log(`created ${username} (id ${id})${args.includes('--admin') ? ' (admin)' : ''}`)
 } else if (cmd === 'passwd') {
-  const username = needUser(args[0])
-  if (!userExists(ctx, username)) throw new Error(`no such user: ${username}`)
-  ctx.db.prepare('UPDATE users SET password_hash = ? WHERE username = ?').run(await hashPassword(await askPassword()), username)
-  console.log(`password updated for ${username}`)
+  const user = needUser(args[0])
+  ctx.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await hashPassword(await askPassword()), user.id)
+  console.log(`password updated for ${user.username}`)
 } else if (cmd === 'make-admin') {
-  const username = needUser(args[0])
-  if (!ctx.db.prepare('UPDATE users SET is_admin = 1 WHERE username = ?').run(username).changes) throw new Error(`no such user: ${username}`)
-  console.log(`${username} is now an admin`)
+  const user = needUser(args[0])
+  ctx.db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(user.id)
+  console.log(`${user.username} is now an admin`)
 } else if (cmd === 'gift') {
   // Add pre-paid months to an account (also restores one that ran out, if it is still within its retention window).
-  const username = needUser(args[0])
+  const user = needUser(args[0])
   const months = Number(args[1])
   if (!validGiftMonths(months) || months < 1) throw new Error('usage: gift <username> <months, 1-999>')
-  const until = giftMonths(ctx, null, username, months)
-  if (until == null) throw new Error(`no such user: ${username}`)
-  console.log(`${username} is now paid through ${new Date(until).toISOString().slice(0, 10)}`)
+  const until = giftMonths(ctx, null, user.id, months)!
+  console.log(`${user.username} is now paid through ${new Date(until).toISOString().slice(0, 10)}`)
 } else if (cmd === 'set-plan') {
   // Until a payment provider is wired in, this is how a subscription is ended or restored.
-  const username = needUser(args[0])
-  if (!userExists(ctx, username)) throw new Error(`no such user: ${username}`)
+  const { id, username } = needUser(args[0])
   if (args[1] === 'ended') {
-    if (!endSubscription(ctx, null, username)) throw new Error(`${username} is not an active account`)
+    if (!endSubscription(ctx, null, id)) throw new Error(`${username} is not an active account`)
     console.log(`${username} is read-only; their cloud data is deleted in ${RETENTION_MS / 86400_000} days unless time is added (a running server enforces read-only within a minute)`)
   } else if (args[1] === 'active') {
-    console.log(resumeSubscription(ctx, null, username) ? `${username} is active again` : `${username} was already active`)
-    const { paid_through } = getUser(ctx.db, username)!
+    console.log(resumeSubscription(ctx, null, id) ? `${username} is active again` : `${username} was already active`)
+    const { paid_through } = getUser(ctx.db, id)!
     if (paid_through <= Date.now()) console.log(`warning: ${username}'s pre-paid time has run out, so the next sweep ends the subscription again; use \`gift\` to add months`)
   } else throw new Error('usage: set-plan <username> active|ended')
 } else if (cmd === 'purge-expired') {
   const ended = endExpiredSubscriptions(ctx, null)
-  if (ended.length) console.log(`subscription ended (pre-paid time ran out): ${ended.join(', ')}`)
+  const names = (ids: number[]) => ids.map((id) => getUser(ctx.db, id)?.username ?? `#${id}`).join(', ')
+  if (ended.length) console.log(`subscription ended (pre-paid time ran out): ${names(ended)}`)
   const purged = await purgeExpiredData(ctx, createStorage(config, () => undefined), null)
-  console.log(purged.length ? `cloud data deleted for: ${purged.join(', ')} (their accounts remain)` : 'nothing to purge')
+  console.log(purged.length ? `cloud data deleted for: ${names(purged)} (their accounts remain)` : 'nothing to purge')
 } else if (cmd === 'tree') {
-  const q = <T>(sql: string, ...p: string[]) => ctx.db.prepare(sql).all(...p) as T[]
+  const q = <T>(sql: string, ...p: (string | number)[]) => ctx.db.prepare(sql).all(...p) as T[]
   const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`
-  const users = q<{ username: string; is_admin: number; bytes_used: number; plan_status: string; retention_ends_at: number | null; paid_through: number }>('SELECT * FROM users ORDER BY username')
+  const users = q<{ id: number; username: string; is_admin: number; bytes_used: number; plan_status: string; retention_ends_at: number | null; paid_through: number }>('SELECT * FROM users ORDER BY username')
   console.log('users')
-  for (const u of users) console.log(`  ${u.username}${u.is_admin ? ' (admin)' : ''}${u.plan_status === 'read_only' ? (u.retention_ends_at ? ` (read-only, cloud data deleted ${new Date(u.retention_ends_at).toISOString().slice(0, 10)})` : ' (lapsed: cloud data deleted)') : ''}  ${kb(u.bytes_used)} used, paid through ${new Date(u.paid_through).toISOString().slice(0, 10)}`)
+  for (const u of users) console.log(`  ${u.id}  ${u.username}${u.is_admin ? ' (admin)' : ''}${u.plan_status === 'read_only' ? (u.retention_ends_at ? ` (read-only, cloud data deleted ${new Date(u.retention_ends_at).toISOString().slice(0, 10)})` : ' (lapsed: cloud data deleted)') : ''}  ${kb(u.bytes_used)} used, paid through ${new Date(u.paid_through).toISOString().slice(0, 10)}`)
   console.log('projects')
   for (const u of users) {
-    const projects = q<{ id: string; name: string }>('SELECT id, name FROM projects WHERE owner_username = ? ORDER BY created_at', u.username)
+    const projects = q<{ id: string; name: string }>('SELECT id, name FROM projects WHERE owner_id = ? ORDER BY created_at', u.id)
     if (!projects.length) continue
     console.log(`  ${u.username}`)
     for (const p of projects) {
-      const members = q<{ username: string; role: string }>("SELECT username, role FROM project_members WHERE project_id = ? AND role != 'owner' ORDER BY username", p.id)
+      const members = q<{ username: string; role: string }>(
+        "SELECT u.username, m.role FROM project_members m JOIN users u ON u.id = m.user_id WHERE m.project_id = ? AND m.role != 'owner' ORDER BY u.username", p.id)
       console.log(`    ${p.name} [${p.id}]  members: ${members.map((m) => `${m.username} (${m.role})`).join(', ') || 'none'}`)
       const lib = q<{ hash: string; size: number; owner: string }>(
-        'SELECT u.hash, u.size, u.owner FROM project_samples ps JOIN uploads u ON u.hash = ps.hash AND u.owner = ps.owner WHERE ps.project_id = ? ORDER BY ps.added_at', p.id)
+        `SELECT u.hash, u.size, o.username AS owner FROM project_samples ps JOIN uploads u ON u.hash = ps.hash AND u.owner_id = ps.owner_id
+         JOIN users o ON o.id = ps.owner_id WHERE ps.project_id = ? ORDER BY ps.added_at`, p.id)
       for (const s of lib) console.log(`      ${s.hash.slice(0, 8)}  ${kb(s.size)}  owned by ${s.owner}`)
     }
   }
@@ -119,7 +127,7 @@ if (cmd === 'create-invite') {
   const show = (label: string, items: string[]) => items.length && console.log(`${label}:\n${items.map((i) => `  ${i}`).join('\n')}`)
   show('leaked objects (no upload row)', r.leaked)
   show('broken (complete upload, no object)', r.broken)
-  show('orphan library links (project:hash:owner, upload not complete)', r.orphanLinks)
+  show('orphan library links (project:hash:owner id, upload not complete)', r.orphanLinks)
   show('bytes_used drift', r.drift.map((d) => `${d.username}: recorded ${d.recorded}, expected ${d.expected}`))
   if (isClean(r)) console.log('audit: clean')
   else if (fix) console.log('fixed: leaked objects deleted, bytes_used recomputed (broken/orphan links need a human)')

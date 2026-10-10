@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { addMonths, addTrack, getTracks } from '@mobdaw/shared'
+import { addAudioClip, addMonths, addTrack, getTracks } from '@mobdaw/shared'
 import { audit } from '../src/audit.ts'
 import { openDb } from '../src/db.ts'
-import { createStorage } from '../src/storage/index.ts'
-import { ADMIN, admit, client, connect, login, startTest, until, type Client } from './helpers.ts'
+import { createStorage, objectKey } from '../src/storage/index.ts'
+import { ADMIN, admit, client, connect, login, startTest, until, userId, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 let admin: Client, alice: Client
@@ -109,6 +109,23 @@ describe('copy', () => {
   })
 })
 
+describe('preview', () => {
+  it('summarises tracks and clips as fractions of the project length, for members only', async () => {
+    const id = await create('Pictured')
+    const c = connect(t.port, id, admin.token!)
+    await until(() => c.provider.synced)
+    const track = addTrack(c.doc, 'Drums')
+    addAudioClip(c.doc, { trackId: track, sourceHash: 'x', start: 0, length: 1000 })
+    addAudioClip(c.doc, { trackId: track, sourceHash: 'x', start: 3000, length: 1000 })
+    await until(() => c.provider.unsyncedChanges === 0)
+    const res = await admin.get(`/api/projects/${id}/preview`)
+    expect(res.status).toBe(200)
+    expect(res.body.rows).toEqual([{ kind: 'audio', spans: [[0, 0.25], [0.75, 1]] }])
+    c.provider.destroy()
+    expect((await alice.get(`/api/projects/${id}/preview`)).status).toBe(404)
+  })
+})
+
 describe('audit', () => {
   it('detects leaked objects and bytes_used drift; --fix repairs both', async () => {
     const db = openDb(t.config.dbPath)
@@ -127,18 +144,18 @@ describe('audit', () => {
       expect(base.drift).toEqual([])
 
       const leak = 'f'.repeat(64)
-      await (await import('node:fs/promises')).writeFile(`${t.config.storageDir}/${leak}`, 'stray')
+      await (await import('node:fs/promises')).writeFile(`${t.config.storageDir}/${objectKey(userId(db, ADMIN), leak)}`, 'stray')
       db.prepare('UPDATE users SET bytes_used = bytes_used + 777 WHERE username = ?').run(ADMIN)
 
       const found = await audit(ctx, storage)
-      expect(found.leaked).toEqual([leak])
+      expect(found.leaked).toEqual([`u${userId(db, ADMIN)}/${leak}`])
       expect(found.drift).toMatchObject([{ username: ADMIN, recorded: found.drift[0].expected + 777 }])
 
       await audit(ctx, storage, true)
       const after = await audit(ctx, storage)
       expect(after).toEqual({ leaked: [], broken: [], orphanLinks: [], drift: [] })
-      expect(await storage.size(leak)).toBeNull()
-      expect(await storage.size(hash)).toBe(30) // referenced objects untouched
+      expect(await storage.size(userId(db, ADMIN), leak)).toBeNull()
+      expect(await storage.size(userId(db, ADMIN), hash)).toBe(30) // referenced objects untouched
     } finally {
       db.close()
     }
@@ -176,9 +193,10 @@ describe('migration', () => {
 
     const db = openDb(path)
     try {
-      // Google-era identities are kept as usernames, with no password until an admin sets one.
-      expect(db.prepare('SELECT * FROM users').all()).toMatchObject([{ username: 'o', password_hash: null }])
-      expect(db.prepare('SELECT owner_username FROM projects').all()).toMatchObject([{ owner_username: 'o' }])
+      // Google-era identities are kept as usernames (with ids counting from 1), with no password until an admin sets one.
+      expect(db.prepare('SELECT * FROM users').all()).toMatchObject([{ id: 1, username: 'o', password_hash: null }])
+      expect(db.prepare('SELECT owner_id FROM projects').all()).toMatchObject([{ owner_id: 1 }])
+      expect(db.prepare('SELECT user_id, role FROM project_members').all()).toMatchObject([{ user_id: 1, role: 'owner' }])
       // Pre-existing accounts are grandfathered with 999 months of pre-paid time; so are invites nobody has used yet.
       const { paid_through } = db.prepare('SELECT paid_through FROM users').get() as { paid_through: number }
       expect(Math.abs(paid_through - addMonths(Date.now(), 999))).toBeLessThan(60_000)
@@ -186,11 +204,11 @@ describe('migration', () => {
         { token: 'open', gift_months: 999 }, { token: 'used', gift_months: 0 },
       ])
       // Uploads belong to the old uploader; library links name the upload they point at.
-      expect(db.prepare('SELECT owner, hash, state FROM uploads ORDER BY hash').all()).toMatchObject([
-        { owner: 'o', state: 'complete' }, { owner: 'o', state: 'complete' }, { owner: 'o', state: 'pending' },
+      expect(db.prepare('SELECT owner_id, hash, state FROM uploads ORDER BY hash').all()).toMatchObject([
+        { owner_id: 1, state: 'complete' }, { owner_id: 1, state: 'complete' }, { owner_id: 1, state: 'pending' },
       ])
-      expect(db.prepare('SELECT hash, owner FROM project_samples WHERE project_id = ? ORDER BY hash').all('p1')).toMatchObject([
-        { hash: h1, owner: 'o' }, { hash: h2, owner: 'o' },
+      expect(db.prepare('SELECT hash, owner_id FROM project_samples WHERE project_id = ? ORDER BY hash').all('p1')).toMatchObject([
+        { hash: h1, owner_id: 1 }, { hash: h2, owner_id: 1 },
       ])
     } finally {
       db.close()

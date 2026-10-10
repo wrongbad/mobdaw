@@ -12,9 +12,15 @@ import { createStorage } from './storage/index.ts'
 export async function startServer(config: Config) {
   const db = openDb(config.dbPath)
   const ctx: Ctx = { config, db }
-  const storage = createStorage(config, (hash) =>
-    (db.prepare('SELECT mime FROM uploads WHERE hash = ?').get(hash) as { mime: string } | undefined)?.mime,
+  const storage = createStorage(config, (owner, hash) =>
+    (db.prepare('SELECT mime FROM uploads WHERE owner_id = ? AND hash = ?').get(owner, hash) as { mime: string } | undefined)?.mime,
   )
+  // Objects stored under an older layout move to u<owner id>/<hash>. Before serving, so downloads find them.
+  await storage.migrateLayout({
+    ownersOf: (hash) =>
+      (db.prepare("SELECT owner_id FROM uploads WHERE hash = ? AND state != 'pending'").all(hash) as { owner_id: number }[]).map((r) => r.owner_id),
+    userId: (username) => (db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id: number } | undefined)?.id,
+  })
   const collab = createCollab(ctx)
   // Hocuspocus owns the http.Server; replace its placeholder handler with the Hono app.
   collab.httpServer.removeAllListeners('request')

@@ -1,5 +1,6 @@
 import { api } from '../api'
 import { h, mount } from '../dom'
+import { homeLink } from '../router'
 import { authMessage } from './login'
 
 /** Registration form; `invite` (from the `#/register/<code>` link) prefills the invite code. */
@@ -23,5 +24,5 @@ export function registerPage(invite: string, done: () => void) {
       }, code, username, password, again, h('button', {}, 'Register')),
       err,
       h('p', { className: 'dim' }, 'Already have an account? ', h('a', { href: '#/login' }, 'Log in')),
-      h('p', { className: 'dim' }, h('a', { href: '#/local' }, 'Continue without an account'), ' to work on this device.'))))
+      h('p', { className: 'dim' }, h('a', homeLink, 'Continue without an account'), ' to work on this device.'))))
 }

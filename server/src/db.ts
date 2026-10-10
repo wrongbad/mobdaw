@@ -85,6 +85,56 @@ const migrations: (string | ((db: Db) => void))[] = [
   },
   // Accounts are never deleted automatically: when the retention window ends only the cloud data goes, and this records when.
   `ALTER TABLE users ADD COLUMN data_purged_at INTEGER;`,
+  // Per-owner storage objects: no more proof-of-possession uploads. In-flight proof uploads are dropped (the client re-uploads).
+  `DELETE FROM uploads WHERE proof = 1 AND state = 'pending';
+   ALTER TABLE uploads DROP COLUMN proof;`,
+  // Users get a numeric id (1, 2, ... in signup order) and everything refers to them by it, so a username can change.
+  // Invites keep `created_by` / `redeemed_by` as plain text: a log of who did what at the time.
+  `CREATE TABLE users_new(
+     id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE,
+     is_admin INTEGER NOT NULL DEFAULT 0, bytes_used INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, password_hash TEXT,
+     account_role TEXT NOT NULL DEFAULT 'user' CHECK(account_role IN ('user','dev')),
+     plan_status TEXT NOT NULL DEFAULT 'active' CHECK(plan_status IN ('active','read_only')),
+     retention_ends_at INTEGER, paid_through INTEGER NOT NULL DEFAULT 0, data_purged_at INTEGER);
+   INSERT INTO users_new(username, is_admin, bytes_used, created_at, password_hash, account_role, plan_status, retention_ends_at, paid_through, data_purged_at)
+     SELECT username, is_admin, bytes_used, created_at, password_hash, account_role, plan_status, retention_ends_at, paid_through, data_purged_at
+     FROM users ORDER BY created_at, username;
+   DROP TABLE users;
+   ALTER TABLE users_new RENAME TO users;
+
+   CREATE TABLE projects_new(id TEXT PRIMARY KEY, name TEXT NOT NULL, owner_id INTEGER NOT NULL, created_at INTEGER NOT NULL);
+   INSERT INTO projects_new SELECT p.id, p.name, u.id, p.created_at FROM projects p JOIN users u ON u.username = p.owner_username;
+   DROP TABLE projects;
+   ALTER TABLE projects_new RENAME TO projects;
+
+   CREATE TABLE project_members_new(
+     project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role TEXT NOT NULL CHECK(role IN ('owner','editor','viewer')),
+     PRIMARY KEY(project_id, user_id));
+   INSERT INTO project_members_new SELECT m.project_id, u.id, m.role FROM project_members m JOIN users u ON u.username = m.username;
+   DROP TABLE project_members;
+   ALTER TABLE project_members_new RENAME TO project_members;
+   CREATE INDEX project_members_user ON project_members(user_id);
+
+   CREATE TABLE uploads_new(
+     owner_id INTEGER NOT NULL, hash TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+     size INTEGER NOT NULL, mime TEXT NOT NULL,
+     state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','complete','deleting')),
+     created_at INTEGER NOT NULL, PRIMARY KEY(owner_id, hash));
+   INSERT INTO uploads_new SELECT u.id, s.hash, s.name, s.size, s.mime, s.state, s.created_at FROM uploads s JOIN users u ON u.username = s.owner;
+   DROP TABLE uploads;
+   ALTER TABLE uploads_new RENAME TO uploads;
+   CREATE INDEX uploads_hash ON uploads(hash);
+
+   CREATE TABLE project_samples_new(
+     project_id TEXT NOT NULL, hash TEXT NOT NULL, owner_id INTEGER NOT NULL, added_at INTEGER NOT NULL,
+     PRIMARY KEY(project_id, hash, owner_id));
+   INSERT INTO project_samples_new SELECT ps.project_id, ps.hash, u.id, ps.added_at FROM project_samples ps JOIN users u ON u.username = ps.owner;
+   DROP TABLE project_samples;
+   ALTER TABLE project_samples_new RENAME TO project_samples;
+   CREATE INDEX project_samples_hash ON project_samples(hash);
+   CREATE INDEX project_samples_owner ON project_samples(owner_id, hash);`,
+  // What the file is and a small waveform (UploadAnalysis as JSON), measured by the owner's browser and cached here.
+  'ALTER TABLE uploads ADD COLUMN analysis TEXT;',
 ]
 
 export function openDb(path: string): Db {

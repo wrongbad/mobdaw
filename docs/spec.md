@@ -189,7 +189,7 @@ doc.getMap('samples') // hash -> plain object { hash, name, duration, size, mime
   - `#/login` has a username and password form, with a link to register.
   - `#/register/:code?` has invite code, username, password and confirm fields; the code is
     prefilled from the link and the page says registration is invite-only.
-  - `#/projects` lists projects, has a create form, and lets the owner share each project
+  - The home page (no hash) lists projects, has a create form, and lets the owner share each project
     (pick from `/users`).
   - `#/project/:id` is the timeline.
   - `#/admin` (admins only) creates an invite, shows a copyable link, and lists invites.
@@ -407,7 +407,7 @@ All sample routes are scoped to a project, and the caller must be a member.
   - Non-owners get "Leave".
   - Everyone gets "Save a copy".
 - If the WS connection is closed for lost access, or the project is deleted, show a short
-  message and go back to `#/projects`.
+  message and go back to the home page.
 
 ## Tests required
 - Read leak:

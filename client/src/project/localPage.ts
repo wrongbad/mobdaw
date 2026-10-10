@@ -1,4 +1,5 @@
 import { h, mount } from '../dom'
+import { homeLink } from '../router'
 import { getLocal } from '../local/projects'
 import { openLocalSession } from '../local/session'
 import { mountTimeline } from '../ui/timeline'
@@ -7,7 +8,7 @@ import { mountTimeline } from '../ui/timeline'
 export function localProjectPage(id: string) {
   const project = getLocal(id)
   if (!project) {
-    mount(h('main', { className: 'center' }, h('p', { className: 'error' }, 'That project is not on this device.'), h('a', { href: '#/local' }, 'back')))
+    mount(h('main', { className: 'center' }, h('p', { className: 'error' }, 'That project is not on this device.'), h('a', homeLink, 'back')))
     return
   }
   const session = openLocalSession(id)

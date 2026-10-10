@@ -3,6 +3,7 @@ import { createSHA256 } from 'hash-wasm'
 import type * as Y from 'yjs'
 import { api, ApiError } from './api'
 import { getCtx } from './audio/context'
+import { analyzeAudio, peaksToBase64 } from './audio/probe'
 import { getAudio, putAudio } from './local/audio'
 import { isLocalId } from './local/ids'
 
@@ -96,20 +97,21 @@ async function requestUpload(projectId: string, req: UploadUrlRequest) {
  * owns their own upload of a file, so this also records it under the signed-in account (and charges their storage).
  */
 export async function uploadToProject(projectId: string, blob: Blob, hash: string, mime: string, name: string) {
-  // A 409 proof_required means someone else's identical upload finished first: ask again, which then wants a proof upload.
-  for (let attempt = 0; ; attempt++) {
-    const up = await requestUpload(projectId, { hash, size: blob.size, mime, name })
-    if (up.exists) return
-    // Passing the Blob lets the browser stream it from disk.
-    const res = await fetch(up.url, { method: up.method, headers: up.headers, body: blob })
-    if (!res.ok) throw new Error(`upload failed (HTTP ${res.status})`)
-    try {
-      await api.completeSample(projectId, hash) // also links it into this project's library
-      return
-    } catch (e) {
-      if (!(e instanceof ApiError && e.code === 'proof_required') || attempt >= 2) throw e
-    }
-  }
+  const up = await requestUpload(projectId, { hash, size: blob.size, mime, name })
+  if (up.exists) return
+  // Passing the Blob lets the browser stream it from disk.
+  const res = await fetch(up.url, { method: up.method, headers: up.headers, body: blob })
+  if (!res.ok) throw new Error(`upload failed (HTTP ${res.status})`)
+  await api.completeSample(projectId, hash) // also links it into this project's library
+  void saveAnalysis(hash, blob)
+}
+
+/** Measure a file and cache the result on its upload (shown on the uploads page). Best effort: the page does it later if this fails. */
+export async function saveAnalysis(hash: string, blob: Blob) {
+  try {
+    const a = await analyzeAudio(blob)
+    await api.saveAnalysis(hash, { info: a.info, peaks: peaksToBase64(a.peaks) })
+  } catch {}
 }
 
 export const sampleName = (file: { name: string }) => file.name.replace(/\.[^.]+$/, '')

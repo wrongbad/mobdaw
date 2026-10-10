@@ -14,13 +14,13 @@ export function accountRoutes(ctx: Ctx, storage: Storage, collab: Collab) {
    * This is the only way an account is ever deleted. Asks for the password so a stolen session can't do it.
    */
   r.post('/me/delete', requireSignedIn, async (c) => {
-    const username = c.var.session!.username
-    const user = getUser(ctx.db, username)!
+    const userId = c.var.session!.id
+    const user = getUser(ctx.db, userId)!
     if (user.account_role === 'dev') return c.json({ error: 'forbidden' }, 403)
     const password = String((await c.req.json().catch(() => ({}))).password ?? '')
     if (!user.password_hash || password.length > PASSWORD_MAX || !(await verifyPassword(password, user.password_hash)))
       return c.json({ error: 'wrong_password' }, 403)
-    deleteAccount(ctx, collab, username)
+    deleteAccount(ctx, collab, userId)
     deleteCookie(c, SESSION_COOKIE, { path: ctx.config.basePath || '/' })
     void sweepSamples(ctx, storage).catch((e) => console.error('sweep failed', e))
     return c.json({ ok: true })

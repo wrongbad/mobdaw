@@ -5,7 +5,25 @@ const routes: [RegExp, Handler][] = []
 let cleanup: void | (() => void)
 
 export const route = (re: RegExp, h: Handler) => routes.push([re, h])
-export const go = (path: string) => (location.hash = '#' + path)
+
+/** Navigate to a hash route. The home page '/' is the bare URL, with no hash at all. */
+export function go(path: string, replace = false) {
+  if (path !== '/') {
+    if (replace) location.replace('#' + path)
+    else location.hash = '#' + path
+    return
+  }
+  const url = location.pathname + location.search
+  if (replace) history.replaceState(null, '', url)
+  else history.pushState(null, '', url)
+  dispatchEvent(new HashChangeEvent('hashchange')) // pushState doesn't fire it
+}
+
+/** Attributes for a link to the home page: the real URL, but handled in-page. */
+export const homeLink = {
+  href: location.pathname + location.search,
+  onclick: (e: Event) => (e.preventDefault(), go('/')),
+}
 
 export function start(fallback: string) {
   const run = () => {

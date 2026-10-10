@@ -25,7 +25,7 @@ export function accountPage(me: Me) {
         h('p', {}, 'Paid through ', h('strong', {}, dateOf(me.paidThrough)),
           ` (${months} ${months === 1 ? 'month' : 'months'} of pre-paid time).`),
         h('p', { className: 'dim' },
-          'When pre-paid time runs out, your account becomes read-only for 30 days so you can download your data, and then your cloud audio and projects are deleted. Your account is never deleted automatically. ' +
+          'When pre-paid time runs out, your cloud audio and projects become read-only for 30 days so you can download your data, and then your cloud audio and projects are deleted. Your account is never deleted automatically. ' +
           'Payments are not set up yet; time comes from invites and gifts.'))
 
   const progress = h('p', { className: 'dim' })
@@ -65,7 +65,7 @@ export function accountPage(me: Me) {
   const del = h('button', { className: 'danger', onclick: () => {
     if (!password.value) return void (err.textContent = 'Enter your password to confirm.')
     if (!confirm('Delete your account now? Your projects (for every member you shared them with) and all of your uploads are permanently deleted. This cannot be undone.')) return
-    api.deleteAccount(password.value).then(() => go('/local'), (e) => (err.textContent = describeError(e)))
+    api.deleteAccount(password.value).then(() => go('/'), (e) => (err.textContent = describeError(e)))
   } }, 'Delete my account')
 
   mount(nav(me), h('main', {},

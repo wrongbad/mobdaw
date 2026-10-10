@@ -5,10 +5,9 @@ import { go, route, start } from './router'
 import { h, mount } from './dom'
 import { loginPage } from './pages/login'
 import { registerPage } from './pages/register'
-import { projectsPage } from './pages/projects'
+import { homePage } from './pages/home'
 import { accountPage } from './pages/account'
 import { adminPage } from './pages/admin'
-import { localProjectsPage } from './pages/local'
 import { uploadsPage } from './pages/uploads'
 import { projectPage } from './project/page'
 import { localProjectPage } from './project/localPage'
@@ -32,7 +31,7 @@ function guarded(fn: (me: Me, params: string[]) => void | (() => void), opts: { 
     getMe().then((me) => {
       if (dead) return
       if (!me) return go('/login')
-      if (opts.admin && !me.isAdmin) return go('/projects')
+      if (opts.admin && !me.isAdmin) return go('/')
       cleanup = fn(me, params)
     }).catch((e) => mount(h('p', { className: 'error' }, String(e.message ?? e))))
     return () => {
@@ -57,15 +56,14 @@ function optional(fn: (me: Me | null) => void | (() => void)) {
   }
 }
 
-route(/^\/login$/, () => void loginPage(() => go('/projects')))
-route(/^\/register(?:\/([^/]+))?$/, ([invite]) => void registerPage(invite ?? '', () => go('/projects')))
-route(/^\/projects$/, guarded((me) => projectsPage(me)))
+route(/^\/login$/, () => void loginPage(() => go('/')))
+route(/^\/register(?:\/([^/]+))?$/, ([invite]) => void registerPage(invite ?? '', () => go('/')))
+route(/^\/$/, optional((me) => homePage(me)))
+route(/^\/(?:projects|local)$/, () => go('/', true)) // old URLs
 route(/^\/uploads$/, guarded((me) => uploadsPage(me)))
 route(/^\/account$/, guarded((me) => accountPage(me)))
-route(/^\/local$/, optional((me) => localProjectsPage(me)))
 route(/^\/local\/([^/]+)$/, ([id]) => localProjectPage(id))
 route(/^\/admin$/, guarded((me) => adminPage(me), { admin: true }))
 route(/^\/project\/([^/]+)$/, guarded((me, [id]) => projectPage(me, id)))
 route(/^\/engine-test$/, guarded((me) => engineTestPage(me))) // dev tool, linked from nowhere
-// Signed-in users land on their cloud projects; everyone else works on this device.
-start(getToken() ? '/projects' : '/local')
+start('/')

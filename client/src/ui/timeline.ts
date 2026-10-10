@@ -2,12 +2,13 @@
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import {
   DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, MASTER_TRACK, FINNWAVE, addAudioClip, addDevice, addLane, addMidiClip, addPad, addPoint, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
-  evalLfo, evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
+  evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
   deleteDevice, deleteLooper, addNextLooper, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
   type Point, type Track,
 } from '@mobdaw/shared'
+import { homeLink } from '../router'
 import { drawWave, onPeaks, peaksFor } from '../audio/peaks'
 import type { PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
@@ -16,7 +17,7 @@ import { importFile, playable } from '../samples'
 import type { Session } from '../project/session'
 import { chatPanel } from './chat'
 import { NO_AUTO, autoRow, automateMenu, type AutoInfo } from './automation'
-import { deviceCard, fmt as fmtParam } from './devices'
+import { deviceCard } from './devices'
 import { LOOP_COLORS, looperCard } from './loopers'
 import { noteEditor } from './noteEditor'
 import { clamp, dragPointer, grabAt, trimBlock, trimMidiLeft, type Grab } from './blocks'
@@ -95,7 +96,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
     onUnread: (n) => (chatBtn.textContent = n ? `chat (${n})` : 'chat'),
   })
   const bar = h('header', { className: 'bar' },
-    h('div', { className: 'bar-l' }, h('a', { href: '#/projects', className: 'logo', title: 'All projects' }, 'mobdaw'), h('strong', {}, projectName),
+    h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'All projects' }, 'mobdaw'), h('strong', {}, projectName),
       readOnly ? h('span', { className: 'dim' }, 'view only') : null,
       s.local ? h('span', { className: 'dim', title: 'Saved in this browser, on this device' }, 'on this device') : null),
     transport.el,
@@ -320,38 +321,25 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false)
         })
       })
     }
-    showReadouts()
   }
 
-  const fmtAuto = (def: { options?: string[] } & Parameters<typeof fmtParam>[0], v: number) => def.options?.[Math.round(v)] ?? fmtParam(def, v)
-
   /**
-   * What each automated param reads at the playhead (`autoInfos`, for the controls it drives) and the text for each
-   * lane's header (`autoReadouts`). Cheap enough to run every frame while playing.
+   * What each automated param reads at the playhead, for the controls it drives (`autoInfos`). An LFO lane drives
+   * nothing: its control stays free, as the wave's centre. Cheap enough to run every frame while playing.
    */
-  let autoReadouts = new Map<string, string>()
   function readAuto() {
     const at = position()
     autoInfos = new Map()
-    const readouts = (autoReadouts = new Map<string, string>())
     for (const l of autoLanes) {
       const r = resolveTarget(doc, l)
       if (!r) continue
-      const lfo = laneState(l) === 'lfo'
-      // an LFO lane doesn't drive the control (its slider is the wave's centre); its header shows where the wave is
-      const t = lfo ? evalLfo(l, paramToPos(r.def, r.value), at, getSampleRate(doc)) : evalPoints(autoPoints.get(l.id) ?? [], at)
-      const v = t == null ? null : paramToValue(r.def, t)
-      readouts.set(l.id, !l.enabled ? 'off' : v == null ? fmtAuto(r.def, r.value) : fmtAuto(r.def, v))
-      ;(autoInfos.get(l.owner) ?? autoInfos.set(l.owner, new Map()).get(l.owner)!).set(l.param, { on: l.enabled && !lfo && v != null, value: lfo ? null : v })
+      const t = laneState(l) === 'lfo' ? null : evalPoints(autoPoints.get(l.id) ?? [], at)
+      ;(autoInfos.get(l.owner) ?? autoInfos.set(l.owner, new Map()).get(l.owner)!).set(l.param, { on: l.enabled && t != null, value: t == null ? null : paramToValue(r.def, t) })
     }
   }
-  function showReadouts() {
-    for (const sec of [masterAuto, ...[...lanes.values()].map((l) => l.auto)]) for (const [id, row] of sec.rows) row.setReadout(autoReadouts.get(id) ?? '')
-  }
-  /** The playhead moved: repaint the readouts and the controls a lane drives. */
+  /** The playhead moved: repaint the controls a lane drives. */
   function refreshAuto() {
     readAuto()
-    showReadouts()
     for (const l of lanes.values()) {
       for (const [id, c] of l.cards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)
       for (const [id, c] of l.loopCards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)

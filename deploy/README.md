@@ -45,20 +45,17 @@ Attach an IAM role to the instance with:
 {
   "Version": "2012-10-17",
   "Statement": [
-    {"Effect":"Allow","Action":["s3:PutObject","s3:GetObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::mobdaw-360949415650-us-east-1-an/samples/*","arn:aws:s3:::mobdaw-360949415650-us-east-1-an/proofs/*"]},
+    {"Effect":"Allow","Action":["s3:PutObject","s3:GetObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::mobdaw-360949415650-us-east-1-an/samples/*"]},
     {"Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::your-bucket"}
   ]
 }
 ```
 `s3:ListBucket` makes HeadObject return 404 (instead of 403) for missing keys, and is also
 required by `npm run admin -- audit` (ListObjectsV2 on `samples/`). `s3:DeleteObject` is used by
-the sample garbage collector. The server
+the sample garbage collector. Copying an object (a user adding a file they can read through a shared project, and
+the one-time startup move to per-owner keys) uses `s3:GetObject` + `s3:PutObject` within `samples/*`. The server
 presigns uploads with a signed `Content-Length` and SHA-256 checksum, so S3 itself rejects
 bodies that don't match.
-
-Add a lifecycle rule that expires the `proofs/` prefix after 1 day: proof objects are temporary
-uploads used to prove possession of an existing sample, and abandoned ones are not swept by the app
-on S3.
 
 ## AWS Budget alert
 Billing, Budgets, Create budget, "Cost budget", monthly, e.g. $10, with email alerts at 80% actual and 100% forecasted.

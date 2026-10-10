@@ -1,16 +1,17 @@
 import { createHash } from 'node:crypto'
-import { existsSync, utimesSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openDb, type Db } from '../src/db.ts'
 import { sweepSamples } from '../src/routes/samples.ts'
-import { createStorage, type Storage } from '../src/storage/index.ts'
-import { ADMIN, admit, client, login, startTest, until, type Client } from './helpers.ts'
+import { createStorage, objectKey, type Storage } from '../src/storage/index.ts'
+import { ADMIN, admit, client, login, startTest, until, userId, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 let admin: Client, alice: Client, bob: Client
 let db: Db
 let storage: Storage
 let pA: string
+const uid = (username: string, d: Db = db) => userId(d, username)
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 const put = (url: string, body: Buffer | string, base = t.base) => fetch(base + url, { method: 'PUT', body: body as BodyInit })
 const P = (id: string) => `/api/projects/${id}/samples`
@@ -49,7 +50,7 @@ describe('samples (local driver)', () => {
   it('upload, complete, download, dedupe', async () => {
     const up = await admin.post(`${P(pA)}/upload-url`, { hash, size: data.length, mime: 'audio/wav' })
     expect(up.body).toMatchObject({ exists: false, method: 'PUT', headers: {} })
-    expect(up.body.url).toMatch(new RegExp(`^/api/storage/${hash}\\?exp=\\d+&sig=`))
+    expect(up.body.url).toMatch(new RegExp(`^/api/storage/${objectKey(uid(ADMIN), hash)}\\?exp=\\d+&sig=`))
 
     // not uploaded yet
     expect((await admin.post(`${P(pA)}/${hash}/complete`)).status).toBe(400)
@@ -74,7 +75,7 @@ describe('samples (local driver)', () => {
   it('storage urls are signature-checked', async () => {
     const { url } = (await admin.get(`${P(pA)}/${hash}/url`)).body
     expect((await fetch(t.base + url.replace(/sig=./, 'sig=x'))).status).toBe(403)
-    expect((await fetch(t.base + `/api/storage/${hash}`)).status).toBe(403)
+    expect((await fetch(t.base + `/api/storage/${objectKey(uid(ADMIN), hash)}`)).status).toBe(403)
     expect((await fetch(t.base + url.replace(/exp=\d+/, 'exp=1'))).status).toBe(403)
     // a GET signature can't be used to PUT
     expect((await put(url, data)).status).toBe(403)
@@ -160,44 +161,18 @@ describe('access policy', () => {
     expect(await used(admin)).toBe(adminUsed) // and admin is not charged twice
   })
 
-  it('proof of possession: skipping the PUT, wrong bytes, and reusing another user\'s proof all fail', async () => {
-    const A = await mk(admin), B = await mk(bob), C = await mk(alice)
+  it("no access: skipping the PUT, wrong bytes, and someone else's stored copy all fail", async () => {
+    const A = await mk(admin), B = await mk(bob)
     const d = Buffer.alloc(15, 25)
     const h = await upload(admin, A, d)
-    const adminUsed = await used(admin), bobUsed = await used(bob)
-    const proofFile = (url: string) => `${t.config.storageDir}/proofs/${h}.${new URL(t.base + url).searchParams.get('proof')}`
-
-    // no PUT: refused, no link, and the original object does not count as proof
-    const skip = await bob.post(`${P(B)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' })
-    expect(skip.body.url).toContain('proof=')
-    const r = await bob.post(`${P(B)}/${h}/complete`)
+    const up = await bob.post(`${P(B)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' })
+    const r = await bob.post(`${P(B)}/${h}/complete`) // admin's object exists, but it isn't bob's
     expect(r.status).toBe(400)
     expect(r.body.error).toBe('not_uploaded')
     expect((await bob.get(P(B))).body).toEqual([])
-
-    // wrong bytes are rejected by the PUT itself
-    const bad = await put(skip.body.url, Buffer.alloc(15, 99))
-    expect(bad.status).toBe(400)
+    expect((await put(up.body.url, Buffer.alloc(15, 99))).status).toBe(400)
     expect((await bob.post(`${P(B)}/${h}/complete`)).status).toBe(400)
-
-    // another user's proof URL can't be reused: alice's proof key differs, so alice has nothing uploaded
-    expect((await put(skip.body.url, d)).status).toBe(200)
-    const al = await alice.post(`${P(C)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' })
-    expect(al.body.url).not.toBe(skip.body.url)
-    expect((await alice.post(`${P(C)}/${h}/complete`)).status).toBe(400)
-    // bob's proof is also bound to his project: the same user can't claim it elsewhere
-    const B2 = await mk(bob)
-    await bob.post(`${P(B2)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' })
-    expect((await bob.post(`${P(B2)}/${h}/complete`)).status).toBe(400)
-
-    // legit: bob's own proof links, the proof file disappears, no second charge
-    expect(existsSync(proofFile(skip.body.url))).toBe(true)
-    expect((await bob.post(`${P(B)}/${h}/complete`)).body).toEqual({ ok: true })
-    expect(existsSync(proofFile(skip.body.url))).toBe(false)
-    expect((await bob.get(`${P(B)}/${h}/url`)).status).toBe(200)
-    expect(await used(bob)).toBe(bobUsed + 15)
-    expect(await used(admin)).toBe(adminUsed)
-    expect(await storage.size(h)).toBe(15) // original untouched
+    expect(await storage.size(uid(ADMIN), h)).toBe(15) // admin's object untouched
   })
 
   it('within-access dedupe links without uploading, and each user owns and is charged for their own upload', async () => {
@@ -215,7 +190,8 @@ describe('access policy', () => {
     expect((await alice.post(`${P(C)}/upload-url`, { hash: h, size: d.length, mime: 'audio/wav' })).body).toEqual({ exists: true })
     expect(await used(alice)).toBe(before + 14)
     expect((await alice.get(P(C))).body).toMatchObject([{ hash: h, owner: 'alice' }])
-    expect(db.prepare('SELECT owner FROM uploads WHERE hash = ? ORDER BY owner').all(h).map((r: any) => r.owner)).toEqual(['admin', 'alice'])
+    expect(db.prepare('SELECT owner_id FROM uploads WHERE hash = ? ORDER BY owner_id').all(h).map((r: any) => r.owner_id)).toEqual([uid('admin'), uid('alice')])
+    expect(await storage.size(uid('alice'), h)).toBe(14) // copied server-side
   })
 
   it('quota is checked for deduped uploads too', async () => {
@@ -251,7 +227,7 @@ describe('project delete and upload ownership', () => {
 
     // The project is gone but nobody's audio is: bob still owns Y and is still charged for it.
     expect(state(Y)).toBe('complete')
-    expect(await storage.size(Y)).toBe(32)
+    expect(await storage.size(uid('bob'), Y)).toBe(32)
     expect(await used(bob)).toBe(bobBefore + 32)
     expect((await bob.get('/api/uploads')).body.find((u: any) => u.hash === Y)).toMatchObject({ hash: Y, projects: [], otherProjects: 0 })
     expect((await bob.get(`/api/uploads/${Y}/url`)).status).toBe(200)
@@ -260,7 +236,7 @@ describe('project delete and upload ownership', () => {
 
     expect((await bob.del(`/api/uploads/${Y}`)).body).toEqual({ ok: true })
     await until(() => state(Y) === undefined)
-    expect(await storage.size(Y)).toBeNull()
+    expect(await storage.size(uid('bob'), Y)).toBeNull()
     expect(await used(bob)).toBe(bobBefore) // refunded
   })
 
@@ -317,8 +293,8 @@ describe('sweepSamples', () => {
 
     expect(await sweepSamples({ config: s.config, db: sdb }, storage)).toBe(1)
     expect(row(d1)).toBeUndefined()
-    expect(await storage.size(sha(d1))).toBeNull()
-    expect(await storage.size(sha(d3))).toBe(300) // complete: untouched
+    expect(await storage.size(uid(ADMIN, sdb), sha(d1))).toBeNull()
+    expect(await storage.size(uid(ADMIN, sdb), sha(d3))).toBe(300) // complete: untouched
     expect(row(d4)).toBeDefined() // fresh: untouched
     expect((await up(d2)).status).toBe(200) // reservation freed: 300 used + 100 + 700 pending
   })
@@ -330,22 +306,34 @@ describe('sweepSamples', () => {
     expect(r.body.error).toBe('upload_expired')
   })
 
-  it('sweeps abandoned local proofs older than an hour', async () => {
-    const d = Buffer.alloc(16, 6)
-    await upload(a, P1, d, s.base)
-    const other = await admit(s.base, a, 'zed')
-    const P3 = await mk(other)
-    const up = await other.post(`${P(P3)}/upload-url`, { hash: sha(d), size: 16, mime: 'audio/wav' })
-    expect((await put(up.body.url, d, s.base)).status).toBe(200)
-    const f = `${s.config.storageDir}/proofs/${sha(d)}.${new URL(s.base + up.body.url).searchParams.get('proof')}`
-    expect(existsSync(f)).toBe(true)
-    await sweepSamples({ config: s.config, db: sdb }, storage)
-    expect(existsSync(f)).toBe(true) // fresh: kept
-    const old = new Date(Date.now() - 2 * hour)
-    utimesSync(f, old, old)
-    await sweepSamples({ config: s.config, db: sdb }, storage)
-    expect(existsSync(f)).toBe(false)
-    expect(await storage.size(sha(d))).toBe(16) // the sample itself is untouched
+  it('moves objects from the older layouts to one per owner id', async () => {
+    const root = s.config.storageDir
+    const d = Buffer.alloc(16, 6), h = sha(d)
+    // oldest: one object per hash, plus a proof upload
+    writeFileSync(`${root}/${h}`, d)
+    mkdirSync(`${root}/proofs`)
+    writeFileSync(`${root}/proofs/${h}.x`, d)
+    // previous: keyed by hex(username); one user still exists, one is gone
+    const e = Buffer.alloc(17, 7), h2 = sha(e)
+    const hex = (n: string) => Buffer.from(n).toString('hex')
+    mkdirSync(`${root}/${hex('olduser')}`)
+    writeFileSync(`${root}/${hex('olduser')}/${h2}`, e)
+    mkdirSync(`${root}/${hex('gone')}`)
+    writeFileSync(`${root}/${hex('gone')}/${h2}`, e)
+
+    await storage.migrateLayout({
+      ownersOf: (hash) => (hash === h ? [20, 21] : []),
+      userId: (name) => (name === 'olduser' ? 22 : undefined),
+    })
+    expect(await storage.size(20, h)).toBe(16)
+    expect(await storage.size(21, h)).toBe(16)
+    expect(existsSync(`${root}/${h}`)).toBe(false)
+    expect(existsSync(`${root}/proofs`)).toBe(false)
+    expect(await storage.size(22, h2)).toBe(17)
+    expect(existsSync(`${root}/${hex('olduser')}`)).toBe(false)
+    expect(existsSync(`${root}/${hex('gone')}/${h2}`)).toBe(true) // no such user: left for audit
+    expect((await storage.list()).filter((o) => o.hash === h).map((o) => o.owner).sort()).toEqual([20, 21])
+    await storage.delete(20, h); await storage.delete(21, h); await storage.delete(22, h2)
   })
 
   it('a failed object delete keeps the row; the next sweep retries and refunds', async () => {
@@ -363,10 +351,10 @@ describe('sweepSamples', () => {
       console.error = log
     }
     expect(row(d)).toBeDefined()
-    expect(await storage.size(sha(d))).toBe(40)
+    expect(await storage.size(uid(ADMIN, sdb), sha(d))).toBe(40)
     expect(await sweepSamples(ctx, storage)).toBe(1)
     expect(row(d)).toBeUndefined()
-    expect(await storage.size(sha(d))).toBeNull()
+    expect(await storage.size(uid(ADMIN, sdb), sha(d))).toBeNull()
     expect((await a.get('/api/me')).body.bytesUsed).toBe(before - 40)
   })
 })

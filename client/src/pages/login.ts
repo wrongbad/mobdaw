@@ -1,5 +1,6 @@
 import { api } from '../api'
 import { h, mount } from '../dom'
+import { homeLink } from '../router'
 
 export const AUTH_MESSAGES: Record<string, string> = {
   invalid_credentials: 'Wrong username or password.',
@@ -30,5 +31,5 @@ export function loginPage(done: () => void) {
       }, username, password, h('button', {}, 'Log in')),
       err,
       h('p', { className: 'dim' }, 'Invite only for now. Have a code? ', h('a', { href: '#/register' }, 'Register')),
-      h('p', { className: 'dim' }, h('a', { href: '#/local' }, 'Continue without an account'), ' to work on this device.'))))
+      h('p', { className: 'dim' }, h('a', homeLink, 'Continue without an account'), ' to work on this device.'))))
 }

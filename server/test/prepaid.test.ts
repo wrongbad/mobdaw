@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { addMonths } from '@mobdaw/shared'
 import { endExpiredSubscriptions, giftMonths } from '../src/accounts.ts'
-import { ADMIN, client, login, pw, startTest, type Client } from './helpers.ts'
+import { ADMIN, client, login, pw, startTest, type Client, userId } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 let admin: Client
 const DAY = 86_400_000
 const near = (actual: number, expected: number) => Math.abs(actual - expected) < 60_000
 const register = (invite: string, username: string) => client(t.base).post('/api/auth/register', { username, password: pw(username), invite })
+const uid = (username: string) => userId(t.ctx.db, username)
 const row = (username: string) => t.ctx.db.prepare('SELECT * FROM users WHERE username = ?').get(username) as any
 
 beforeAll(async () => {
@@ -47,11 +48,11 @@ describe('when pre-paid time runs out', () => {
     const token = (await admin.post('/api/invites', { giftMonths: 1 })).body.token
     const jo = (await register(token, 'joey')).body
     const joC = client(t.base, jo.token)
-    expect(endExpiredSubscriptions(t.ctx, t.collab)).toEqual(['ivy']) // joey is still paid; ivy was gifted nothing
+    expect(endExpiredSubscriptions(t.ctx, t.collab)).toEqual([uid('ivy')]) // joey is still paid; ivy was gifted nothing
 
     const lapsed = Date.now() - DAY
     t.ctx.db.prepare('UPDATE users SET paid_through = ? WHERE username = ?').run(lapsed, 'joey')
-    expect(endExpiredSubscriptions(t.ctx, t.collab)).toEqual(['joey'])
+    expect(endExpiredSubscriptions(t.ctx, t.collab)).toEqual([uid('joey')])
     expect(endExpiredSubscriptions(t.ctx, t.collab)).toEqual([]) // only once
     const me = (await joC.get('/api/me')).body
     expect(me.planStatus).toBe('read_only')
@@ -59,7 +60,7 @@ describe('when pre-paid time runs out', () => {
     expect((await joC.post('/api/projects', { name: 'x' })).body.error).toBe('account_read_only')
 
     // a gift that doesn't reach the future leaves it read-only; one that does restores it
-    const until = giftMonths(t.ctx, t.collab, 'joey', 2)!
+    const until = giftMonths(t.ctx, t.collab, uid('joey'), 2)!
     expect(near(until, addMonths(Date.now(), 2))).toBe(true) // time lost while lapsed isn't carried: it counts from now
     expect((await joC.get('/api/me')).body).toMatchObject({ planStatus: 'active', retentionEndsAt: null, paidThrough: until })
     expect((await joC.post('/api/projects', { name: 'x' })).status).toBe(201)
@@ -67,13 +68,13 @@ describe('when pre-paid time runs out', () => {
 
   it('gifted months stack on the time that is left', async () => {
     const before = row(ADMIN).paid_through
-    expect(giftMonths(t.ctx, null, ADMIN, 12)).toBe(addMonths(before, 12))
-    expect(giftMonths(t.ctx, null, 'nobody', 1)).toBeNull()
+    expect(giftMonths(t.ctx, null, uid(ADMIN), 12)).toBe(addMonths(before, 12))
+    expect(giftMonths(t.ctx, null, 99999, 1)).toBeNull()
   })
 
   it('never ends the dev account, and never touches accounts that are paid', async () => {
     t.ctx.db.prepare("INSERT INTO users(username, password_hash, account_role, created_at, paid_through) VALUES('devacct2', '', 'dev', 1, 0)").run()
-    expect(endExpiredSubscriptions(t.ctx, t.collab)).not.toContain('devacct2')
+    expect(endExpiredSubscriptions(t.ctx, t.collab)).not.toContain(uid('devacct2'))
     expect(row(ADMIN).plan_status).toBe('active')
   })
 })

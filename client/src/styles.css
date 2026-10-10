@@ -22,6 +22,7 @@ button:hover { background: var(--line); }
 :disabled { opacity: 0.4; cursor: default; }
 nav { display: flex; gap: 20px; align-items: center; padding: 14px 24px; }
 main { width: 100%; max-width: 640px; margin: 0 auto; padding: 24px; }
+main.wide { max-width: 860px; }
 main.center { margin: auto; text-align: center; }
 .card { display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .card form { display: flex; flex-direction: column; gap: 10px; min-width: 260px; }
@@ -29,6 +30,39 @@ main.center { margin: auto; text-align: center; }
 .row input { flex: 1; }
 .list { list-style: none; padding: 0; margin: 0; }
 .list li { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.section > summary { cursor: pointer; list-style: none; }
+.section > summary::-webkit-details-marker { display: none; }
+.section > summary h2 { display: inline; }
+.section > summary::before { content: '▾'; margin-right: 8px; color: var(--dim); }
+.section:not([open]) > summary::before { content: '▸'; }
+.menu { position: relative; }
+.menu > summary { cursor: pointer; }
+.menu > div {
+  position: absolute; right: 0; top: 100%; z-index: 10; margin-top: 6px; min-width: 120px;
+  display: flex; flex-direction: column; gap: 10px; padding: 10px 14px;
+  background: var(--raise); border: 1px solid var(--line);
+}
+.wave-slot { width: 192px; height: 48px; flex: none; background: var(--panel); }
+canvas.wave { display: block; width: 192px; height: 48px; color: var(--accent); }
+.tiles { list-style: none; padding: 0; margin: 12px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.tiles > li.dim { grid-column: 1 / -1; }
+.tile { position: relative; background: var(--panel); border: 1px solid var(--line); }
+.tile:hover { border-color: var(--dim); }
+.tile-link { display: flex; flex-direction: column; gap: 4px; padding: 10px; color: var(--fg); }
+.tile-link .picture { height: 64px; margin-bottom: 6px; background: var(--bg); display: flex; align-items: center; justify-content: center; }
+.tile-link .picture svg { width: 100%; height: 100%; padding: 6px; }
+.tile-link strong { padding-right: 28px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview .clip { fill: var(--accent); opacity: 0.85; }
+.preview .clip.midi { fill: #7ad7a2; }
+.preview .clip.soundscape { fill: #e0b36a; }
+.tile-menu { position: absolute; right: 6px; bottom: 8px; }
+.tile-menu > summary { padding: 0 8px; list-style: none; }
+.tile-menu > summary::-webkit-details-marker { display: none; }
+.tile-menu > div { right: 0; bottom: 100%; top: auto; margin: 0 0 6px; z-index: 5; min-width: 180px; }
+.tile:has(details[open]) { z-index: 5; }
+button.link { border: 0; background: none; padding: 0; text-align: left; color: var(--accent); }
+button.link:hover { background: none; text-decoration: underline; }
+button.link.danger { color: var(--danger); }
 .members { flex-basis: 100%; font-size: 13px; }
 .members .row { padding-top: 6px; }
 .hint { padding: 48px 12px; text-align: center; font-size: 13px; }
@@ -146,10 +180,13 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .auto-head { gap: 3px; padding: 0 8px; }
 .auto-title { min-width: 0; }
 .auto-head select { min-width: 0; padding: 0 2px; border: 0; background: var(--raise); font-size: 11px; line-height: 18px; height: 18px; }
-.auto-head .auto-mode { flex: none; width: 74px; }
+.auto-head .auto-mode { flex: 1; }
+.auto-head .lfo-ctl[hidden] { display: none; } /* .ctl is display:flex, which would otherwise win over [hidden] */
 .auto-head .auto-shape { flex: none; width: 52px; }
+.auto-head .auto-shape[hidden] { display: none; }
+.auto-head .lfo-label { flex: none; width: 36px; padding: 0 4px; font-size: 11px; line-height: 18px; color: var(--dim); background: var(--raise); }
+.auto-row.lfo { height: 96px; }
 .auto-row.lfo .auto-body { cursor: default; }
-.auto-head .out { flex: 1; text-align: right; padding: 0 4px; font-size: 11px; background: var(--raise); line-height: 18px; overflow: hidden; white-space: nowrap; }
 .auto-body { cursor: crosshair; }
 .auto-svg { display: block; touch-action: none; }
 .auto-line { fill: none; stroke: var(--c); stroke-width: 2; pointer-events: none; }

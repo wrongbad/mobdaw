@@ -1,9 +1,8 @@
 // Waveform peaks for clip rendering: max |x| per BUCKET frames (channels folded), drawn on a dB-ish scale.
 import { getSampleBuffer } from '../samples'
+import { shape } from './probe'
 
 export const BUCKET = 64
-/** Amplitude at (or below) which the drawn wave has zero height. */
-const FLOOR_DB = -48
 
 const cache = new Map<string, Float32Array>()
 const pending = new Set<string>()
@@ -46,9 +45,6 @@ export function peaksFor(projectId: string, hash: string, rate: number): Float32
     })
   return undefined
 }
-
-/** Amplitude 0..1 -> height 0..1; linear in dB so quiet material stays visible. */
-const shape = (a: number) => (a <= 0 ? 0 : Math.max(0, 1 - 20 * Math.log10(a) / FLOOR_DB))
 
 /** One 1px column per canvas pixel, mirrored about the centre line. */
 export function drawWave(cv: HTMLCanvasElement, peaks: Float32Array, fromFrame: number, frames: number) {

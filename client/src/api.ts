@@ -1,6 +1,6 @@
 import type {
   AddMemberRequest, CreateInviteRequest, CreateInviteResponse, CreateProjectRequest, InviteInfo,
-  LibrarySample, LoginRequest, LoginResponse, Me, ProjectDetail, ProjectSummary, RegisterRequest, UploadInfo, UploadUrlRequest,
+  LibrarySample, LoginRequest, LoginResponse, Me, ProjectDetail, ProjectPreview, ProjectSummary, RegisterRequest, UploadAnalysis, UploadInfo, UploadUrlRequest,
   UploadUrlResponse, UrlResponse, UserInfo,
 } from '@mobdaw/shared'
 
@@ -52,6 +52,7 @@ export const api = {
   createInvite: (b: CreateInviteRequest) => post<CreateInviteResponse>('/invites', b),
   projects: () => get<ProjectSummary[]>('/projects'),
   project: (id: string) => get<ProjectDetail>(`/projects/${id}`),
+  projectPreview: (id: string) => get<ProjectPreview>(`/projects/${id}/preview`),
   createProject: (b: CreateProjectRequest) => post<ProjectSummary>('/projects', b),
   renameProject: (id: string, name: string) => req<ProjectDetail>('PATCH', `/projects/${id}`, { name }),
   deleteProject: (id: string) => del(`/projects/${id}`),
@@ -64,6 +65,7 @@ export const api = {
   completeSample: (id: string, hash: string) => post(`/projects/${id}/samples/${hash}/complete`),
   sampleUrl: (id: string, hash: string) => get<UrlResponse>(`/projects/${id}/samples/${hash}/url`),
   uploads: () => get<UploadInfo[]>('/uploads'),
+  saveAnalysis: (hash: string, a: UploadAnalysis) => req('PUT', `/uploads/${hash}/analysis`, a),
   deleteUpload: (hash: string) => del(`/uploads/${hash}`),
   uploadFileUrl: (hash: string) => get<UrlResponse>(`/uploads/${hash}/url`),
   async deleteAccount(password: string) {

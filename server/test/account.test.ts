@@ -3,10 +3,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { addTrack, getTracks } from '@mobdaw/shared'
 import { RETENTION_MS, endSubscription, giftMonths, purgeExpiredData, resumeSubscription } from '../src/accounts.ts'
 import { enforceReadOnly } from '../src/collab.ts'
-import { ADMIN, admit, client, connect, login, pw, startTest, until, type Client } from './helpers.ts'
+import { ADMIN, admit, client, connect, login, pw, startTest, until, userId, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 let admin: Client
+const uid = (username: string) => userId(t.ctx.db, username)
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 const P = (id: string) => `/api/projects/${id}/samples`
 const mk = async (c: Client, name = 'P') => (await c.post('/api/projects', { name })).body.id as string
@@ -33,8 +34,8 @@ describe('read-only accounts (subscription ended)', () => {
     const h = await upload(zoe, A, Buffer.alloc(10, 1))
     const other = await upload(zoe, A, Buffer.alloc(11, 2))
     const at = Date.now()
-    expect(endSubscription(t.ctx, t.collab, 'zoe', at)).toBe(true)
-    expect(endSubscription(t.ctx, t.collab, 'zoe', at + 1000)).toBe(false) // already ended: the window doesn't restart
+    expect(endSubscription(t.ctx, t.collab, uid('zoe'), at)).toBe(true)
+    expect(endSubscription(t.ctx, t.collab, uid('zoe'), at + 1000)).toBe(false) // already ended: the window doesn't restart
 
     const me = (await zoe.get('/api/me')).body
     expect(me).toMatchObject({ planStatus: 'read_only', retentionEndsAt: at + RETENTION_MS })
@@ -60,7 +61,7 @@ describe('read-only accounts (subscription ended)', () => {
     expect((await zoe.del(`/api/uploads/${other}`)).body).toEqual({ ok: true })
 
     // resubscribing restores everything as it was
-    expect(resumeSubscription(t.ctx, t.collab, 'zoe')).toBe(true)
+    expect(resumeSubscription(t.ctx, t.collab, uid('zoe'))).toBe(true)
     expect((await zoe.get('/api/me')).body).toMatchObject({ planStatus: 'active', retentionEndsAt: null })
     expect((await zoe.get(`${P(A)}/${h}/url`)).status).toBe(200)
     expect((await zoe.post('/api/projects', { name: 'New' })).status).toBe(201)
@@ -82,7 +83,7 @@ describe('read-only accounts (subscription ended)', () => {
     await until(() => names(o).includes('Before'))
     const kicks = [kicked(o), kicked(m)]
 
-    endSubscription(t.ctx, t.collab, 'olga')
+    endSubscription(t.ctx, t.collab, uid('olga'))
     await until(() => kicks.every((k) => k.closed))
     expect((await member.get(`/api/projects/${A}`)).body).toMatchObject({ frozen: true, role: 'editor' })
     const r = await member.post(`${P(A)}/upload-url`, { hash: 'b'.repeat(64), size: 5, mime: 'audio/wav' })
@@ -101,7 +102,7 @@ describe('read-only accounts (subscription ended)', () => {
     o.provider.destroy()
     m.provider.destroy()
 
-    resumeSubscription(t.ctx, t.collab, 'olga')
+    resumeSubscription(t.ctx, t.collab, uid('olga'))
     o = connect(t.port, A, owner.token!)
     m = connect(t.port, A, member.token!)
     await until(() => o.provider.synced && m.provider.synced)
@@ -122,7 +123,7 @@ describe('read-only accounts (subscription ended)', () => {
     enforceReadOnly(t.ctx, t.collab)
     await until(() => closed)
     o.provider.destroy()
-    resumeSubscription(t.ctx, null, 'pia')
+    resumeSubscription(t.ctx, null, uid('pia'))
   })
 })
 
@@ -138,9 +139,9 @@ describe('retention window and purge', () => {
     const wesBefore = (await wes.get('/api/me')).body.bytesUsed
 
     const at = Date.now()
-    endSubscription(t.ctx, t.collab, 'vic', at)
+    endSubscription(t.ctx, t.collab, uid('vic'), at)
     expect(await purgeExpiredData(t.ctx, t.storage, t.collab, at + RETENTION_MS - 1000)).toEqual([]) // not yet
-    expect(await purgeExpiredData(t.ctx, t.storage, t.collab, at + RETENTION_MS)).toEqual(['vic'])
+    expect(await purgeExpiredData(t.ctx, t.storage, t.collab, at + RETENTION_MS)).toEqual([uid('vic')])
     expect(await purgeExpiredData(t.ctx, t.storage, t.collab, at + 2 * RETENTION_MS)).toEqual([]) // only once
 
     // the account is still there: same password, same session, nothing owed
@@ -150,19 +151,19 @@ describe('retention window and purge', () => {
     // ... but its cloud data is gone
     expect((await vic.get('/api/uploads')).body).toEqual([])
     expect((await wes.get(`/api/projects/${V}`)).status).toBe(404) // vic's project is deleted for its members
-    expect(await t.storage.size(mine)).toBeNull() // vic's audio is gone, even from wes's project
+    expect(await t.storage.size(uid('vic'), mine)).toBeNull() // vic's audio is gone, even from wes's project
     expect((await wes.get(`${P(W)}/${mine}/url`)).status).toBe(404)
     expect((await wes.get(P(W))).body.map((s: any) => s.hash)).toEqual([wesOwn])
-    expect(await t.storage.size(wesOwn)).toBe(21) // wes's own audio is untouched
-    expect(await t.storage.size(wesInVic)).toBe(22) // ... including audio he put in vic's deleted project
+    expect(await t.storage.size(uid('wes'), wesOwn)).toBe(21) // wes's own audio is untouched
+    expect(await t.storage.size(uid('wes'), wesInVic)).toBe(22) // ... including audio he put in vic's deleted project
     expect((await wes.get('/api/me')).body.bytesUsed).toBe(wesBefore)
-    expect(t.ctx.db.prepare("SELECT COUNT(*) AS n FROM uploads WHERE owner = 'vic'").get()).toEqual({ n: 0 })
+    expect(t.ctx.db.prepare('SELECT COUNT(*) AS n FROM uploads WHERE owner_id = ?').get(uid('vic'))).toEqual({ n: 0 })
     // still a (read-only) member of the project someone else owns
     expect((await wes.get(`/api/projects/${W}`)).body.members).toContainEqual({ username: 'vic', role: 'editor' })
     expect((await vic.post('/api/projects', { name: 'x' })).body.error).toBe('account_read_only')
 
     // coming back next year: add time and the account works again, starting empty
-    giftMonths(t.ctx, t.collab, 'vic', 1, at + 365 * 86_400_000)
+    giftMonths(t.ctx, t.collab, uid('vic'), 1, at + 365 * 86_400_000)
     expect((await vic.get('/api/me')).body).toMatchObject({ planStatus: 'active', retentionEndsAt: null })
     expect((await vic.post('/api/projects', { name: 'Fresh start' })).status).toBe(201)
     expect(await upload(vic, W, Buffer.alloc(23, 10))).toBeTruthy()
@@ -172,21 +173,22 @@ describe('retention window and purge', () => {
     const una = await admit(t.base, admin, 'una')
     const A = await mk(una)
     const at = Date.now()
-    endSubscription(t.ctx, t.collab, 'una', at)
-    resumeSubscription(t.ctx, t.collab, 'una')
+    endSubscription(t.ctx, t.collab, uid('una'), at)
+    resumeSubscription(t.ctx, t.collab, uid('una'))
     expect(await purgeExpiredData(t.ctx, t.storage, t.collab, at + 2 * RETENTION_MS)).toEqual([])
     expect((await una.get(`/api/projects/${A}`)).status).toBe(200)
   })
 
   it('the dev account cannot be put on a retention clock', async () => {
     t.ctx.db.prepare("INSERT INTO users(username, password_hash, account_role, created_at) VALUES('devacct', '', 'dev', 1)").run()
-    expect(endSubscription(t.ctx, t.collab, 'devacct')).toBe(false)
+    expect(endSubscription(t.ctx, t.collab, uid('devacct'))).toBe(false)
   })
 })
 
 describe('deleting your account', () => {
   it('needs your password, then deletes everything immediately', async () => {
     const ned = await admit(t.base, admin, 'ned'), amy = await admit(t.base, admin, 'amy')
+    const nedId = uid('ned')
     const N = await mk(ned, 'Ned project')
     await ned.post(`/api/projects/${N}/members`, { username: 'amy' })
     const h = await upload(ned, N, Buffer.alloc(23, 3))
@@ -200,7 +202,10 @@ describe('deleting your account', () => {
     expect((await ned.get('/api/me')).status).toBe(401)
     expect((await amy.get(`/api/projects/${N}`)).status).toBe(404)
     await until(() => t.ctx.db.prepare('SELECT 1 FROM uploads WHERE hash = ?').get(h) === undefined)
-    expect(await t.storage.size(h)).toBeNull()
+    expect(await t.storage.size(nedId, h)).toBeNull()
     expect((await client(t.base).post('/api/auth/login', { username: 'ned', password: pw('ned') })).status).toBe(401)
+    // ids are never reused, so a later account can't land on a deleted user's storage keys
+    await admit(t.base, admin, 'ned2')
+    expect(uid('ned2')).toBeGreaterThan(nedId)
   })
 })

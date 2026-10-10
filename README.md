@@ -57,18 +57,17 @@ Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Ru
   everyone's. What a browser already downloaded stays; signed download URLs last 15 minutes.
 - Uploads are content-addressed by SHA-256 and **owned per user** (`uploads`, one row per owner and hash;
   [`docs/data-policy.md`](docs/data-policy.md)). Projects link to the uploads they use (`project_samples`); all
-  sample endpoints are project-scoped (`/api/projects/:id/samples/...`). The stored bytes are shared when two users
-  upload the same file, but ownership, quota and deletion are per user: quota is charged to each owner for their own
-  uploads. `GET /api/uploads` lists yours (with the projects using them), `DELETE /api/uploads/:hash` removes one from
-  every project and tombstones it (`state='deleting'`); a sweep (right after, and every 15 min) deletes the bytes once
-  no other owner needs them, then the row, and refunds the quota. Deleting a project only removes its links: uploads stay
-  with their owners.
-- A user with no access to an existing hash must really upload it before it gets their own upload (no `exists:true`
-  oracle). The bytes go to a private per-user, per-project proof object (`proofs/<hash>/<hmac>`, hash-verified by the
-  storage layer); `/complete` creates the upload only if that object exists, then deletes it. `samples/<hash>` is never
-  accepted as proof (a `409 proof_required` tells the client to upload again if someone else's identical upload
-  completed first). Someone who can already read the file through a project gets their own upload without re-uploading.
-  Abandoned local proofs are swept after 1 hour.
+  sample endpoints are project-scoped (`/api/projects/:id/samples/...`). Every upload is its own stored object
+  (`samples/u<owner id>/<hash>`; no dedup across users), so ownership, quota and deletion are simply per user.
+  `GET /api/uploads` lists yours (with the projects using them), `DELETE /api/uploads/:hash` removes one from every
+  project and tombstones it (`state='deleting'`); a sweep (right after, and every 15 min) deletes the object, then the
+  row, and refunds the quota. Deleting a project only removes its links: uploads stay with their owners.
+- `upload-url` answers `exists:true` only for your own uploads, or for a file you can already read through a project
+  (the server copies that owner's object to yours, no re-upload). Otherwise you upload the bytes, even if someone else
+  has the same file. Objects stored under an older layout (`samples/<hash>`, `samples/<hex(username)>/<hash>`) are moved to per-owner keys at startup.
+- Users have a numeric `id` (counting from 1, never reused). Every reference to a user (project ownership and membership,
+  uploads, library links, the session token, storage keys) is by id; `username` is only the login name and display name,
+  so it can change without touching anything else. The HTTP API still speaks usernames (adding members, `owner`).
 - Subscriptions: `users.plan_status` is `active` or `read_only`. When a subscription ends the account becomes read-only
   for 30 days (`retention_ends_at`): sign in, play, download and delete still work; creating projects, uploading, copying,
   sharing and editing do not, and the projects it owns are frozen for their members. After 30 days the account's cloud data

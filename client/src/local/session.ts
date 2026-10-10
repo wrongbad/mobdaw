@@ -1,4 +1,4 @@
-import { undoScope, userColor, type AwarenessState } from '@mobdaw/shared'
+import { projectPreview, undoScope, userColor, type AwarenessState } from '@mobdaw/shared'
 import { Awareness } from 'y-protocols/awareness'
 import { IndexeddbPersistence } from 'y-indexeddb'
 import * as Y from 'yjs'
@@ -58,4 +58,13 @@ export async function writeLocalState(projectId: string, state: Uint8Array) {
   Y.applyUpdate(doc, state)
   await persistence.destroy() // flushes pending writes
   doc.destroy()
+}
+
+/** The little picture of a local project for the project list. */
+export async function readLocalPreview(projectId: string) {
+  const doc = new Y.Doc()
+  Y.applyUpdate(doc, await readLocalState(projectId))
+  const preview = projectPreview(doc)
+  doc.destroy()
+  return preview
 }

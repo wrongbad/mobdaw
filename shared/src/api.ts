@@ -7,7 +7,6 @@ export type ApiError = { error: string }
 // not_admitted(400, unknown user) not_found(404) too_large(413)
 // hash_mismatch(400) bad_request(400) sample_deleting(409) owner_cannot_leave(400) upload_expired(410)
 // account_read_only(403) project_frozen(403) wrong_password(403)
-// proof_required(409, re-request the upload URL and upload again)
 
 export type LoginRequest = { username: string; password: string }
 export type RegisterRequest = { username: string; password: string; invite: string }
@@ -59,6 +58,20 @@ export type CopyProjectRequest = { name?: string }
 /** An audio file in a project's library. `owner` is the user who uploaded it (and can delete it). */
 export type LibrarySample = { hash: string; size: number; mime: string; owner: string; addedAt: number }
 
+/** What an audio file is. Measured in the browser (see client/src/audio/probe.ts) and cached on the upload. */
+export type AudioInfo = {
+  /** 'WAV', 'FLAC', 'MP3', 'Ogg Vorbis', 'Opus', 'M4A', 'AIFF', or 'unknown'. */
+  format: string
+  /** '16-bit PCM', '32-bit float', '24-bit lossless', 'AAC, lossy', ... */
+  encoding: string
+  sampleRate: number | null
+  channels: number
+  /** Seconds. */
+  duration: number | null
+}
+/** `peaks` is base64: one byte per column, the bar height 0..255. Empty when the file could not be drawn. */
+export type UploadAnalysis = { info: AudioInfo; peaks: string }
+
 /** One of the caller's own uploads, with the projects that use it. */
 export type UploadInfo = {
   hash: string
@@ -66,6 +79,8 @@ export type UploadInfo = {
   size: number
   mime: string
   createdAt: number
+  /** Null until someone has measured the file (the browser does so after uploading, or on the uploads page). */
+  analysis: UploadAnalysis | null
   projects: { id: string; name: string }[]
   /** Projects using it that the caller can no longer see (e.g. after leaving). */
   otherProjects: number

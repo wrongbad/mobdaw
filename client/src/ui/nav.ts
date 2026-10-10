@@ -1,20 +1,22 @@
 import type { Me } from '@mobdaw/shared'
 import { api } from '../api'
 import { h } from '../dom'
+import { homeLink } from '../router'
 import { dateOf, daysLeft } from '../format'
 
 /** Top bar for every page except the editor. `me` is null when working locally without an account. */
 export function nav(me: Me | null): HTMLElement {
   const bar = h('nav', {},
-    h('a', { href: me ? '#/projects' : '#/local', className: 'logo' }, 'mobdaw'),
-    h('a', { href: '#/local' }, 'on this device'),
-    me ? h('a', { href: '#/projects' }, 'cloud') : null,
-    me ? h('a', { href: '#/uploads' }, 'uploads') : null,
-    me ? h('a', { href: '#/account' }, 'account') : null,
-    me?.isAdmin ? h('a', { href: '#/admin' }, 'invites') : null,
+    h('a', { ...homeLink, className: 'logo' }, 'mobdaw'),
     h('span', { className: 'grow' }),
-    me ? h('span', { className: 'dim' }, me.username) : null,
-    me ? h('a', { href: '#/login', onclick: () => api.logout() }, 'log out') : h('a', { href: '#/login' }, 'sign in to Pro'),
+    me ? h('details', { className: 'menu' },
+      h('summary', { className: 'dim' }, me.username),
+      h('div', {},
+        h('a', { href: '#/account' }, 'account'),
+        h('a', { href: '#/uploads' }, 'uploads'),
+        me.isAdmin ? h('a', { href: '#/admin' }, 'invites') : null,
+        h('a', { href: '#/login', onclick: () => api.logout() }, 'log out')))
+      : h('a', { href: '#/login' }, 'sign in to Pro'),
   )
   const banner = !me ? null
     : me.planStatus === 'read_only' && me.retentionEndsAt ? retentionBanner(me.retentionEndsAt)
@@ -44,6 +46,6 @@ function lapsedBanner() {
 function endingBanner(paidThrough: number) {
   const n = daysLeft(paidThrough)
   return h('p', { className: 'banner' },
-    `Your pre-paid time ends on ${dateOf(paidThrough)} (${n} ${n === 1 ? 'day' : 'days'}). After that your account becomes read-only for 30 days, then your cloud audio and projects are deleted. `,
+    `Your pre-paid time ends on ${dateOf(paidThrough)} (${n} ${n === 1 ? 'day' : 'days'}). After that your cloud audio and projects become read-only for 30 days, then your cloud audio and projects are deleted. `,
     h('a', { href: '#/account' }, 'Account'))
 }

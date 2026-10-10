@@ -15,6 +15,7 @@ import { clamp, dragPointer } from './blocks'
 import { popover } from './popover'
 
 export const AUTO_H = 64
+const LFO_H = 96 // an LFO lane is taller: its header stacks the mode, rate and depth rows (matches .auto-row.lfo)
 const PAD = 7 // the top and bottom of the surface stay reachable: 0 and 1 sit this far from the edges
 const NS = 'http://www.w3.org/2000/svg'
 const FREEHAND_PX = 10
@@ -81,7 +82,7 @@ export type RowView = {
   width: number
 }
 
-const yOf = (v: number) => PAD + (1 - v) * (AUTO_H - 2 * PAD)
+const yOf = (v: number, h = AUTO_H) => PAD + (1 - v) * (h - 2 * PAD)
 
 export function autoRow(deps: RowDeps) {
   const { doc, readOnly } = deps
@@ -91,7 +92,6 @@ export function autoRow(deps: RowDeps) {
   let sig = ''
 
   const name = h('span', { className: 'name' })
-  const out = h('span', { className: 'dim out' })
   const modes: [LaneState, string][] = [['off', 'Disabled'], ['keyframes', 'Keyframes'], ['lfo', 'LFO']]
   const mode = h('select', { className: 'auto-mode', title: 'what drives the parameter', onchange: () => setLaneState(doc, lane.id, mode.value as LaneState) },
     ...modes.map(([v, t]) => h('option', { value: v }, t)))
@@ -107,17 +107,18 @@ export function autoRow(deps: RowDeps) {
     el.addEventListener('input', () => onInput(el.valueAsNumber))
     return el
   }
-  const shape = h('select', { className: 'auto-shape', title: 'wave shape', onchange: () => updateLaneLfo(doc, lane.id, { shape: Number(shape.value) }) },
+  const shape = h('select', { className: 'auto-shape', title: 'wave shape', hidden: true, onchange: () => updateLaneLfo(doc, lane.id, { shape: Number(shape.value) }) },
     ...LFO_SHAPES.map((t, i) => h('option', { value: String(i) }, t)))
   shape.disabled = readOnly
   const rate = slider('rate', (t) => updateLaneLfo(doc, lane.id, { rate: posToRate(t) }))
   const depth = slider('depth', (t) => updateLaneLfo(doc, lane.id, { depth: t }))
-  const lfoBar = h('div', { className: 'ctl lfo-ctl', hidden: true }, shape, rate, depth)
+  const lfoRow = (label: string, input: HTMLElement) => h('div', { className: 'ctl lfo-ctl', hidden: true }, h('span', { className: 'lfo-label' }, label), input)
+  const lfoRows = [lfoRow('rate', rate), lfoRow('depth', depth)]
 
   const head = h('div', { className: 'head auto-head' },
     h('div', { className: 'auto-title' }, name, readOnly ? null : del),
-    h('div', { className: 'ctl' }, mode, out),
-    lfoBar)
+    h('div', { className: 'ctl' }, mode, shape),
+    ...lfoRows)
   const surface = svg('svg', { class: 'auto-svg', height: AUTO_H })
   const body = h('div', { className: 'lane-body auto-body' })
   body.append(surface)
@@ -194,7 +195,9 @@ export function autoRow(deps: RowDeps) {
     mode.value = state
     el.classList.toggle('off', state === 'off')
     el.classList.toggle('lfo', lfo)
-    lfoBar.hidden = !lfo
+    shape.hidden = !lfo
+    for (const r of lfoRows) r.hidden = !lfo
+    surface.setAttribute('height', String(lfo ? LFO_H : AUTO_H))
     const d = { shape: l.shape ?? LFO_DEFAULTS.shape, rate: l.rate ?? LFO_DEFAULTS.rate, depth: l.depth ?? LFO_DEFAULTS.depth }
     if (shape.value !== String(d.shape)) shape.value = String(d.shape)
     if (document.activeElement !== rate) rate.value = String(rateToPos(d.rate))
@@ -225,11 +228,11 @@ export function autoRow(deps: RowDeps) {
     const depth = lane.depth ?? LFO_DEFAULTS.depth
     const hz = lane.rate ?? LFO_DEFAULTS.rate
     const shp = lane.shape ?? LFO_DEFAULTS.shape
-    const cy = yOf(center)
+    const cy = yOf(center, LFO_H)
     let d = ''
     for (let px = 0; px <= W + 2; px += 2) {
       const v = clamp(center + depth * lfoWave((Math.max(0, deps.fromX(px)) / deps.rate) * hz, shp), 0, 1)
-      d += `${px ? ' L' : 'M'}${px} ${yOf(v).toFixed(1)}`
+      d += `${px ? ' L' : 'M'}${px} ${yOf(v, LFO_H).toFixed(1)}`
     }
     return [
       svg('line', { x1: 0, x2: W, y1: cy, y2: cy, class: 'auto-idle' }),
@@ -268,8 +271,5 @@ export function autoRow(deps: RowDeps) {
     return kids
   }
 
-  /** The value the lane reads at the playhead (or null for none), as header text. */
-  const setReadout = (text: string) => { if (out.textContent !== text) out.textContent = text }
-
-  return { el, update, setReadout }
+  return { el, update }
 }

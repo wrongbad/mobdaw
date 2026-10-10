@@ -5,12 +5,14 @@ import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import WebSocket from 'ws'
 import { loadConfig, type Config } from '../src/config.ts'
-import { createUser, getUser } from '../src/auth.ts'
-import { openDb } from '../src/db.ts'
+import { createUser, findUser } from '../src/auth.ts'
+import { openDb, type Db } from '../src/db.ts'
 import { startServer } from '../src/main.ts'
 
 export const ADMIN = 'admin'
 export const pw = (username: string) => `${username}-password`
+/** The numeric id of a user: what storage keys, uploads and sessions are keyed by. */
+export const userId = (db: Db, username: string) => (db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id: number }).id
 
 export async function startTest(env: Record<string, string> = {}, dir = mkdtempSync(join(tmpdir(), 'mobdaw-'))) {
   const config: Config = loadConfig({
@@ -22,7 +24,7 @@ export async function startTest(env: Record<string, string> = {}, dir = mkdtempS
   })
   // Bootstrap the admin the way `admin create-user --admin` would (the first user needs no invite).
   const db = openDb(config.dbPath)
-  if (!getUser(db, ADMIN)) await createUser({ config, db }, ADMIN, pw(ADMIN), true)
+  if (!findUser(db, ADMIN)) await createUser({ config, db }, ADMIN, pw(ADMIN), true)
   db.close()
   const server = await startServer(config)
   const base = `http://127.0.0.1:${server.port}`
@@ -51,6 +53,7 @@ export function client(base: string, token?: string) {
     get: (p: string) => call('GET', p),
     post: (p: string, b: unknown = {}) => call('POST', p, b),
     patch: (p: string, b: unknown) => call('PATCH', p, b),
+    put: (p: string, b: unknown) => call('PUT', p, b),
     del: (p: string) => call('DELETE', p),
   }
 }
