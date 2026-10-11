@@ -238,9 +238,10 @@ before their lane and in any order. A disabled lane is kept but inert.
 
 | param | id | range | default | notes |
 |---|---|---|---|---|
-| mode | 0 | 0..4 (rounded) | 0 | 0 LP, 1 HP, 2 BP, 3 notch, 4 peak. Not smoothed. |
+| mode | 0 | 0..7 (rounded) | 0 | 0 lowpass, 1 highpass, 2 bandpass, 3 notch, 4 peak, 5 bell, 6 low shelf, 7 high shelf. Not smoothed. |
 | cutoff | 1 | 20..20000 Hz | 1000 | Smoothed in the log2 domain, and clamped below Nyquist·0.99. |
-| damping | 2 | 0.05..2 | 0.7071 | Smoothed linearly. |
+| damping | 2 | 0.05..2 | 0.7071 | Smoothed linearly. Q = 1/(2·damping). |
+| gain | 3 | -24..24 dB | 0 | Bell and shelf modes only (ignored by the others); smoothed linearly. A bell reaches the full gain at the cutoff; a shelf reaches half of it there (in dB). |
 
 - Stereo is two independent filter states.
 - Coefficients are updated per 32-sample sub-block, with the smoothed params evaluated at

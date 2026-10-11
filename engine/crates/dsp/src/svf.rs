@@ -56,6 +56,14 @@ impl Svf {
         self.set_g(((std::f64::consts::PI * fc / sr).tan()) as f32, damping);
     }
 
+    /// Like `set_hz`, with the pre-warped `g` scaled by `warp`. Shelves use it to move the corner (`1/sqrt(A)` for a low
+    /// shelf, `sqrt(A)` for a high shelf) so that the shelf's midpoint, not its corner, lands on the cutoff.
+    pub fn set_hz_warped(&mut self, cutoff_hz: f32, damping: f32, sample_rate: f32, warp: f32) {
+        let sr = sample_rate as f64;
+        let fc = (cutoff_hz as f64).clamp(1.0, 0.499 * sr);
+        self.set_g(((std::f64::consts::PI * fc / sr).tan() * warp as f64) as f32, damping);
+    }
+
     /// `f0` is the cutoff in radians/sample; pre-warped with `tan` (the C++ `set_exact`).
     pub fn set_exact(&mut self, f0: f32, damping: f32) {
         self.set(((f0 / 2.0).tan()) * 2.0, damping);

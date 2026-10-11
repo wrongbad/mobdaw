@@ -24,9 +24,10 @@ export const DEVICES: Record<number, DeviceDef> = {
   [SIMPLE_FILTER]: {
     type: SIMPLE_FILTER, name: 'simple filter', instrument: false,
     params: [
-      { id: 0, name: 'mode', min: 0, max: 4, def: 0, scale: 'lin', options: ['lp', 'hp', 'bp', 'notch', 'peak'] },
+      { id: 0, name: 'mode', min: 0, max: 7, def: 0, scale: 'lin', options: ['lowpass', 'highpass', 'bandpass', 'notch', 'peak', 'bell', 'low shelf', 'high shelf'] },
       { id: 1, name: 'cutoff', min: 20, max: 20000, def: 1000, scale: 'log', unit: 'hz' },
       { id: 2, name: 'damping', min: 0.05, max: 2, def: 0.7071, scale: 'lin' },
+      { id: 3, name: 'gain', min: -24, max: 24, def: 0, scale: 'lin', unit: 'db' },
     ],
   },
   [REVERB]: {
@@ -65,7 +66,7 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 2, name: 'feedback', min: 0, max: 1.2, def: 0.4, scale: 'lin' },
       { id: 3, name: 'warble', min: 0, max: 1, def: 0.25, scale: 'lin' },
       { id: 4, name: 'drive', min: 0, max: 1, def: 0.3, scale: 'lin' },
-      { id: 5, name: 'filter', min: 0, max: 2, def: 0, scale: 'lin', options: ['lp', 'hp', 'bp'] },
+      { id: 5, name: 'filter', min: 0, max: 2, def: 0, scale: 'lin', options: ['lowpass', 'highpass', 'bandpass'] },
       { id: 6, name: 'cutoff', min: 100, max: 20000, def: 4000, scale: 'log', unit: 'hz' },
       { id: 7, name: 'resonance', min: 0, max: 1, def: 0, scale: 'lin' },
     ],

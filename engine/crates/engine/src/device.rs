@@ -128,6 +128,8 @@ pub struct FilterDevice {
     mode: u32,
     cutoff_log2: Ramp,
     damping: Ramp,
+    /// Bell and shelf gain in dB; linear ramp.
+    gain_db: Ramp,
     svf: [Svf; 2],
 }
 
@@ -138,6 +140,7 @@ impl FilterDevice {
             mode: 0,
             cutoff_log2: Ramp::new(1000f64.log2()),
             damping: Ramp::new(std::f64::consts::FRAC_1_SQRT_2),
+            gain_db: Ramp::new(0.0),
             svf: [Svf::new(), Svf::new()],
         }
     }
@@ -151,9 +154,10 @@ impl FilterDevice {
             return;
         }
         match param {
-            0 => self.mode = (value.round().clamp(0.0, 4.0)) as u32,
+            0 => self.mode = (value.round().clamp(0.0, 7.0)) as u32,
             1 => self.cutoff_log2.set_target((value.clamp(20.0, 20000.0) as f64).log2(), s),
             2 => self.damping.set_target(value.clamp(0.05, 2.0) as f64, s),
+            3 => self.gain_db.set_target(value.clamp(-24.0, 24.0) as f64, s),
             _ => {}
         }
     }
@@ -169,8 +173,31 @@ impl FilterDevice {
         let nyquist_limit = 0.99 * 0.5 * sample_rate as f64;
         let cutoff = self.cutoff_log2.value().exp2().min(nyquist_limit) as f32;
         let damping = self.damping.value() as f32;
+        let gain_db = self.gain_db.value() as f32;
         self.cutoff_log2.advance(len);
         self.damping.advance(len);
+        self.gain_db.advance(len);
+
+        if self.mode >= 5 {
+            // Bell and shelves (Cytomic's SVF mixes): out = m0*x + m1*bp + m2*lp, with A = 10^(dB/40).
+            let a = 10f32.powf(gain_db / 40.0);
+            let a2 = a * a;
+            let k = 2.0 * damping;
+            let (warp, damping, m0, m1, m2) = match self.mode {
+                5 => (1.0, damping / a, 1.0, k / a * (a2 - 1.0), 0.0), // bell: resonance k/A, centre gain A^2
+                6 => (1.0 / a.sqrt(), damping, 1.0, k * (a - 1.0), a2 - 1.0), // low shelf
+                _ => (a.sqrt(), damping, a2, k * (1.0 - a) * a, 1.0 - a2), // high shelf
+            };
+            for (svf, buf) in self.svf.iter_mut().zip([l, r]) {
+                svf.set_hz_warped(cutoff, damping, sample_rate, warp);
+                for x in buf.iter_mut() {
+                    let input = *x;
+                    svf.process(input);
+                    *x = m0 * input + m1 * svf.bp() + m2 * svf.lp();
+                }
+            }
+            return;
+        }
 
         let pick: fn(&Svf) -> f32 = match self.mode {
             0 => Svf::lp,

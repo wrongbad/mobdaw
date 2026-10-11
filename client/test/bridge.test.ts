@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  addAudioClip, addDevice, MASTER_TRACK, devicesMap, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
+  DEVICES, addAudioClip, addDevice, MASTER_TRACK, devicesMap, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
   addLane, addPoint, deleteLane, evalPoints, getLanes, getPoints, laneOf, setLaneEnabled, setLaneState, updateLaneLfo, updatePoint, resolveTarget,
-  getClips, getLoopers, getSampleRate, getTracks, migrateToV2, notesMap, setParam, splitClip, sweepOrphans, tracksMap,
+  getClips, getLoopers, getSampleRate, getTracks, migrateToV2, notesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap,
   updateClip, updateLooper, updateNote, updateTrack, type SampleMeta, setSampleStatus, discardSample, getSamples, undoScope,
 } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
@@ -355,6 +355,33 @@ describe('automation', () => {
     expect(gone.filter((c) => c[0] === 'engine_point_remove')).toHaveLength(2)
     expect(gone).toContainEqual(['engine_lane_remove', up[1]])
     expect(gone).toContainEqual(['engine_param_set', dh, 1, 4000])
+  })
+
+  it('a lane keeps the range its param had when it was made, even if the param is later redefined', () => {
+    const cutoff = DEVICES[1].params[1]
+    const was = { ...cutoff }
+    const { doc, take } = setup()
+    const t = addTrack(doc, 'a')
+    const dev = addDevice(doc, t, 1)
+    const target = { scope: t, kind: 'effect' as const, owner: dev, param: '1' }
+    const stored = addLane(doc, target, cutoff) // made with the range it has now
+    const legacy = addLane(doc, { ...target, param: '2' }) // made before ranges were stored: nothing on it
+    expect(getLanes(doc).find((l) => l.id === stored)).toMatchObject({ min: 20, max: 20000, scale: 'log' })
+    expect(getLanes(doc).find((l) => l.id === legacy)?.min).toBeUndefined()
+    stashLaneRanges(doc) // the backfill: the legacy lane gets the current range
+    expect(getLanes(doc).find((l) => l.id === legacy)).toMatchObject({ min: 0.05, max: 2, scale: 'lin' })
+    try {
+      Object.assign(cutoff, { min: 30, max: 10000 }) // a new version narrows the param
+      const r = resolveTarget(doc, getLanes(doc).find((l) => l.id === stored)!)!
+      expect(r.def).toMatchObject({ min: 20, max: 20000, scale: 'log' }) // the lane still maps over the old range
+      expect(resolveTarget(doc, target)!.def).toMatchObject({ min: 30, max: 10000 }) // a fresh target sees the new one
+      take()
+      updateLaneLfo(doc, stored, { depth: 0.5 }) // re-upserts the lane
+      const up = take().find((c) => c[0] === 'engine_lane_upsert')!
+      expect(up.slice(6, 9)).toEqual([20, 20000, 1])
+    } finally {
+      Object.assign(cutoff, was)
+    }
   })
 
   it('an LFO lane sends its wave with the knob as the centre, which follows the knob; leaving LFO mode says so once', () => {

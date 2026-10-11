@@ -68,6 +68,14 @@ export type Lane = {
   shape?: number
   rate?: number
   depth?: number
+  /**
+   * The param's range when the lane was made (not shown). Points are normalised, so they only mean something against
+   * this: if the param's range changes later, the lane keeps sweeping what it was drawn for. Absent on lanes from before
+   * this was stored; `stashLaneRanges` fills those in.
+   */
+  min?: number
+  max?: number
+  scale?: 'lin' | 'log' | 'pow'
 } & ParamTarget
 export type LaneMode = 'keyframes' | 'lfo'
 /** What the lane's mode menu offers; 'off' is `enabled: false`. */
@@ -94,7 +102,7 @@ export type AwarenessState = {
   playhead?: number | null
   selection?: string[]
   /** In-progress parameter drag; collaborators apply it as a transient override. */
-  dragging?: { deviceId: string; paramId: number; value: number } | null
+  dragging?: { deviceId: string; paramId: number; value: number }[] | null
   /** A take in progress: collaborators treat the track as read-only and draw a growing region from `start` (timeline samples). */
   recording?: { trackId: string; start: number } | null
 }
@@ -299,12 +307,13 @@ export function deleteDevice(doc: Y.Doc, id: string) {
 export const laneOf = (doc: Y.Doc, t: ParamTarget) =>
   getLanes(doc).find((l) => l.scope === t.scope && l.kind === t.kind && l.owner === t.owner && l.param === t.param)
 /** The lane automating `t`, created (enabled, last in its section) if there isn't one yet. */
-export function addLane(doc: Y.Doc, t: ParamTarget): string {
+export function addLane(doc: Y.Doc, t: ParamTarget, range?: Pick<Lane, 'min' | 'max' | 'scale'>): string {
   const have = laneOf(doc, t)
   if (have) return have.id
   const id = newId()
   const order = orderBetween(getLanes(doc).filter((l) => l.scope === t.scope).at(-1)?.order)
   const lane: Lane = { id, enabled: true, order, scope: t.scope, kind: t.kind, owner: t.owner, param: t.param }
+  if (range) Object.assign(lane, { min: range.min, max: range.max, scale: range.scale })
   doc.transact(() => lanesMap(doc).set(id, toMap(lane)))
   return id
 }

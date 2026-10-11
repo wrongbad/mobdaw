@@ -329,3 +329,12 @@ nav a.on { color: var(--fg); }
 .invite-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 .invite-dialog input { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
 .invite-dialog p { margin: 0 0 8px; }
+
+/* simple filter response curve + XY pad */
+.dev .fcurve { display: block; width: 100%; height: 56px; background: var(--bg); touch-action: none; cursor: crosshair; user-select: none; }
+.dev .fcurve.locked { cursor: default; opacity: .7; }
+.fcurve .grid { fill: none; stroke: var(--line); stroke-width: 1; }
+.fcurve .resp { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
+.fcurve .node { fill: var(--accent); stroke: var(--bg); stroke-width: 1.5; }
+.fcurve .read { fill: var(--dim); font-size: 9px; pointer-events: none; }
+.dev .prm[hidden] { display: none; }

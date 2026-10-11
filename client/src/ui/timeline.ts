@@ -4,7 +4,7 @@ import {
   DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, MASTER_TRACK, FINNWAVE, addAudioClip, addDevice, addLane, addMidiClip, addPad, addPoint, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
   deleteDevice, deleteLooper, addNextLooper, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
-  getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, sweepOrphans, tracksMap, updateClip,
+  getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
   type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
@@ -411,6 +411,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       setParam(doc, d, p, v)
       undo.stopCapturing()
     },
+    commitMany: (d: string, values: Record<number, number>) => {
+      undo.stopCapturing()
+      for (const [p, v] of Object.entries(values)) setParam(doc, d, Number(p), v)
+      undo.stopCapturing()
+    },
     bypass: (d: string, b: boolean) => updateDevice(doc, d, { bypass: b }),
     remove: (d: string) => deleteDevice(doc, d),
     autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, t),
@@ -436,7 +441,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const r = resolveTarget(doc, t)
     if (!r) return
     doc.transact(() => {
-      const id = addLane(doc, t)
+      const id = addLane(doc, t, r.def)
       if (!getPoints(doc).some((p) => p.laneId === id)) addPoint(doc, id, 0, paramToPos(r.def, r.value), r.def.options ? 'hold' : 'linear')
       if (lfo) setLaneState(doc, id, 'lfo')
     })
@@ -1036,10 +1041,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const remote = s.remoteStates()
     remoteDrags = new Map()
     for (const r of remote) {
-      const d = r.dragging
-      if (d) remoteDrags.set(d.deviceId, (remoteDrags.get(d.deviceId) ?? new Map()).set(d.paramId, d.value))
+      for (const d of [r.dragging ?? []].flat()) remoteDrags.set(d.deviceId, (remoteDrags.get(d.deviceId) ?? new Map()).set(d.paramId, d.value))
     }
-    pb?.setOverrides(remote.flatMap((r) => (r.dragging ? [r.dragging] : [])))
+    pb?.setOverrides(remote.flatMap((r) => [r.dragging ?? []].flat()))
     locks = new Map(remote.flatMap((r) => (r.recording ? [[r.recording.trackId, r.user.username] as [string, string]] : [])))
 
     if (editing && clipsMap(doc).get(editing)?.get('kind') !== 'midi') editing = null
@@ -1450,6 +1454,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (!readOnly) {
       migrateToV2(doc)
       sweepOrphans(doc)
+      stashLaneRanges(doc)
     }
     chat.markSeen()
     rate = getSampleRate(doc)

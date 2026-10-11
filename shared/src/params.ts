@@ -6,7 +6,7 @@
 //   param  device: ParamDef.id as a string; looper: a field name of LOOPER_PARAMS
 import type * as Y from 'yjs'
 import { DEVICES, paramToPos, paramToValue, type ParamDef } from './devices.ts'
-import { LFO_DEFAULTS, LOOP_CUTOFF_MAX, LOOP_CUTOFF_MIN, LOOP_SPEED_MAX, LOOP_SPEED_MIN, devicesMap, loopersMap, type AutoCurve, type Looper } from './schema.ts'
+import { LFO_DEFAULTS, LOOP_CUTOFF_MAX, LOOP_CUTOFF_MIN, LOOP_SPEED_MAX, LOOP_SPEED_MIN, devicesMap, lanesMap, loopersMap, type AutoCurve, type Lane, type Looper } from './schema.ts'
 
 export type ParamKind = 'synth' | 'effect' | 'looper'
 export type ParamTarget = { scope: string; kind: ParamKind; owner: string; param: string }
@@ -37,8 +37,17 @@ export type { ParamDef }
 /** A target resolved against the doc: the definition, a display name, and the param's static (un-automated) value. */
 export type ResolvedParam = { def: ParamDef; owner: string; label: string; value: number }
 
-/** Where `t` points, or null when its device/looper is gone or the param is unknown. */
-export function resolveTarget(doc: Y.Doc, t: ParamTarget): ResolvedParam | null {
+/**
+ * Where `t` points, or null when its device/looper is gone or the param is unknown. Given a lane, `def` carries the
+ * range the lane was made with (see `Lane.min`), so its normalised points keep their meaning if the param's range moves.
+ */
+export function resolveTarget(doc: Y.Doc, t: ParamTarget & Partial<Pick<Lane, 'min' | 'max' | 'scale'>>): ResolvedParam | null {
+  const r = resolveCurrent(doc, t)
+  if (r && t.min != null && t.max != null && t.scale != null) r.def = { ...r.def, min: t.min, max: t.max, scale: t.scale }
+  return r
+}
+
+function resolveCurrent(doc: Y.Doc, t: ParamTarget): ResolvedParam | null {
   if (t.kind === 'looper') {
     const lp = loopersMap(doc).get(t.owner)?.toJSON() as Looper | undefined
     const def = looperParamDef(t.param)
@@ -51,6 +60,23 @@ export function resolveTarget(doc: Y.Doc, t: ParamTarget): ResolvedParam | null 
   if (!dev || type == null || !def) return null
   const v = (dev.get('params') as Y.Map<number> | undefined)?.get(t.param)
   return { def, owner: DEVICES[type].name, label: def.name, value: typeof v === 'number' ? v : def.def }
+}
+
+/**
+ * Give lanes that predate stored ranges the range their param has now: the best that is known, and from here on it
+ * holds. Every client writes the same values, so concurrent runs converge. Not an undo step.
+ */
+export function stashLaneRanges(doc: Y.Doc) {
+  doc.transact(() => {
+    for (const m of lanesMap(doc).values()) {
+      if (m.get('min') != null) continue
+      const r = resolveCurrent(doc, m.toJSON() as ParamTarget)
+      if (!r) continue
+      m.set('min', r.def.min)
+      m.set('max', r.def.max)
+      m.set('scale', r.def.scale)
+    }
+  }, 'migrate')
 }
 
 /**

@@ -248,6 +248,40 @@ fn filter_modes_hp_and_notch() {
     }
 }
 
+#[test]
+fn filter_bell_and_shelves_apply_their_gain() {
+    let n = 48_000;
+    // (mode, gain dB, probe Hz, expected dB): cutoff 1 kHz, damping 0.7071
+    for (mode, gain, freq, want) in [
+        (5.0f32, 12.0f32, 1000.0f64, 12.0f64), // bell: full gain at the centre...
+        (5.0, 12.0, 100.0, 0.0),               // ...and nothing far away
+        (5.0, -9.0, 1000.0, -9.0),
+        (6.0, 12.0, 60.0, 12.0), // low shelf: gain below, flat above
+        (6.0, 12.0, 12000.0, 0.0),
+        (7.0, -9.0, 12000.0, -9.0), // high shelf: flat below, gain above
+        (7.0, -9.0, 60.0, 0.0),
+    ] {
+        let src = sine(freq, n);
+        let mut e = one_clip(&src, 0, n as i64, 0, 0.0, 0.0, 0);
+        e.device_upsert(1, 1, 1, 1.0, false);
+        e.param_set(1, 0, mode);
+        e.param_set(1, 3, gain);
+        e.play(0);
+        let (l, _) = render(&mut e, n);
+        let g = db(rms(&l[12_000..44_000]) / rms(&src[12_000..44_000]));
+        println!("filter mode {mode} gain {gain:+} at {freq} Hz: {g:+.2} dB (want {want:+.2})");
+        assert!((g - want).abs() < 0.5, "mode {mode} gain {gain} at {freq}: {g}");
+    }
+    // zero gain is transparent
+    let src = sine(1000.0, n);
+    let mut e = one_clip(&src, 0, n as i64, 0, 0.0, 0.0, 0);
+    e.device_upsert(1, 1, 1, 1.0, false);
+    e.param_set(1, 0, 5.0);
+    e.play(0);
+    let (l, _) = render(&mut e, n);
+    assert!(db(rms(&l[12_000..44_000]) / rms(&src[12_000..44_000])).abs() < 0.01);
+}
+
 // ---- MIDI --------------------------------------------------------------------------------
 
 /// A MIDI track with a synth configured for sharp, easily measured notes (instant attack,
