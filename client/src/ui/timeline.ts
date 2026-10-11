@@ -1,7 +1,7 @@
 // Plain absolutely-positioned DOM timeline. Isolated so it can be redesigned.
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import {
-  DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, MASTER_TRACK, FINNWAVE, addAudioClip, addDevice, addLane, addMidiClip, addPad, addPoint, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
+  DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, MASTER_TRACK, FINNWAVE, SIMPLE_FILTER, addAudioClip, addDevice, addLane, addMidiClip, addPad, addPoint, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
   deleteDevice, deleteLooper, addNextLooper, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
@@ -21,6 +21,7 @@ import type { Session } from '../project/session'
 import { chatPanel } from './chat'
 import { NO_AUTO, autoRow, automateMenu, type AutoInfo } from './automation'
 import { deviceCard } from './devices'
+import type { FilterChange, FilterMember } from './filterCurve'
 import { LOOP_COLORS, looperCard } from './loopers'
 import { noteEditor } from './noteEditor'
 import { clamp, dragPointer, grabAt, trimBlock, trimMidiLeft, type Grab } from './blocks'
@@ -418,6 +419,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     },
     bypass: (d: string, b: boolean) => updateDevice(doc, d, { bypass: b }),
     remove: (d: string) => deleteDevice(doc, d),
+    run: (d: string, self: FilterMember) => (runs.get(d) ?? [d]).flatMap((o) => (o === d ? [self] : [cardOf(o)?.member() ?? []].flat())),
+    changed: (d: string) => { const host = runs.get(d)?.[0]; if (host && host !== d) cardOf(host)?.redrawCurve() },
+    dragFilter: (d: string, change: FilterChange) => cardOf(d)?.dragMove(change),
+    dragFilterEnd: (d: string) => cardOf(d)?.dragEnd(),
     autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, t),
   }
 
@@ -656,6 +661,19 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     input.select()
   }
 
+  /** Each filter's run: the ids of the filters adjacent to it in its chain (itself included), in chain order. */
+  const runs = new Map<string, string[]>()
+  const cardOf = (id: string) => masterCards.get(id) ?? [...lanes.values()].map((l) => l.cards.get(id)).find((c) => c)
+  function findRuns(chain: Device[]) {
+    let run: string[] = []
+    const flush = () => { for (const id of run) runs.set(id, run); run = [] }
+    for (const d of chain) {
+      if (d.type === SIMPLE_FILTER) run.push(d.id)
+      else flush()
+    }
+    flush()
+  }
+
   function drawFx(l: Lane, t: Track, devices: Device[]) {
     const fxOpen = expanded.has(t.id)
     const synthOpen = t.kind === 'midi' && synthShown.has(t.id)
@@ -675,7 +693,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS, autoInfos.get(d.id) ?? NO_AUTO)
     })
     if (synthOpen) place(l.synth, mine.filter((d) => DEVICES[d.type]?.instrument))
-    if (fxOpen) place(l.fx, mine.filter((d) => !DEVICES[d.type]?.instrument))
+    if (fxOpen) {
+      const chain = mine.filter((d) => !DEVICES[d.type]?.instrument)
+      findRuns(chain)
+      place(l.fx, chain)
+      for (const d of chain) l.cards.get(d.id)?.redrawCurve() // again, now that every card is in place (rows, neighbours)
+    }
   }
 
   function drawMaster(devices: Device[]) {
@@ -687,12 +710,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const mine = devices.filter((d) => d.trackId === MASTER_TRACK)
     const ids = new Set(mine.map((d) => d.id))
     for (const [id, c] of masterCards) if (!ids.has(id)) { c.el.remove(); masterCards.delete(id) }
+    findRuns(mine)
     mine.forEach((d, i) => {
       let c = masterCards.get(d.id)
       if (!c) masterCards.set(d.id, (c = deviceCard(d, cardDeps)))
       if (masterFx.children[i] !== c.el) masterFx.insertBefore(c.el, masterFx.children[i] ?? null)
       c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS, autoInfos.get(d.id) ?? NO_AUTO)
     })
+    for (const d of mine) masterCards.get(d.id)?.redrawCurve()
   }
 
   // --- soundscape previews: each soundscape's source and loops have a private transport/playhead

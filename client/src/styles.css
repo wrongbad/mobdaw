@@ -330,11 +330,16 @@ nav a.on { color: var(--fg); }
 .invite-dialog input { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
 .invite-dialog p { margin: 0 0 8px; }
 
-/* simple filter response curve + XY pad */
-.dev .fcurve { display: block; width: 100%; height: 56px; background: var(--bg); touch-action: none; cursor: crosshair; user-select: none; }
-.dev .fcurve.locked { cursor: default; opacity: .7; }
+/* simple filter response curve + XY pad: one view per run of adjacent filters, hosted in the run's first card */
+.dev .fslot { position: relative; height: 56px; }
+.fcurve { position: absolute; left: 0; top: 0; z-index: 1; max-width: none; display: block; height: 56px; background: var(--bg); touch-action: none; cursor: crosshair; user-select: none; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); box-sizing: border-box; }
+.fcurve.locked { cursor: default; opacity: .7; }
 .fcurve .grid { fill: none; stroke: var(--line); stroke-width: 1; }
 .fcurve .resp { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
-.fcurve .node { fill: var(--accent); stroke: var(--bg); stroke-width: 1.5; }
+.fcurve .band { fill: none; stroke: var(--c, var(--dim)); stroke-width: 1; stroke-dasharray: 2 2; opacity: .6; }
+.fcurve .node { fill: var(--c, var(--accent)); stroke: var(--bg); stroke-width: 1.5; }
+.fcurve .node.on { r: 5; }
+.fcurve .node.off { fill: var(--dim); opacity: .5; }
+.fcurve .node.stuck { opacity: .6; }
 .fcurve .read { fill: var(--dim); font-size: 9px; pointer-events: none; }
 .dev .prm[hidden] { display: none; }

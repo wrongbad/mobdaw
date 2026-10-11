@@ -22,7 +22,7 @@ export const DELAY = 6
 
 export const DEVICES: Record<number, DeviceDef> = {
   [SIMPLE_FILTER]: {
-    type: SIMPLE_FILTER, name: 'simple filter', instrument: false,
+    type: SIMPLE_FILTER, name: 'filter / eq', instrument: false,
     params: [
       { id: 0, name: 'mode', min: 0, max: 7, def: 0, scale: 'lin', options: ['lowpass', 'highpass', 'bandpass', 'notch', 'peak', 'bell', 'low shelf', 'high shelf'] },
       { id: 1, name: 'cutoff', min: 20, max: 20000, def: 1000, scale: 'log', unit: 'hz' },
