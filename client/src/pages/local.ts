@@ -71,15 +71,9 @@ export function localSection(me: Me | null): HTMLElement {
   }
 
   const section = h('section', { className: 'section' },
-    h('h2', {},
-      'local ',
-      h('span', {
-        className: 'dim help', tabIndex: 0,
-        title: 'these projects are saved in this browser, on this device only. nothing is sent to a server, and no account is needed. ' +
-          'clearing your browser\'s site data deletes them, so export a project file to keep a backup.',
-      }, '(?)')),
-    status, err, list,
-    me ? null : h('p', { className: 'dim' }, h('a', { href: '#/login' }, 'sign in'), ' or ', h('a', { href: '#/register' }, 'create a free account'), '. cloud storage and real-time editing with others are part of mobdaw pro.'))
+    h('h2', {}, 'local'),
+    me ? null : h('p', { className: 'dim' }, 'local usage is completely free and no account is required.'),
+    status, err, list)
   render()
   return section
 }
