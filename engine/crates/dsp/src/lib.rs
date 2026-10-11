@@ -4,6 +4,7 @@
 pub mod adsr;
 pub mod analog;
 pub mod compressor;
+pub mod delay;
 pub mod fade;
 pub mod finnwave;
 pub mod lfo;
@@ -17,9 +18,11 @@ pub mod synth;
 pub mod tape;
 pub mod tremolo;
 pub mod util;
+pub mod warble;
 
 pub use adsr::Adsr;
 pub use compressor::{CompParams, Compressor};
+pub use delay::{DelayParams, TapeDelay};
 pub use fade::FadeShape;
 pub use finnwave::Finnwave;
 pub use looper::{LoopParams, LoopVoice};
@@ -31,3 +34,4 @@ pub use synth::Synth;
 pub use tape::TapeColor;
 pub use tremolo::{TremParams, Tremolo};
 pub use util::flush_denormal;
+pub use warble::Warble;

@@ -18,6 +18,7 @@ export const FINNWAVE = 2
 export const REVERB = 3
 export const COMPRESSOR = 4
 export const TREMOLO = 5
+export const DELAY = 6
 
 export const DEVICES: Record<number, DeviceDef> = {
   [SIMPLE_FILTER]: {
@@ -54,6 +55,19 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 1, name: 'depth', min: 0, max: 1, def: 0.5, scale: 'lin' },
       { id: 2, name: 'shape', min: 0, max: 2, def: 0, scale: 'lin', options: ['sine', 'triangle', 'square'] },
       { id: 3, name: 'spread', min: 0, max: 1, def: 0, scale: 'lin' },
+    ],
+  },
+  [DELAY]: {
+    type: DELAY, name: 'tape delay', instrument: false,
+    params: [
+      { id: 0, name: 'mix', min: 0, max: 1, def: 0.3, scale: 'lin' },
+      { id: 1, name: 'time', min: 10, max: 2000, def: 375, scale: 'log', unit: 'ms' },
+      { id: 2, name: 'feedback', min: 0, max: 1.2, def: 0.4, scale: 'lin' },
+      { id: 3, name: 'warble', min: 0, max: 1, def: 0.25, scale: 'lin' },
+      { id: 4, name: 'drive', min: 0, max: 1, def: 0.3, scale: 'lin' },
+      { id: 5, name: 'filter', min: 0, max: 2, def: 0, scale: 'lin', options: ['lp', 'hp', 'bp'] },
+      { id: 6, name: 'cutoff', min: 100, max: 20000, def: 4000, scale: 'log', unit: 'hz' },
+      { id: 7, name: 'resonance', min: 0, max: 1, def: 0, scale: 'lin' },
     ],
   },
   [FINNWAVE]: {

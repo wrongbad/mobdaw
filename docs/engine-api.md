@@ -272,6 +272,28 @@ so the gain swings between `1 - depth` and 1 and the effect only takes level awa
 
 - The LFO is free-running (not synced to the transport) and starts at its zero crossing going up. Bypass resets the phase.
 
+**kind 6: Tape delay** (effect). A stereo echo, `dsp::delay`: a delay line read by the looper's variable-rate
+resampler, with an SVF and a soft saturator in the feedback loop.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| mix | 0 | 0..1 | 0.3 | dry/wet crossfade; 0 is a bit-exact passthrough of the dry signal. Smoothed. |
+| time | 1 | 10..2000 ms | 375 | The read head's distance behind the write head. Glides (see below), not smoothed by the device. |
+| feedback | 2 | 0..1.2 | 0.4 | Gain of one trip round the loop. Above 1 the echoes build until the saturator holds them (self-oscillation). Smoothed. |
+| warble | 3 | 0..1 | 0.25 | Tape wow and flutter, the looper's: about ±30 cents at 1. Glides. |
+| drive | 4 | 0..1 | 0.3 | Soft saturation in the loop (the looper's curve). Small signals pass at unity gain, so the tail still decays at `feedback` per echo; loud echoes are squashed. Smoothed. |
+| filter | 5 | 0..2 (rounded) | 0 | The loop's SVF: 0 low-pass, 1 high-pass, 2 band-pass. Not smoothed. |
+| cutoff | 6 | 100..20000 Hz | 4000 | Smoothed in the log2 domain. |
+| resonance | 7 | 0..1 | 0 | 0 is Butterworth, 1 rings. Smoothed. |
+
+- The wet signal is taken after the SVF, so the first echo has been filtered once, the second twice, and so
+  on; saturation starts with the second echo. The resampler's own low-pass (about 0.16 of the sample rate) darkens
+  every pass too.
+- Changing `time` moves the read head rather than jumping it, so the echoes bend in pitch (up when the time
+  shortens, down when it lengthens). The glide has a 0.2 s time constant and a speed cap of ±0.5, so the head never
+  stops or reverses. Automated values glide too.
+- Each channel has its own tape (dual mono). Bypass wipes the tape and the loop.
+
 **kind 2: Finnwave synth** (instrument). The voice is `dsp::finnwave` → amp ADSR.
 
 | param | id | range | default | notes |

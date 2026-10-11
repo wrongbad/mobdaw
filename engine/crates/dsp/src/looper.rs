@@ -40,19 +40,13 @@
 //! rebuilt by running the filter over [`warmup`] input samples preceding the read position.
 
 use crate::resampler::Resampler;
+use crate::warble::Warble;
 use std::f64::consts::FRAC_PI_2;
 
 /// Crossfade length at the loop seam, in output milliseconds.
 pub const XF_MS: f64 = 10.0;
 /// Time constant of the speed smoothing (a generous 150 ms).
 pub const SPEED_TAU_S: f64 = 0.15;
-/// Warble LFO rates (Hz) and the peak deviation of each at full depth (octaves; 0.01 = 12 cents).
-const WOW_HZ: f64 = 0.7;
-const FLUTTER_HZ: f64 = 7.1;
-const DRIFT_HZ: f64 = 0.23;
-const WOW_OCT: f64 = 0.0125;
-const FLUTTER_OCT: f64 = 0.004;
-const DRIFT_OCT: f64 = 0.006;
 /// Regions shorter than this (source samples) are treated as empty.
 pub const MIN_LENGTH: i64 = 64;
 
@@ -84,10 +78,8 @@ pub struct LoopVoice {
     /// Whether the head has wrapped since the trigger (before that there is no seam to crossfade).
     wrapped: bool,
     region: (i64, i64),
-    /// Warble LFO phases (cycles) and the smoothed depth.
-    wow: f64,
-    flutter: f64,
-    drift: f64,
+    /// Warble LFO phases and the smoothed depth.
+    warble: Warble,
     depth: f64,
 }
 
@@ -155,17 +147,8 @@ impl LoopVoice {
             if self.depth < 1e-6 && warble == 0.0 {
                 self.depth = 0.0;
             }
-            let tau = std::f64::consts::TAU;
-            self.wow = (self.wow + WOW_HZ * inv_sr).fract();
-            self.flutter = (self.flutter + FLUTTER_HZ * inv_sr).fract();
-            self.drift = (self.drift + DRIFT_HZ * inv_sr).fract();
-            let wob = if self.depth > 0.0 {
-                // drift is two incommensurate sines, so it doesn't audibly repeat
-                let d = 0.5 * ((self.drift * tau).sin() + (self.drift * tau * 2.618).sin());
-                self.depth * (WOW_OCT * (self.wow * tau).sin() + FLUTTER_OCT * (self.flutter * tau).sin() + DRIFT_OCT * d)
-            } else {
-                0.0
-            };
+            self.warble.advance(inv_sr);
+            let wob = if self.depth > 0.0 { self.depth * self.warble.octaves() } else { 0.0 };
             let speed = (self.log_speed + wob).exp2();
             let scale = (1.0 / speed).min(1.0) as f32;
             let w = warmup(speed);

@@ -946,6 +946,36 @@ fn a_tremolo_device_modulates_a_clip_and_bypass_restores_it() {
     assert!((back / clean - 1.0).abs() < 0.01, "bypassed: {back} vs {clean}");
 }
 
+#[test]
+fn a_tape_delay_device_repeats_a_clip_after_it_ends_and_bypass_clears_it() {
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&sine(440.0, 4_800)]);
+    e.track_upsert(1, 0, 1.0, 0.0, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 4_800, 0, 1.0, 0.0, 0.0, 0);
+    e.play(0);
+    let clean = rms(&render(&mut e, 4_800).0);
+    e.device_upsert(1, 1, 6, 1.0, false); // tape delay
+    e.param_set(1, 0, 1.0); // mix: wet only
+    e.param_set(1, 1, 200.0); // time
+    e.param_set(1, 2, 0.5); // feedback
+    e.seek(0);
+    let out = render(&mut e, 40_000).0;
+    // the clip is 0..4800; the first echo is at 9600..14400 and the second at 19200..24000
+    let (dry, first, second, gap) = (rms(&out[1_000..4_800]), // (the mix knob glides over the first 10 ms)
+         rms(&out[10_000..14_000]), rms(&out[20_000..24_000]), rms(&out[5_500..9_000]));
+    assert!(dry < 1e-3, "wet only: nothing before the first echo: {dry}");
+    assert!(gap < 1e-3, "silent between clip and echo: {gap}");
+    assert!(first > 0.05, "first echo: {first}");
+    assert!(second > 0.1 * first && second < 0.8 * first, "second echo {second} vs first {first}");
+    assert!(out.iter().all(|v| v.is_finite() && v.abs() < 1.5));
+
+    e.device_upsert(1, 1, 6, 1.0, true); // bypass: the tape is wiped and the echoes are gone
+    e.seek(0);
+    let bypassed = render(&mut e, 40_000).0;
+    assert!((rms(&bypassed[..4_800]) / clean - 1.0).abs() < 0.01, "the dry clip is back: {} vs {clean}", rms(&bypassed[..4_800]));
+    assert!(rms(&bypassed[5_000..]) < 1e-6, "no echoes while bypassed");
+}
+
 /// A 1 s clip of 8 kHz through the low-pass (device 1 on track 1), its cutoff lane (20..20000 Hz, log) in LFO mode.
 fn lfo_filter_engine() -> Engine {
     let n = 48_000;

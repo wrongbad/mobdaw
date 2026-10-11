@@ -46,6 +46,7 @@ fn process_never_allocates_across_a_busy_scene() {
         e.track_upsert(t, 0, 0.8, (t as f32 - 4.0) / 4.0, false, false);
         e.device_upsert(100 + t, t, 1, 1.0, false);
         e.device_upsert(200 + t, t, 1, 2.0, t % 2 == 0);
+        e.device_upsert(1200 + t, t, 6, 3.0, false); // tape delay
         for c in 0..6u32 {
             // overlapping clips with fades of every shape
             let h = t * 10 + c;
@@ -115,6 +116,7 @@ fn process_never_allocates_across_a_busy_scene() {
             30 => e.seek((block as i64 * 53) % 90_000),
             40 => e.track_upsert(3, 0, 0.3, 0.5, block % 2 == 0, block % 3 == 0),
             50 => e.param_set(423, 6, 1.5),
+            90 => e.param_set(1203, 1, 20.0 + (block % 11) as f32 * 150.0), // delay time: the head moves
             80 => e.preview_seek(950, (block as i64 * 17) % 40_000),
             70 => e.looper_upsert(1100, 30, 1.0 + (block % 5) as f64 * 0.3, 1000, 4000),
             60 => {

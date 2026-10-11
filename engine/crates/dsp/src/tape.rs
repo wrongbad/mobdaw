@@ -8,6 +8,9 @@
 //! adds even harmonics like a tape head does. `1/sqrt(d)` keeps the level roughly steady as the
 //! drive rises. At `drive = 0` and a fully open filter the stage is skipped (bit-exact bypass).
 //! Both controls glide, so a knob move never zippers.
+//!
+//! The curve itself is [`Saturator`], which the tape delay also runs in its feedback loop (with a
+//! different output gain: see [`Saturator::unity_gain`]).
 
 use crate::smooth::Ramp;
 use crate::svf::Svf;
@@ -18,6 +21,43 @@ pub const CUTOFF_MAX: f32 = 20000.0;
 const GLIDE_S: f64 = 0.03;
 /// The filter coefficients are recomputed every this many samples.
 const COEF_EVERY: usize = 8;
+
+/// The soft-clip curve `tanh(d*x + b) - tanh(b)` for a drive of 0..1: `d = 1 + 9*drive` and
+/// `b = 0.25*drive`. The output is not scaled; pick a gain for the use.
+#[derive(Clone, Copy, Debug)]
+pub struct Saturator {
+    d: f32,
+    bias: f32,
+    off: f32,
+}
+
+impl Saturator {
+    pub fn new(drive: f32) -> Self {
+        let (d, bias) = (1.0 + 9.0 * drive, 0.25 * drive);
+        Self { d, bias, off: bias.tanh() }
+    }
+
+    #[inline]
+    pub fn shape(&self, x: f32) -> f32 {
+        (self.d * x + self.bias).tanh() - self.off
+    }
+
+    /// `1/sqrt(d)`: keeps the level of a loud signal roughly steady as the drive rises (the
+    /// looper's tape colour).
+    #[inline]
+    pub fn level_gain(&self) -> f32 {
+        1.0 / self.d.sqrt()
+    }
+
+    /// The reciprocal of the curve's slope at zero, so small signals pass at exactly unity and
+    /// only the peaks are held back (to about `1/d`). For use inside a feedback loop, where the
+    /// small-signal gain decides whether the tail decays.
+    #[inline]
+    pub fn unity_gain(&self) -> f32 {
+        let t = self.bias.tanh();
+        1.0 / (self.d * (1.0 - t * t))
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct TapeColor {
@@ -80,11 +120,10 @@ impl TapeColor {
             }
             let (mut a, mut b) = (l[k], r[k]);
             if drive > 0.0 {
-                let d = 1.0 + 9.0 * drive;
-                let bias = 0.25 * drive;
-                let (norm, off) = (1.0 / d.sqrt(), bias.tanh());
-                a = ((d * a + bias).tanh() - off) * norm;
-                b = ((d * b + bias).tanh() - off) * norm;
+                let sat = Saturator::new(drive);
+                let norm = sat.level_gain();
+                a = sat.shape(a) * norm;
+                b = sat.shape(b) * norm;
             }
             l[k] = self.l.process(a).lp();
             r[k] = self.r.process(b).lp();
@@ -102,6 +141,17 @@ mod tests {
     }
     fn rms(x: &[f32]) -> f64 {
         (x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt()
+    }
+
+    #[test]
+    fn the_unity_gain_curve_passes_small_signals_untouched_and_holds_peaks() {
+        for drive in [0.0f32, 0.3, 1.0] {
+            let s = Saturator::new(drive);
+            let g = s.unity_gain();
+            let small = 1e-4f32;
+            assert!((s.shape(small) * g / small - 1.0).abs() < 1e-3, "drive {drive}");
+            assert!(s.shape(10.0) * g <= 1.0 / (1.0 + 9.0 * drive) + 1e-6, "drive {drive}: peaks not held");
+        }
     }
 
     #[test]

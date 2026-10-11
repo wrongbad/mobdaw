@@ -1,12 +1,13 @@
 //! Devices: the effect/instrument processors in a track's chain.
 
-use dsp::{CompParams, Compressor, Ramp, Reverb, Svf, Synth, TremParams, Tremolo};
+use dsp::{CompParams, Compressor, DelayParams, Ramp, Reverb, Svf, Synth, TapeDelay, TremParams, Tremolo};
 
 pub const KIND_FILTER: u32 = 1;
 pub const KIND_SYNTH: u32 = 2;
 pub const KIND_REVERB: u32 = 3;
 pub const KIND_COMPRESSOR: u32 = 4;
 pub const KIND_TREMOLO: u32 = 5;
+pub const KIND_DELAY: u32 = 6;
 
 const SMOOTH_MS: f64 = 10.0;
 
@@ -27,6 +28,7 @@ pub enum DeviceKind {
     Reverb(Box<ReverbDevice>),
     Compressor(Box<CompressorDevice>),
     Tremolo(Box<TremoloDevice>),
+    Delay(Box<DelayDevice>),
 }
 
 impl Device {
@@ -37,6 +39,7 @@ impl Device {
             KIND_REVERB => DeviceKind::Reverb(Box::new(ReverbDevice::new(sample_rate))),
             KIND_COMPRESSOR => DeviceKind::Compressor(Box::new(CompressorDevice::new(sample_rate))),
             KIND_TREMOLO => DeviceKind::Tremolo(Box::new(TremoloDevice::new(sample_rate))),
+            KIND_DELAY => DeviceKind::Delay(Box::new(DelayDevice::new(sample_rate))),
             _ => DeviceKind::Unknown,
         };
         Self { track, order, bypass, kind_id, kind }
@@ -53,6 +56,7 @@ impl Device {
             DeviceKind::Reverb(v) => v.set_param(param, value),
             DeviceKind::Compressor(c) => c.set_param(param, value),
             DeviceKind::Tremolo(t) => t.set_param(param, value),
+            DeviceKind::Delay(d) => d.set_param(param, value),
             DeviceKind::Unknown => {}
         }
     }
@@ -65,6 +69,7 @@ impl Device {
             DeviceKind::Reverb(v) => v.set_param_smooth(param, value, 0.0),
             DeviceKind::Compressor(c) => c.set_param_smooth(param, value, 0.0),
             DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, 0.0),
+            DeviceKind::Delay(d) => d.set_param_smooth(param, value, 0.0),
             DeviceKind::Unknown => {}
         }
     }
@@ -78,6 +83,7 @@ impl Device {
             DeviceKind::Reverb(v) => v.reset(),
             DeviceKind::Compressor(c) => c.reset(),
             DeviceKind::Tremolo(t) => t.reset(),
+            DeviceKind::Delay(d) => d.reset(),
             DeviceKind::Unknown => {}
         }
     }
@@ -96,6 +102,7 @@ impl Device {
             DeviceKind::Reverb(v) => v.process(l, r),
             DeviceKind::Compressor(c) => c.process(l, r, sample_rate),
             DeviceKind::Tremolo(t) => t.process(l, r, sample_rate),
+            DeviceKind::Delay(d) => d.process(l, r),
             DeviceKind::Synth(s) => {
                 let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
                 let mono = &mut mono[..l.len()];
@@ -360,5 +367,78 @@ impl TremoloDevice {
         self.depth.advance(l.len());
         self.spread.advance(l.len());
         self.trem.process(l, r, &p, sample_rate);
+    }
+}
+
+/// Kind 6: tape delay. Params: 0 mix, 1 time (ms), 2 feedback, 3 warble, 4 drive, 5 filter mode
+/// (0 low-pass, 1 high-pass, 2 band-pass), 6 cutoff (Hz), 7 resonance. Mix, feedback, drive,
+/// cutoff (in the log2 domain) and resonance are smoothed, with the values at each segment start
+/// used. Time and warble go to the dsp as set, which glides them itself (the time is a moving tape
+/// head, so it bends the echoes' pitch); the mode jumps.
+pub struct DelayDevice {
+    smooth_samples: f64,
+    mix: Ramp,
+    feedback: Ramp,
+    drive: Ramp,
+    cutoff_log2: Ramp,
+    resonance: Ramp,
+    p: DelayParams,
+    delay: TapeDelay,
+}
+
+impl DelayDevice {
+    pub fn new(sample_rate: f32) -> Self {
+        let p = DelayParams::default();
+        Self {
+            smooth_samples: sample_rate as f64 * SMOOTH_MS * 1e-3,
+            mix: Ramp::new(p.mix as f64),
+            feedback: Ramp::new(p.feedback as f64),
+            drive: Ramp::new(p.drive as f64),
+            cutoff_log2: Ramp::new((p.cutoff_hz as f64).log2()),
+            resonance: Ramp::new(p.resonance as f64),
+            p,
+            delay: TapeDelay::new(sample_rate),
+        }
+    }
+
+    pub fn set_param(&mut self, param: u32, value: f32) {
+        self.set_param_smooth(param, value, self.smooth_samples);
+    }
+
+    pub fn set_param_smooth(&mut self, param: u32, value: f32, s: f64) {
+        use dsp::delay::*;
+        if !value.is_finite() {
+            return;
+        }
+        match param {
+            0 => self.mix.set_target(value.clamp(0.0, 1.0) as f64, s),
+            1 => self.p.time_ms = value.clamp(TIME_MIN_MS, TIME_MAX_MS),
+            2 => self.feedback.set_target(value.clamp(0.0, FEEDBACK_MAX) as f64, s),
+            3 => self.p.warble = value.clamp(0.0, 1.0),
+            4 => self.drive.set_target(value.clamp(0.0, 1.0) as f64, s),
+            5 => self.p.mode = (value.round().clamp(0.0, (MODES - 1) as f32)) as u32,
+            6 => self.cutoff_log2.set_target((value.clamp(CUTOFF_MIN, CUTOFF_MAX) as f64).log2(), s),
+            7 => self.resonance.set_target(value.clamp(0.0, 1.0) as f64, s),
+            _ => {}
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.delay.reset();
+    }
+
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        self.p.mix = self.mix.value() as f32;
+        self.p.feedback = self.feedback.value() as f32;
+        self.p.drive = self.drive.value() as f32;
+        self.p.cutoff_hz = self.cutoff_log2.value().exp2() as f32;
+        self.p.resonance = self.resonance.value() as f32;
+        let n = l.len();
+        self.mix.advance(n);
+        self.feedback.advance(n);
+        self.drive.advance(n);
+        self.cutoff_log2.advance(n);
+        self.resonance.advance(n);
+        self.delay.process(l, r, &self.p);
     }
 }
