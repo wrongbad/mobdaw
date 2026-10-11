@@ -15,6 +15,8 @@ type EngineExports = {
   memory: WebAssembly.Memory
   engine_new(sampleRate: number): number
   engine_out_ptr(e: number): number
+  engine_input_ptr(e: number): number
+  engine_monitor(e: number, h: number, on: number): void
   engine_process(e: number, frames: number): void
   engine_set_param(e: number, id: number, value: number): void
   engine_free(e: number): void
@@ -35,6 +37,10 @@ class EngineProcessor extends AudioWorkletProcessor {
   private e: number
   private outPtr: number
   private view: Float32Array
+  /** The engine's input buffer (planar stereo), filled from the node's input while a track is monitored. */
+  private inPtr: number
+  private inView: Float32Array
+  private monitoring = false
   private sinceReport = 0
   /** Previews that are (or just were) playing: reported until they stop. */
   private previews = new Set<number>()
@@ -59,6 +65,8 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.e = this.x.engine_new(sampleRate)
     this.outPtr = this.x.engine_out_ptr(this.e)
     this.view = new Float32Array(this.x.memory.buffer, this.outPtr, 2 * BLOCK)
+    this.inPtr = this.x.engine_input_ptr?.(this.e) ?? 0
+    this.inView = new Float32Array(this.x.memory.buffer, this.inPtr, this.inPtr ? 2 * BLOCK : 0)
     this.port.onmessage = (ev: MessageEvent) => {
       const m = ev.data
       if (m?.type === 'param') this.x.engine_set_param(this.e, m.id, m.value)
@@ -66,8 +74,26 @@ class EngineProcessor extends AudioWorkletProcessor {
       else if (m?.type === 'source') this.loadSource(m.h, m.channels, m.frames)
       else if (m?.type === 'record') this.record(m.on, m.channels)
       else if (m?.type === 'meter') this.meter = !!m.on
+      else if (m?.type === 'monitor') this.monitor(m.h, !!m.on)
     }
     this.port.postMessage({ type: 'ready' })
+  }
+
+  /** Play the node's input through track `h` (input monitoring), or stop. */
+  private monitor(h: number, on: boolean) {
+    if (typeof this.x.engine_monitor !== 'function') return
+    this.monitoring = on
+    this.x.engine_monitor(this.e, h, on ? 1 : 0)
+  }
+
+  /** Hand frames [at, at+n) of the node's input to the engine: a mono input plays on both sides, an unconnected one is silence. */
+  private feed(input: Float32Array[] | undefined, at: number, n: number) {
+    if (this.inView.buffer !== this.x.memory.buffer) this.inView = new Float32Array(this.x.memory.buffer, this.inPtr, 2 * BLOCK)
+    const l = input?.[0], r = input?.[1] ?? l
+    if (l && r) {
+      this.inView.set(l.subarray(at, at + n), 0)
+      this.inView.set(r.subarray(at, at + n), BLOCK)
+    } else this.inView.fill(0)
   }
 
   private call(fn: string, args: number[]) {
@@ -196,6 +222,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     if (this.meter) this.level(inputs[0], total, captured)
     for (let at = 0; at < total; at += BLOCK) {
       const n = Math.min(BLOCK, total - at)
+      if (this.monitoring) this.feed(inputs[0], at, n)
       this.x.engine_process(this.e, n)
       // memory.grow detaches the old ArrayBuffer; re-wrap when it changes.
       if (this.view.buffer !== this.x.memory.buffer) {

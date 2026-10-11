@@ -42,7 +42,7 @@ type Card = ReturnType<typeof deviceCard>
 type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
   el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; mute: HTMLButtonElement; solo: HTMLButtonElement
-  record: HTMLButtonElement | null; meter: HTMLElement | null; gain: HTMLInputElement; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
+  record: HTMLButtonElement | null; listen: HTMLButtonElement | null; meter: HTMLElement | null; gain: HTMLInputElement; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
   synthMore: HTMLButtonElement; synthRow: HTMLElement; synth: HTMLElement; cards: Map<string, Card>
   loopMore: HTMLButtonElement; loopRow: HTMLElement; loops: HTMLElement
   loopCards: Map<string, ReturnType<typeof looperCard>>; boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
@@ -71,6 +71,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let noteSel: string | null = null
   const expanded = new Set<string>() // local UI state: tracks showing their FX chain
   let armedTrack: string | null = null // audio track armed for recording (local UI state, never in the doc)
+  let monitoring = false // hear the armed track's input through its effects (local UI state)
+  let monitored: string | null = null // the track the engine is currently monitoring
   let take: { trackId: string; trackName: string; start: number; journal: ReturnType<typeof takeJournal> } | null = null // the take being recorded
   let locks = new Map<string, string>() // track id -> who is recording on it (someone else)
   const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
@@ -543,6 +545,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     solo.disabled = readOnly
     const record = t.kind === 'audio' ? h('button', { className: 'record', title: 'arm for recording', onclick: () => void arm(t.id) }, 'r') : null
     if (record) record.disabled = readOnly
+    const listen = record ? h('button', { className: 'listen', hidden: true, title: 'monitor the input through this track\'s effects (use headphones)', onclick: () => {
+      monitoring = !monitoring
+      draw()
+    } }, 'i') : null
     const meter = record ? h('i', { className: 'meter', hidden: true, title: 'input level' }) : null
     const gain = h('input', { type: 'range', min: 0, max: 1, step: 0.01, title: 'gain', disabled: readOnly })
     gain.oninput = () => updateTrack(doc, t.id, { gain: Number(gain.value) })
@@ -552,7 +558,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     } }, 'fx')
     const delTrack = () => !locks.has(t.id) && confirm('delete this track and its clips?') && deleteTrack(doc, t.id)
-    const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl track-btns' }, mute, solo, record, meter), h('div', { className: 'ctl' }, gain))
+    const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter), h('div', { className: 'ctl' }, gain))
     // Click or right-click on the header (not on its controls) offers the track's menu.
     let menuClosed = false // this press just closed the menu: don't open it again
     head.addEventListener('pointerdown', (e) => (menuClosed = closedBy(e)), true)
@@ -622,7 +628,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const row = h('div', { className: 'lane-row' }, head, body)
     const auto = makeAutoSection(t.id)
     l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el), row, body, name, mute, solo, record, meter, gain, more,
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el), row, body, name, mute, solo, record, listen, meter, gain, more,
       fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
       pads: new Map(), auto, loopTc, src,
     }
@@ -1048,6 +1054,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (!take) pb?.recorder.disarm()
     }
     transport.setRecord(!!armedTrack, !!take)
+    const want = monitoring && armedTrack && pb?.recorder.armed ? armedTrack : null // (disarming ends monitoring)
+    if (want !== monitored) pb?.monitor((monitored = want))
     tracks.forEach((t, i) => {
       const l = laneFor(t)
       if (laneBox.children[i] !== l.el) laneBox.insertBefore(l.el, laneBox.children[i] ?? null)
@@ -1058,6 +1066,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       l.el.classList.toggle('locked', locks.has(t.id))
       l.record?.classList.toggle('on', armedTrack === t.id)
       if (l.meter) l.meter.hidden = armedTrack !== t.id
+      if (l.listen) {
+        l.listen.hidden = armedTrack !== t.id
+        l.listen.classList.toggle('on', monitoring)
+      }
       l.mute.classList.toggle('on', t.muted)
       l.solo.classList.toggle('on', t.soloed)
       if (document.activeElement !== l.gain) l.gain.value = String(t.gain)

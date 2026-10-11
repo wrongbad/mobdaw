@@ -48,6 +48,25 @@ pub unsafe extern "C" fn engine_process(e: *mut Engine, frames: u32) {
     (*e).process(frames as usize);
 }
 
+/// Pointer to the input buffer: `2 * 128` f32, planar (L block then R block). The host writes the
+/// live input here before each `engine_process`; it is only heard while monitored (`engine_monitor`).
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_input_ptr(e: *mut Engine) -> *mut f32 {
+    (*e).input_ptr()
+}
+
+/// Play the input through track `h`'s chain when `on` is 1; stop monitoring when `on` is 0.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_monitor(e: *mut Engine, h: u32, on: u32) {
+    (*e).monitor((on != 0).then_some(h));
+}
+
 /// Set a test-voice parameter (ids in `test_voice::PARAM_*`).
 ///
 /// # Safety

@@ -61,6 +61,8 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
       }
     },
     seek: (pos: number) => bridge.seek(pos),
+    /** Hear the armed microphone through this track's effects (null: stop). Only audible while the recorder is armed. */
+    monitor: (trackId: string | null) => void hostP.then((h) => h.monitor(trackId == null ? null : bridge.trackHandle(trackId)), () => {}),
     /** A looper's read head on the source tape (samples), or null while it isn't sounding. */
     looperHead: (id: string) => bridge.looperHead(id),
     live: (deviceId: string, paramId: number, v: number) => bridge.live(deviceId, paramId, v),

@@ -30,7 +30,7 @@ export class EngineHost {
     const [bytes] = await Promise.all([loadWasm(), addProcessor(ctx)])
     // Each node gets its own copy of the bytes (cloned, not transferred, so we can reuse them).
     const node = new AudioWorkletNode(ctx, 'mobdaw-engine', {
-      // One input for recording (never reaches the wasm engine); 'max' takes the mic's own channel count.
+      // One input, for recording and input monitoring (the worklet hands it to the engine only while monitored); 'max' takes the mic's own channel count.
       numberOfInputs: 1,
       channelCount: 2,
       channelCountMode: 'max',
@@ -75,6 +75,11 @@ export class EngineHost {
   /** Report the input's level (while a microphone is armed). */
   meter(on: boolean) {
     this.node.port.postMessage({ type: 'meter', on })
+  }
+
+  /** Play the input through the engine track `h`'s chain (input monitoring), or stop (`h` null). */
+  monitor(h: number | null) {
+    this.node.port.postMessage({ type: 'monitor', h: h ?? 0, on: h != null })
   }
 
   /** Start (`on`, with the channel count to capture) or end capturing the node's input. Capture begins once the engine plays. */

@@ -303,6 +303,7 @@ nav a.on { color: var(--fg); }
 .clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); pointer-events: none; z-index: 1; }
 .ctl.track-btns { background: none; } /* the strip beside M S R shows only while the meter is live */
 .ctl.track-btns button:not(.on) { background: var(--line); }
+.ctl button.listen[hidden] { display: none; }
 .ctl .meter { background: var(--line); flex: 1; align-self: stretch; position: relative; overflow: hidden; }
 .ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: #6fcf8f; transition: width 60ms linear; }
 .ctl .meter.clip::before { background: var(--danger); }
@@ -328,3 +329,5 @@ nav a.on { color: var(--fg); }
 .invite-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 .invite-dialog input { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
 .invite-dialog p { margin: 0 0 8px; }
+.help { font-size: 12px; font-weight: normal; cursor: help; }
+.help:hover, .help:focus { color: var(--fg); }

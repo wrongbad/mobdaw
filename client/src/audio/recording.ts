@@ -1,5 +1,5 @@
 // Microphone capture (docs/engine.md §9.2). The mic feeds the engine node's input; the worklet copies it while recording,
-// in the same call that advances the engine, so every captured frame maps to a timeline sample. Nothing here is monitored.
+// in the same call that advances the engine, so every captured frame maps to a timeline sample. Monitoring (hearing the input through a track's effects) is a separate path: see Playback.monitor.
 import type { EngineHost } from './engine-host'
 import { latencySamples, toPcm16 } from './wav'
 

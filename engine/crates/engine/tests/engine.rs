@@ -1016,3 +1016,27 @@ fn an_lfo_lane_reads_the_same_wave_wherever_you_start() {
     let (x, y) = (rms(&la[6_000..7_500]), rms(&lb[2_000..3_500]));
     assert!((x / y - 1.0).abs() < 0.05, "same place, same wave: {x} vs {y}");
 }
+
+#[test]
+fn monitored_input_plays_through_the_track_chain_gain_and_pan() {
+    let mut e = Engine::new(SR);
+    e.track_upsert(1, 0, 0.5, -1.0, false, false);
+    e.track_upsert(2, 0, 1.0, 0.0, false, false);
+    // Nothing is heard until a track is monitored.
+    unsafe { std::slice::from_raw_parts_mut(e.input_ptr(), 2 * BLOCK) }.fill(1.0);
+    let (l, r) = render(&mut e, 512);
+    assert!(l.iter().chain(&r).all(|&v| v == 0.0));
+    // Monitoring track 1 (hard left, gain 0.5): a 10 ms fade in, then a steady 0.5 on the left only.
+    e.monitor(Some(1));
+    let (l, r) = render(&mut e, 1024);
+    assert!(l[0] < 0.01 && (l[239] - 0.25).abs() < 0.01, "fade in {} {}", l[0], l[239]);
+    assert!((l[900] - 0.5).abs() < 1e-6 && r[900].abs() < 1e-6);
+    // Moving to track 2 fades the first out and the second in (centre pan: 1/sqrt 2 each side).
+    e.monitor(Some(2));
+    let (l, r) = render(&mut e, 2048);
+    assert!((l[2000] - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5 && (r[2000] - l[2000]).abs() < 1e-6);
+    // Off: silent again.
+    e.monitor(None);
+    let (l, r) = render(&mut e, 2048);
+    assert!(l[2000] == 0.0 && r[2000] == 0.0);
+}

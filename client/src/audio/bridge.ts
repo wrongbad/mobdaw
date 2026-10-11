@@ -167,6 +167,10 @@ export class Bridge {
       seek: (pos) => (clock.seek(pos), this.sink.call('engine_preview_seek', h, pos)),
     }
   }
+  /** The engine's handle for a track (made on first use, like every handle). */
+  trackHandle(id: string) {
+    return this.handle('track', id)
+  }
   /** Engine -> main: {type:'preview'} message. */
   onPreviewPos(m: { h: number; pos: number; playing: boolean }) {
     this.previewClocks.get(m.h)?.report(m)

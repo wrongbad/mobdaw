@@ -320,6 +320,14 @@ pub struct Engine {
     note_keys: HandleMap<(u32, f64)>,
     note_index: Vec<NoteEntry>,
     voice: TestVoice,
+    /// Live input, planar stereo (`BLOCK` left, then `BLOCK` right), written by the host before each `process`.
+    input: [f32; 2 * BLOCK],
+    /// The track whose chain the input is played through (input monitoring), if any.
+    monitor: Option<u32>,
+    /// Level of the monitored input: ramps to 1 when monitoring is on, to 0 when off or when it changes tracks.
+    monitor_gain: Ramp,
+    /// The track the input is (still) being mixed into while `monitor_gain` fades out.
+    monitor_track: Option<u32>,
 }
 
 fn note_order(e: &NoteEntry, clip: u32, tick: f64, handle: u32) -> Ordering {
@@ -348,7 +356,23 @@ impl Engine {
             note_keys: HandleMap::with_capacity(MAX_NOTES),
             note_index: Vec::with_capacity(MAX_NOTES),
             voice: TestVoice::new(sample_rate),
+            input: [0.0; 2 * BLOCK],
+            monitor: None,
+            monitor_gain: Ramp::new(0.0),
+            monitor_track: None,
         }
+    }
+
+    // ---- input monitoring -----------------------------------------------------------------
+
+    pub fn input_ptr(&mut self) -> *mut f32 {
+        self.input.as_mut_ptr()
+    }
+
+    /// Play the live input through track `h`'s device chain, gain and pan (or stop with `None`).
+    /// Moving to another track fades the old one out and the new one in.
+    pub fn monitor(&mut self, h: Option<u32>) {
+        self.monitor = h;
     }
 
     // ---- output ---------------------------------------------------------------------------
@@ -841,7 +865,7 @@ impl Engine {
         let sr = self.sr;
         let sr32 = self.sample_rate;
         let smooth = self.smooth_samples;
-        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, master_lanes, lanes, .. } = self;
+        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, master_lanes, lanes, input, monitor, monitor_gain, monitor_track, .. } = self;
         out.fill(0.0);
         let (out_l, out_r) = out.split_at_mut(BLOCK);
 
@@ -999,6 +1023,31 @@ impl Engine {
         }
         for (_, lp) in loopers.iter_mut() {
             lp.gain_now = lp.gain; // every block ramps from where the last one ended
+        }
+
+        // 2d. Input monitoring: the live input joins the monitored track's scratch, so its chain,
+        //     gain, pan, mute and solo all apply. A change of track (or of on/off) fades over 10 ms.
+        if *monitor_track != *monitor && monitor_gain.value() == 0.0 {
+            *monitor_track = *monitor;
+        }
+        let want = if monitor_track.is_some() && *monitor_track == *monitor { 1.0 } else { 0.0 };
+        if monitor_gain.target() != want {
+            monitor_gain.set_target(want, smooth);
+        }
+        if let Some(t) = monitor_track.and_then(|h| tracks.get_mut(h)) {
+            let (g0, g1) = (monitor_gain.value() as f32, monitor_gain.advance(n) as f32);
+            if g0 != 0.0 || g1 != 0.0 {
+                let d = (g1 - g0) / n as f32;
+                let (sl, sr_buf) = t.scratch.split_at_mut(BLOCK);
+                for j in 0..n {
+                    let g = g0 + d * (j + 1) as f32;
+                    sl[j] += input[j] * g;
+                    sr_buf[j] += input[BLOCK + j] * g;
+                }
+                t.has_audio = true;
+            }
+        } else {
+            monitor_gain.advance(n);
         }
 
         // 3. Per track: control segments, device chain, gain/pan, master sum.

@@ -36,6 +36,18 @@ engine_is_playing(e) -> u32
 - The M1 test-voice functions (`engine_set_param`) may stay for `#/engine-test`.
 - The test voice is only mixed in while its gate is on.
 
+## Input monitoring
+```
+engine_input_ptr(e) -> *mut f32         // planar stereo: 128 L then 128 R, like the output
+engine_monitor(e, track: u32, on: u32)  // play the input through that track; on = 0 stops
+```
+- The host writes the live input into the input buffer before each `engine_process`. The engine
+  never reads it unless a track is monitored, and then it is mixed into that track's scratch
+  like a clip: through the device chain in `order`, then gain/pan, mute and solo.
+- Only one track is monitored at a time. Starting, stopping or moving fades over 10 ms (a move
+  fades the old track out, then the new one in).
+- It plays whether or not the transport runs. An unknown track is a silent no-op.
+
 ## Sources (decoded PCM, f32, at the project rate)
 ```
 engine_source_alloc(e, h: u32, channels: u32, frames: f64) -> *mut f32
@@ -322,6 +334,11 @@ resampler, with an SVF and a soft saturator in the feedback loop.
 `{ type: 'source', h, channels: Float32Array[], frames }` (buffers transferred)
 - The processor calls `engine_source_alloc`, copies the channels in, then calls
   `engine_source_ready`.
+
+`{ type: 'monitor', h: number, on: boolean }`
+- The processor calls `engine_monitor(enginePtr, h, on)`, and while `on` copies the node's input
+  (channel 0 to both sides if it is mono, an unconnected input being silence) into the input
+  buffer before each block.
 
 ## Processor → main
 `{ type: 'pos', pos: number, playing: boolean }`, sent about 30 times a second while

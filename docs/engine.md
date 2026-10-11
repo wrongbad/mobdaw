@@ -285,8 +285,13 @@ the take only when the person who recorded it chooses to.
   (one input, `channelCountMode: 'max'`). While recording, `process()` copies `inputs[0]`
   into a buffer in the same call that advances the engine position, so every captured frame
   maps to a known timeline sample, with no clock matching between threads. Chunks (~1 s)
-  are posted to the main thread, as transferables. Input audio never enters the wasm engine
-  and is not monitored (use direct monitoring on the interface).
+  are posted to the main thread, as transferables. Input audio reaches the wasm engine only
+  while a track is **monitored** (below); otherwise it is not heard (use direct monitoring on the interface).
+- **Input monitoring.** The `i` button on the armed track plays the microphone through that
+  track's effects, gain and pan (`engine_monitor`, docs/engine-api.md). It is local UI state, off by
+  default, and ends when the track is disarmed. It is heard one engine block plus the browser's
+  input and output latency late, so direct monitoring is still better for tight playing; use
+  headphones, or the speakers feed back into the mic.
 - **Latency.** A take arrives late by output latency + input latency. The clip is placed at
   `start = position at record start - round((outputLatency + baseLatency + inputLatency + manual) * rate)`,
   where `inputLatency` is `track.getSettings().latency` (0 when the browser doesn't say) and
