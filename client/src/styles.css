@@ -306,7 +306,7 @@ nav a.on { color: var(--fg); }
 .ctl button.listen[hidden] { display: none; }
 .ctl .meter { background: var(--line); flex: 1; align-self: stretch; position: relative; overflow: hidden; }
 .ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: #6fcf8f; transition: width 60ms linear; }
-.ctl .meter.clip::before { background: var(--danger); }
+.ctl .meter.clipping::before { background: var(--danger); }
 .ctl .meter[hidden] { display: none; }
 .clip.incoming { background: #3a3358; animation: incoming 1.6s ease-in-out infinite; }
 .clip.missing { opacity: 0.55; background: repeating-linear-gradient(135deg, #2d3a5c 0 6px, #232c47 6px 12px); }
@@ -329,5 +329,3 @@ nav a.on { color: var(--fg); }
 .invite-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 .invite-dialog input { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
 .invite-dialog p { margin: 0 0 8px; }
-.help { font-size: 12px; font-weight: normal; cursor: help; }
-.help:hover, .help:focus { color: var(--fg); }

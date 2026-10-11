@@ -6,6 +6,10 @@ import { latencySamples, toPcm16 } from './wav'
 export type InputInfo = { deviceId: string; label: string; channels: number }
 export type Captured = { pcm: Int16Array[]; frames: number; channels: number; startPos: number; latency: number }
 
+/** A converter that clips reads as exactly full scale (16-bit: 32767/32768), so a hot but clean signal stays below this. */
+const CLIP_LEVEL = 0.999
+const CLIP_HOLD_MS = 2000
+
 const offsetKey = (deviceId: string) => `mobdaw.inputOffsetMs.${deviceId}`
 /** Manual input delay in ms for a device (added to the automatic compensation), kept per device in this browser. */
 export const getInputOffset = (deviceId: string) => Number(localStorage.getItem(offsetKey(deviceId))) || 0
@@ -24,9 +28,11 @@ export class Recorder {
   private take: Take | null = null
   private pk = new Float32Array(4096)
   private pkN = 0
-  /** Recent input level, 0..1 (peak with a short decay), and whether it hit full scale since arming or the take began. */
+  /** Recent input level, 0..1 (peak with a short decay). */
   level = 0
-  clipped = false
+  private clipAt = -Infinity
+  /** Whether the input hit full scale in the last couple of seconds (a hold, so a brief clip is visible but doesn't stick). */
+  get clipped() { return performance.now() - this.clipAt < CLIP_HOLD_MS }
   /** Called whenever the level moves (about 45 times a second while armed). */
   onlevel: (() => void) | null = null
 
@@ -40,8 +46,8 @@ export class Recorder {
   private onLevel(m: { peaks: Float32Array; rec: boolean }) {
     let mx = 0
     for (const v of m.peaks) if (v > mx) mx = v
-    this.level = Math.max(mx, this.level * 0.85)
-    if (mx >= 0.99) this.clipped = true
+    this.level = Math.max(mx, this.level * 0.95)
+    if (mx >= CLIP_LEVEL) this.clipAt = performance.now()
     if (this.take && m.rec) {
       if (this.pkN + m.peaks.length > this.pk.length) {
         const bigger = new Float32Array(this.pk.length * 2)
@@ -87,7 +93,7 @@ export class Recorder {
     this.src.connect(this.host.node)
     this.stream = stream
     this.level = 0
-    this.clipped = false
+    this.clipAt = -Infinity
     this.host.onlevel = (m) => this.onLevel(m)
     this.host.meter(true)
     return (this.info = { deviceId: s.deviceId ?? '', label: track.label, channels: Math.max(1, s.channelCount ?? 1) })
@@ -117,7 +123,7 @@ export class Recorder {
     const take: Take = { pcm: [], frames: 0, startPos: null, onChunk, done, finished }
     this.take = take
     this.pkN = 0
-    this.clipped = false
+    this.clipAt = -Infinity
     h.onrecstart = (m) => ((take.startPos = m.pos), onStart?.(m.pos))
     h.onrec = (m) => {
       if (m.frames) {

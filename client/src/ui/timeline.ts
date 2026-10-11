@@ -325,7 +325,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const l = armedTrack ? lanes.get(armedTrack) : undefined
     if (!rec || !l?.meter) return
     l.meter.style.setProperty('--lv', String(shape(rec.level)))
-    l.meter.classList.toggle('clip', rec.clipped)
+    l.meter.classList.toggle('clipping', rec.clipped) // (not 'clip': that is the timeline clips' class, with its own ::before)
   }
 
   /** The take so far, drawn into its growing region (the visible part only). */
