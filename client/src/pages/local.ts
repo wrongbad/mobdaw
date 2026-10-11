@@ -6,7 +6,7 @@ import { dateOf } from '../format'
 import { createLocal, listLocal, removeLocal, renameLocal, type LocalProject } from '../local/projects'
 import { readLocalPreview } from '../local/session'
 import { PROJECT_FILE_EXT, writeProjectFile } from '../projectFile'
-import { collectLocal, importProjectFile, localToCloud } from '../transfer'
+import { collectLocal, localToCloud } from '../transfer'
 import { silliName } from '../projectName'
 import { newProjectTile, projectTile } from '../ui/tile'
 
@@ -18,7 +18,6 @@ export function localSection(me: Me | null): HTMLElement {
   const list = h('ul', { className: 'tiles' })
   const err = h('p', { className: 'error' })
   const status = h('p', { className: 'dim' })
-  const picker = h('input', { type: 'file', accept: `${PROJECT_FILE_EXT},application/x-mobdaw-project`, hidden: true })
 
   const busy = async (msg: string, fn: () => Promise<unknown>) => {
     err.textContent = ''
@@ -71,19 +70,15 @@ export function localSection(me: Me | null): HTMLElement {
       ...all.map(row))
   }
 
-  picker.onchange = () => {
-    const file = picker.files?.[0]
-    picker.value = ''
-    if (file) void busy(`importing ${file.name}…`, async () => void (location.hash = `#/local/${(await importProjectFile(file)).id}`))
-  }
-
   const section = h('section', { className: 'section' },
-    h('h2', {}, 'local'),
-    h('p', { className: 'dim' },
-      'these projects are saved in this browser, on this device only. nothing is sent to a server, and no account is needed. ' +
-      'clearing your browser\'s site data deletes them, so export a project file to keep a backup.'),
-    h('div', { className: 'row' }, h('button', { type: 'button', onclick: () => picker.click() }, 'import file')),
-    picker, status, err, list,
+    h('h2', {},
+      'local ',
+      h('span', {
+        className: 'dim help', tabIndex: 0,
+        title: 'these projects are saved in this browser, on this device only. nothing is sent to a server, and no account is needed. ' +
+          'clearing your browser\'s site data deletes them, so export a project file to keep a backup.',
+      }, '(?)')),
+    status, err, list,
     me ? null : h('p', { className: 'dim' }, h('a', { href: '#/login' }, 'sign in'), ' or ', h('a', { href: '#/register' }, 'create a free account'), '. cloud storage and real-time editing with others are part of mobdaw pro.'))
   render()
   return section

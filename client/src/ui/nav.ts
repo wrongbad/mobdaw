@@ -3,12 +3,16 @@ import { api } from '../api'
 import { h } from '../dom'
 import { homeLink } from '../router'
 import { dateOf, daysLeft } from '../format'
+import { describeError } from '../errors'
+import { PROJECT_FILE_EXT } from '../projectFile'
+import { importProjectFile } from '../transfer'
 
 /** Top bar for every page except the editor. `me` is null when working locally without an account. */
 export function nav(me: Me | null): HTMLElement {
   const bar = h('nav', {},
     h('a', { ...homeLink, className: 'logo' }, 'mobdaw'),
     h('span', { className: 'grow' }),
+    importButton(),
     me ? h('details', { className: 'menu' },
       h('summary', { className: 'dim' }, me.username),
       h('div', {},
@@ -24,6 +28,29 @@ export function nav(me: Me | null): HTMLElement {
     : me.planStatus === 'active' && me.paidThrough - Date.now() < 14 * 86_400_000 ? endingBanner(me.paidThrough)
     : null
   return h('div', { className: 'top' }, bar, banner)
+}
+
+/** Opens a project file and lands in the imported local project. */
+function importButton(): HTMLElement {
+  const picker = h('input', { type: 'file', accept: `${PROJECT_FILE_EXT},application/x-mobdaw-project`, hidden: true })
+  const link = h('a', {
+    href: '#', title: 'import a project file',
+    onclick: (e: Event) => (e.preventDefault(), picker.click()),
+  }, 'import')
+  picker.onchange = async () => {
+    const file = picker.files?.[0]
+    picker.value = ''
+    if (!file) return
+    link.textContent = 'importing…'
+    try {
+      location.hash = `#/local/${(await importProjectFile(file)).id}`
+    } catch (e) {
+      alert(describeError(e))
+    } finally {
+      link.textContent = 'import'
+    }
+  }
+  return h('span', {}, link, picker)
 }
 
 /** Shown on every page while an account is in its 30-day retention window. */
