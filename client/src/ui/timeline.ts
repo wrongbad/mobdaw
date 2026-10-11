@@ -186,6 +186,18 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (readOnly) return
     void dropFiles(audioFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   }
+  /** A click on a shut chain's title bar (not a button, not the end of a drag) opens it. */
+  function openOnClick(fx: HTMLElement, open: () => void) {
+    let down = [0, 0]
+    fx.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY]), true)
+    fx.addEventListener('click', (e) => {
+      const el = e.target as HTMLElement
+      if (!fx.classList.contains('collapsed') || !el.closest('.dev-head') || el.closest('button')) return
+      if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return
+      open()
+      draw()
+    })
+  }
   // The global fx lane: the master bus chain, pinned under the scroller (open or shut, it never scrolls away).
   let masterOpen = false
   const masterCards = new Map<string, ReturnType<typeof deviceCard>>()
@@ -197,6 +209,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const masterAdd = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
     popover(masterAdd, EFFECTS.map((d) => [d.name, () => addDevice(doc, MASTER_TRACK, d.type)] as [string, () => void])) }, '+')
   masterFx.append(masterAdd)
+  openOnClick(masterFx, () => (masterOpen = true))
   const master = h('div', { className: 'lane master' }, h('div', { className: 'fx-row' }, masterMore, masterFx))
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el), master)
 
@@ -628,6 +641,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     else if (t.kind === 'midi') bgMenu(body, (e) => [['new region', () => newMidiClip(t.id, atX(e))]])
     else if (t.kind === 'soundscape') bgMenu(body, (e) => [['new region', () => newPad(t.id, atX(e))]])
     const fx = h('div', { className: 'fx', hidden: true })
+    openOnClick(fx, () => expanded.add(t.id))
     const add = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
       popover(add, EFFECTS.map((d) => [d.name, () => addDevice(doc, t.id, d.type)] as [string, () => void])) }, '+')
     fx.append(add)
@@ -695,13 +709,16 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function drawFx(l: Lane, t: Track, devices: Device[]) {
     const fxOpen = expanded.has(t.id)
     const synthOpen = t.kind === 'midi' && synthShown.has(t.id)
-    l.fx.hidden = !fxOpen
+    const mine = devices.filter((d) => d.trackId === t.id)
+    const chain = mine.filter((d) => !DEVICES[d.type]?.instrument)
+    const fxShown = fxOpen || chain.length > 0 // shut: the cards stay as title bars
+    l.fx.hidden = !fxShown
+    l.fx.classList.toggle('collapsed', !fxOpen)
     l.more.classList.toggle('on', fxOpen)
     l.synthRow.hidden = t.kind !== 'midi'
     l.synth.hidden = !synthOpen
     l.synthMore.classList.toggle('on', synthOpen)
-    if (!fxOpen && !synthOpen) return
-    const mine = devices.filter((d) => d.trackId === t.id)
+    if (!fxShown && !synthOpen) return
     const ids = new Set(mine.map((d) => d.id))
     for (const [id, c] of l.cards) if (!ids.has(id)) { c.el.remove(); l.cards.delete(id) }
     const place = (box: HTMLElement, list: Device[]) => list.forEach((d, i) => {
@@ -711,21 +728,21 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS, autoInfos.get(d.id) ?? NO_AUTO)
     })
     if (synthOpen) place(l.synth, mine.filter((d) => DEVICES[d.type]?.instrument))
-    if (fxOpen) {
-      const chain = mine.filter((d) => !DEVICES[d.type]?.instrument)
+    if (fxShown) {
       findRuns(chain)
       place(l.fx, chain)
-      for (const d of chain) l.cards.get(d.id)?.redrawCurve() // again, now that every card is in place (rows, neighbours)
+      for (const d of chain) l.cards.get(d.id)?.redrawCurve() // (shut too: it colours the titles) // again, now that every card is in place (rows, neighbours)
     }
   }
 
   function drawMaster(devices: Device[]) {
-    masterFx.hidden = !masterOpen
-    masterMore.classList.toggle('on', masterOpen)
-    const n = devices.filter((d) => d.trackId === MASTER_TRACK).length
-    masterMore.textContent = n ? `global fx (${n})` : 'global fx'
-    if (!masterOpen) return
     const mine = devices.filter((d) => d.trackId === MASTER_TRACK)
+    const n = mine.length
+    masterFx.hidden = !masterOpen && n === 0 // shut: the cards stay as title bars
+    masterFx.classList.toggle('collapsed', !masterOpen)
+    masterMore.classList.toggle('on', masterOpen)
+    masterMore.textContent = n ? `global fx (${n})` : 'global fx'
+    if (masterFx.hidden) return
     const ids = new Set(mine.map((d) => d.id))
     for (const [id, c] of masterCards) if (!ids.has(id)) { c.el.remove(); masterCards.delete(id) }
     findRuns(mine)

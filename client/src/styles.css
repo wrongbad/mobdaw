@@ -176,6 +176,12 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .fx-toggle.on { color: var(--fg); }
 .fx { position: sticky; left: 140px; width: calc(100vw - 140px); display: flex; flex-wrap: wrap; align-items: flex-start; min-height: 72px; }
 .fx[hidden] { display: none; }
+/* shut: only each card's title bar */
+.fx.collapsed { min-height: 0; align-items: stretch; }
+.fx.collapsed .dev > :not(.dev-head), .fx.collapsed .add-fx { display: none; }
+.fx.collapsed .dev { cursor: pointer; display: flex; flex-direction: column; } /* the title bar fills the bar's height */
+.fx.collapsed .dev-head { height: auto; flex: 1; background: color-mix(in srgb, var(--bg) 75%, var(--lane)); color: var(--dim); }
+.fx.collapsed .dev-head strong { opacity: .65; } /* filter colour-coding stays, darkened */
 .fx-row[hidden] { display: none; }
 /* global fx: pinned under the scroller; opens upward into a capped, scrollable strip */
 .lane.master { flex: none; max-height: 45vh; overflow: auto; border-top: 1px solid var(--divider); border-bottom: 0; }
