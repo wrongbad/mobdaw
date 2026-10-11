@@ -186,10 +186,10 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .dev-head { display: flex; gap: 6px; align-items: center; padding: 0 0 0 8px; height: 18px; padding-right: 18px; background: var(--raise); }
 .dev button { border: 0; padding: 0 6px; font-size: 11px; line-height: 18px; }
 .add-fx { align-self: center; margin: 0 16px; width: 64px; height: 40px; font-size: 22px; line-height: 1; color: var(--dim); background: none; border: 1px dashed var(--line); }
-.dev .prm { display: grid; grid-template-columns: 62px 1fr 56px; gap: 6px; align-items: center; padding: 3px 8px; }
+.dev .prm { display: grid; grid-template-columns: 1fr 2fr; gap: 6px; align-items: center; padding: 3px 8px; }
 .dev .prm input, .dev .prm select { padding: 0; border: 0; min-width: 0; accent-color: var(--accent); }
-.dev .prm select { grid-column: 2 / 4; padding: 1px 4px; }
-.dev .out { text-align: right; font-size: 11px; }
+.dev .prm select { grid-column: 2; padding: 1px 4px; }
+.value-tip { position: fixed; z-index: 100; transform: translate(-50%, calc(-100% - 4px)); padding: 1px 6px; font-size: 11px; white-space: nowrap; pointer-events: none; background: var(--raise); color: var(--fg); border: 1px solid var(--line); }
 .add-fx:hover { color: var(--fg); border-color: var(--dim); }
 /* automation: a collapsible section per track (and one for the global fx) with a drawable lane per automated param */
 .auto-section[hidden], .auto-box[hidden] { display: none; }
@@ -282,7 +282,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .fx-head .transport.sm { padding: 3px 0 0 6px; }
 .loop-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--c); pointer-events: none; z-index: 2; }
 .dev.looper { width: 280px; }
-.dev.looper .prm > .ctl, .dev.looper .prm > .btns { grid-column: 2 / 4; }
+.dev.looper .prm > .ctl, .dev.looper .prm > .btns { grid-column: 2; }
 .dev.looper .btns { display: flex; gap: 6px; }
 .dev.looper .ctl button { background: var(--raise); }
 .dev.looper .ctl button.on { background: var(--accent); }

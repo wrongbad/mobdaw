@@ -3,6 +3,7 @@ import { LOOP_CUTOFF_MAX, LOOP_CUTOFF_MIN, LOOP_SPEED_MAX, LOOP_SPEED_MIN, type 
 import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
 import { deleteMenu } from './popover'
+import { valueTip } from './valueTip'
 
 export const LOOP_COLORS = ['#ff6b6b', '#ffd166', '#06d6a0', '#4cc9f0']
 
@@ -52,6 +53,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   vol.oninput = () => deps.setGain(id, Number(vol.value))
   const speed = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly, title: 'speed' })
   const out = h('span', { className: 'dim out' })
+  valueTip(speed, out)
   speed.onpointerdown = () => deps.grab()
   speed.oninput = () => {
     const v = toSpeed(Number(speed.value))
@@ -65,12 +67,14 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   }
   const sat = tapeSlider('saturation')
   const satOut = h('span', { className: 'dim out' })
+  valueTip(sat, satOut)
   sat.oninput = () => {
     satOut.textContent = fmtPct(Number(sat.value))
     deps.setTape(id, { sat: Number(sat.value) })
   }
   const filter = tapeSlider('low-pass filter')
   const filterOut = h('span', { className: 'dim out' })
+  valueTip(filter, filterOut)
   filter.oninput = () => {
     const hz = toCutoff(Number(filter.value))
     filterOut.textContent = fmtCutoff(hz)
@@ -78,6 +82,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   }
   const warble = tapeSlider('tape wow & flutter')
   const warbleOut = h('span', { className: 'dim out' })
+  valueTip(warble, warbleOut)
   warble.oninput = () => {
     warbleOut.textContent = fmtPct(Number(warble.value))
     deps.setTape(id, { warble: Number(warble.value) })
@@ -92,10 +97,10 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   const el = h('div', { className: 'dev looper' },
     h('div', { className: 'dev-head' }, h('strong', {}, `loop ${lp.slot + 1}`), h('span', { className: 'grow' }), remove),
     h('div', { className: 'prm' }, name('gain', 'volume'), h('div', { className: 'ctl' }, mute, vol)),
-    h('label', { className: 'prm' }, name('speed', 'speed'), speed, out),
-    h('label', { className: 'prm' }, name('sat', 'saturate'), sat, satOut),
-    h('label', { className: 'prm' }, name('cutoff', 'filter'), filter, filterOut),
-    h('label', { className: 'prm' }, name('warble', 'warble'), warble, warbleOut),
+    h('label', { className: 'prm' }, name('speed', 'speed'), speed),
+    h('label', { className: 'prm' }, name('sat', 'saturate'), sat),
+    h('label', { className: 'prm' }, name('cutoff', 'filter'), filter),
+    h('label', { className: 'prm' }, name('warble', 'warble'), warble),
     h('div', { className: 'prm' }, h('span', { className: 'dim' }, 'region'), h('div', { className: 'btns' }, draw, clear)))
   el.style.setProperty('--c', color)
   deleteMenu(el, 'delete looper', () => deps.remove(id), () => !deps.readOnly)

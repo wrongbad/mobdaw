@@ -3,6 +3,7 @@ import { DEVICES, paramToPos, paramToValue, type Device, type ParamDef, type Par
 import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
 import { deleteMenu } from './popover'
+import { valueTip } from './valueTip'
 
 export type CardDeps = {
   readOnly: boolean
@@ -45,6 +46,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
       return { p, input, out, label }
     }
     const input = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly })
+    valueTip(input, out)
     input.oninput = () => {
       const v = paramToValue(p, Number(input.value))
       out.textContent = fmt(p, v)
@@ -60,7 +62,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
 
   const el = h('div', { className: 'dev' },
     h('div', { className: 'dev-head' }, h('strong', {}, def?.name ?? `device ${dev.type}`), h('span', { className: 'grow' }), bypass, def?.instrument ? null : remove),
-    ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input, r.out)))
+    ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input)))
   if (!def?.instrument) deleteMenu(el, 'delete device', () => deps.remove(id), () => !deps.readOnly)
 
   /**
