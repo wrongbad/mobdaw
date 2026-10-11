@@ -4,6 +4,7 @@ import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
 import { FILTER_COLORS, filterCurve, type FilterChange, type FilterLocks, type FilterMember } from './filterCurve'
 import { deleteMenu } from './popover'
+import { dragToReorder } from './reorder'
 import { valueTip } from './valueTip'
 
 export type CardDeps = {
@@ -22,6 +23,10 @@ export type CardDeps = {
   run(deviceId: string, self: FilterMember): FilterMember[]
   /** This filter's values changed: the card that hosts its run's curve redraws it. */
   changed(deviceId: string): void
+  /** A card is being dragged by its title bar (merged views split meanwhile); dropped before `beforeId` (null: last). */
+  reorderStart(): void
+  reorderDrop(deviceId: string, beforeId: string | null): void
+  reorderEnd(): void
   /** The run's curve is moving a param of filter `deviceId` (any card in the run), and finished moving it. */
   dragFilter(deviceId: string, change: FilterChange): void
   dragFilterEnd(deviceId: string): void
@@ -133,10 +138,14 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     return { p, input, out, label }
   })
 
-  const el = h('div', { className: 'dev' },
-    h('div', { className: 'dev-head' }, title, h('span', { className: 'grow' }), bypass, def?.instrument ? null : remove),
+  const head = h('div', { className: 'dev-head' }, title, h('span', { className: 'grow' }), bypass, def?.instrument ? null : remove)
+  const el = h('div', { className: 'dev', 'data-device': id },
+    head,
     slot,
     ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input)))
+  if (!def?.instrument && !deps.readOnly) {
+    dragToReorder(head, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(id, before), end: deps.reorderEnd })
+  }
   if (!def?.instrument) deleteMenu(el, 'delete device', () => deps.remove(id), () => !deps.readOnly)
 
   /**

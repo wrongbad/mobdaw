@@ -1,7 +1,7 @@
 // Plain absolutely-positioned DOM timeline. Isolated so it can be redesigned.
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import {
-  DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, MASTER_TRACK, FINNWAVE, SIMPLE_FILTER, addAudioClip, addDevice, addLane, addMidiClip, addPad, addPoint, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
+  DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, MASTER_TRACK, FINNWAVE, SIMPLE_FILTER, addAudioClip, addDevice, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
   deleteDevice, deleteLooper, addNextLooper, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
@@ -91,6 +91,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const clipEls = new Map<string, HTMLElement>()
   const waves = new Map<string, { cv: HTMLCanvasElement; label: HTMLElement; sig: string; pk?: Float32Array; v0: number; v1: number }>()
   let remoteDrags = new Map<string, Map<number, number>>()
+  /** A card is being dragged by its title bar: merged filter views split until it lands. */
+  let reordering = false
   let raf = 0
   let destroyed = false
 
@@ -419,7 +421,19 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     },
     bypass: (d: string, b: boolean) => updateDevice(doc, d, { bypass: b }),
     remove: (d: string) => deleteDevice(doc, d),
-    run: (d: string, self: FilterMember) => (runs.get(d) ?? [d]).flatMap((o) => (o === d ? [self] : [cardOf(o)?.member() ?? []].flat())),
+    reorderStart: () => { reordering = true; schedule() },
+    reorderEnd: () => { reordering = false; schedule() },
+    reorderDrop: (d: string, before: string | null) => {
+      const dev = getDevices(doc).find((x) => x.id === d)
+      if (!dev) return
+      const chain = getDevices(doc).filter((x) => x.trackId === dev.trackId && x.id !== d && !DEVICES[x.type]?.instrument)
+      const i = before == null ? chain.length : chain.findIndex((x) => x.id === before)
+      if (i < 0) return
+      undo.stopCapturing()
+      updateDevice(doc, d, { order: orderBetween(chain[i - 1]?.order, chain[i]?.order) })
+      undo.stopCapturing()
+    },
+    run: (d: string, self: FilterMember) => reordering && document.querySelector('.dev.reordering') ? [self] : (runs.get(d) ?? [d]).flatMap((o) => (o === d ? [self] : [cardOf(o)?.member() ?? []].flat())),
     changed: (d: string) => { const host = runs.get(d)?.[0]; if (host && host !== d) cardOf(host)?.redrawCurve() },
     dragFilter: (d: string, change: FilterChange) => cardOf(d)?.dragMove(change),
     dragFilterEnd: (d: string) => cardOf(d)?.dragEnd(),

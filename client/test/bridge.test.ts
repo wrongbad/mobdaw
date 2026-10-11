@@ -4,7 +4,7 @@ import {
   DEVICES, addAudioClip, addDevice, MASTER_TRACK, devicesMap, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
   addLane, addPoint, deleteLane, evalPoints, getLanes, getPoints, laneOf, setLaneEnabled, setLaneState, updateLaneLfo, updatePoint, resolveTarget,
   getClips, getLoopers, getSampleRate, getTracks, migrateToV2, notesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap,
-  updateClip, updateLooper, updateNote, updateTrack, type SampleMeta, setSampleStatus, discardSample, getSamples, undoScope,
+  orderBetween, getDevices, updateDevice, updateClip, updateLooper, updateNote, updateTrack, type SampleMeta, setSampleStatus, discardSample, getSamples, undoScope,
 } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 
@@ -114,6 +114,21 @@ describe('bridge', () => {
     expect(take()).toEqual([['engine_param_set', dh, 2, 0.3]])
     deleteDevice(doc, d)
     expect(take()).toEqual([['engine_device_remove', dh]])
+  })
+
+  it('moving a device in its chain sends its new order, keeping its handle', () => {
+    const { doc, take } = setup()
+    const t = addTrack(doc, 'a')
+    const a = addDevice(doc, t, 1)
+    const b = addDevice(doc, t, 4)
+    const ups = () => take().filter((c) => c[0] === 'engine_device_upsert') // [fn, handle, track, kind, order, bypass]
+    const [ua, ub] = ups()
+    expect(ua[4]).toBeLessThan(ub[4])
+    updateDevice(doc, b, { order: orderBetween(undefined, getDevices(doc).find((d) => d.id === a)!.order) }) // b goes in front of a
+    const after = ups()
+    expect(after).toHaveLength(1)
+    expect(after[0][1]).toBe(ub[1]) // same handle: the engine keeps its params and state
+    expect(after[0][4]).toBeLessThan(ua[4])
   })
 
   it('global fx devices (on the master bus) reach the engine without a track and survive an orphan sweep', () => {

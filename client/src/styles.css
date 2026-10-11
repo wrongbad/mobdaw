@@ -343,3 +343,6 @@ nav a.on { color: var(--fg); }
 .fcurve .node.stuck { opacity: .6; }
 .fcurve .read { fill: var(--dim); font-size: 9px; pointer-events: none; }
 .dev .prm[hidden] { display: none; }
+.dev.reordering { z-index: 5; opacity: .9; box-shadow: 0 4px 14px #000a; background: var(--panel); }
+.dev.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+.dev.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
