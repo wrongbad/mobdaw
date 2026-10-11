@@ -27,6 +27,8 @@ import { noteEditor } from './noteEditor'
 import { clamp, dragPointer, grabAt, trimBlock, trimMidiLeft, type Grab } from './blocks'
 import { closedBy, deleteMenu, popover } from './popover'
 import { fmt, transportControls, type TransportControls } from './transport'
+import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
+import { valueTip } from './valueTip'
 
 const HEADER = 140
 const MIN_SEC = 0.05
@@ -574,8 +576,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     } }, 'i') : null
     const meter = record ? h('i', { className: 'meter', hidden: true, title: 'input level' }) : null
-    const gain = h('input', { type: 'range', min: 0, max: 1, step: 0.01, title: 'gain', disabled: readOnly })
-    gain.oninput = () => updateTrack(doc, t.id, { gain: Number(gain.value) })
+    const gain = h('input', { type: 'range', min: 0, max: 1, step: 'any', title: 'gain', disabled: readOnly })
+    ticks(gain, [UNITY_POS]) // 0 dB; the top of the range is +6 dB
+    valueTip(gain, () => fmtDb(posToGain(gain.valueAsNumber)))
+    gain.oninput = () => updateTrack(doc, t.id, { gain: posToGain(gain.valueAsNumber) })
     gain.onpointerdown = () => undo.stopCapturing()
     const more = h('button', { className: 'fx-toggle', title: 'effects', onclick: () => {
       if (!expanded.delete(t.id)) expanded.add(t.id)
@@ -1115,7 +1119,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       }
       l.mute.classList.toggle('on', t.muted)
       l.solo.classList.toggle('on', t.soloed)
-      if (document.activeElement !== l.gain) l.gain.value = String(t.gain)
+      if (document.activeElement !== l.gain) l.gain.value = String(gainToPos(t.gain))
       drawFx(l, t, devices)
       drawLoopers(l, t, loopers)
       drawPads(l, t, pads)

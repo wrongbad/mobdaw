@@ -3,6 +3,7 @@ import { LOOP_CUTOFF_MAX, LOOP_CUTOFF_MIN, LOOP_SPEED_MAX, LOOP_SPEED_MIN, type 
 import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
 import { deleteMenu } from './popover'
+import { fmtDb } from './slider'
 import { valueTip } from './valueTip'
 
 export const LOOP_COLORS = ['#ff6b6b', '#ffd166', '#06d6a0', '#4cc9f0']
@@ -49,6 +50,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   draw.disabled = clear.disabled = remove.disabled = mute.disabled = deps.readOnly
   let muted = false
   const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, disabled: deps.readOnly, title: 'volume' })
+  valueTip(vol, () => fmtDb(Number(vol.value)))
   vol.onpointerdown = () => deps.grab()
   vol.oninput = () => deps.setGain(id, Number(vol.value))
   const speed = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly, title: 'speed' })

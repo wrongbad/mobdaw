@@ -13,6 +13,7 @@ import {
 import { h } from '../dom'
 import { clamp, dragPointer } from './blocks'
 import { popover } from './popover'
+import { valueTip } from './valueTip'
 
 export const AUTO_H = 64
 const LFO_H = 96 // an LFO lane is taller: its header stacks the mode, rate and depth rows (matches .auto-row.lfo)
@@ -101,17 +102,18 @@ export function autoRow(deps: RowDeps) {
   // LFO controls, shown in LFO mode. The slider positions are 0..1; rate is logarithmic.
   const rateToPos = (hz: number) => Math.log(hz / LFO_RATE_MIN) / Math.log(LFO_RATE_MAX / LFO_RATE_MIN)
   const posToRate = (t: number) => LFO_RATE_MIN * (LFO_RATE_MAX / LFO_RATE_MIN) ** t
-  const slider = (title: string, onInput: (t: number) => void) => {
+  const slider = (title: string, fmtTip: (t: number) => string, onInput: (t: number) => void) => {
     const el = h('input', { type: 'range', min: '0', max: '1', step: 'any', title, disabled: readOnly })
     el.addEventListener('pointerdown', () => deps.grab()) // one drag, one undo step
     el.addEventListener('input', () => onInput(el.valueAsNumber))
+    valueTip(el, () => fmtTip(el.valueAsNumber))
     return el
   }
   const shape = h('select', { className: 'auto-shape', title: 'wave shape', hidden: true, onchange: () => updateLaneLfo(doc, lane.id, { shape: Number(shape.value) }) },
     ...LFO_SHAPES.map((t, i) => h('option', { value: String(i) }, t)))
   shape.disabled = readOnly
-  const rate = slider('rate', (t) => updateLaneLfo(doc, lane.id, { rate: posToRate(t) }))
-  const depth = slider('depth', (t) => updateLaneLfo(doc, lane.id, { depth: t }))
+  const rate = slider('rate', (t) => `${posToRate(t).toFixed(2)} Hz`, (t) => updateLaneLfo(doc, lane.id, { rate: posToRate(t) }))
+  const depth = slider('depth', (t) => `${Math.round(t * 100)}%`, (t) => updateLaneLfo(doc, lane.id, { depth: t }))
   const lfoRow = (label: string, input: HTMLElement) => h('div', { className: 'ctl lfo-ctl', hidden: true }, h('span', { className: 'lfo-label' }, label), input)
   const lfoRows = [lfoRow('rate', rate), lfoRow('depth', depth)]
 

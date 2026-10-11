@@ -86,7 +86,7 @@ pub struct DelayParams {
 
 impl Default for DelayParams {
     fn default() -> Self {
-        Self { time_ms: 375.0, feedback: 0.4, mix: 0.3, warble: 0.25, drive: 0.3, mode: 0, cutoff_hz: 4000.0, resonance: 0.0 }
+        Self { time_ms: 375.0, feedback: 0.4, mix: 0.3, warble: 0.25, drive: 0.0, mode: 0, cutoff_hz: 4000.0, resonance: 0.0 }
     }
 }
 

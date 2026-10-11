@@ -121,13 +121,12 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .remote-head { opacity: .8; }
 
 /* lanes: header, clip row, FX chain */
-.lane { --lane: #1a1112; background: var(--lane); border-bottom: 1px solid var(--divider); position: relative; }
-.lanes > .lane:first-child { border-top: 1px solid var(--divider); }
+.lane { --lane: #1a1112; background: var(--lane); border-bottom: 3px solid var(--divider); position: relative; }
+.lanes > .lane:first-child { border-top: 3px solid var(--divider); }
 /* the dividers are repainted above the playhead overlay (z-index 1), so the playhead never crosses them */
-.lane:not(.master)::after, .lanes > .lane:first-child::before { content: ''; position: absolute; left: 0; right: 0; height: 1px; background: var(--divider); z-index: 2; pointer-events: none; }
-.lane:not(.master)::after { bottom: -1px; }
-.lanes > .lane:first-child::before { top: -1px; }
-.lane:nth-child(even) { --lane: #241a1b; } /* header, clips row and FX bar share the lane's tint */
+.lane:not(.master)::after, .lanes > .lane:first-child::before { content: ''; position: absolute; left: 0; right: 0; height: 3px; background: var(--divider); z-index: 2; pointer-events: none; }
+.lane:not(.master)::after { bottom: -3px; }
+.lanes > .lane:first-child::before { top: -3px; }
 .lane-row { display: flex; height: 72px; }
 .lane.editing .lane-row { height: 320px; }
 .head { background: var(--lane); display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 0 12px; border-right: 1px solid var(--line); }
@@ -136,7 +135,19 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .ctl { display: flex; gap: 1px; align-items: center; background: var(--line); }
 .ctl button { border: 0; padding: 0 6px; font-size: 11px; line-height: 18px; color: var(--dim); }
 .ctl button.on, .dev button.on { color: var(--bg); background: var(--accent); }
-.ctl input[type=range] { flex: 1; min-width: 0; padding: 0; border: 0; height: 18px; background: var(--raise); accent-color: var(--accent); }
+.ctl:has(input[type=range]) { background: none; }
+.ctl input[type=range] { flex: 1; min-width: 0; }
+
+/* sliders: a thin track, optional tick marks (`--ticks`, set by ui/slider.ts) and a thick pale bar for the handle */
+input[type=range] {
+  -webkit-appearance: none; appearance: none; height: 18px; margin: 0; padding: 0; border: 0; cursor: pointer;
+  background: var(--ticks, linear-gradient(transparent, transparent)), linear-gradient(var(--dim), var(--dim)) 0 50% / 100% 2px no-repeat;
+}
+input[type=range]:disabled { opacity: .5; cursor: default; }
+input[type=range]::-webkit-slider-runnable-track { height: 18px; background: transparent; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 4px; height: 16px; margin-top: 1px; border: 0; border-radius: 0; background: #e8e8ea; }
+input[type=range]::-moz-range-track { background: transparent; }
+input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; border-radius: 0; background: #e8e8ea; }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {

@@ -3,15 +3,16 @@ import { h } from '../dom'
 
 let tip: HTMLElement | null = null
 
-export function valueTip(input: HTMLInputElement, out: HTMLElement) {
+/** `out`: an element whose text is the readout (watched for changes), or a function giving it from the slider's current value. */
+export function valueTip(input: HTMLInputElement, out: HTMLElement | (() => string)) {
   let hover = false
   let drag = false
   const place = () => {
     if (!tip) return
     const r = input.getBoundingClientRect()
     const frac = (Number(input.value) - Number(input.min)) / (Number(input.max) - Number(input.min) || 1)
-    tip.textContent = out.textContent
-    tip.style.left = `${r.left + 6 + frac * (r.width - 12)}px`
+    tip.textContent = typeof out === 'function' ? out() : out.textContent
+    tip.style.left = `${r.left + 2 + frac * (r.width - 4)}px`
     tip.style.top = `${r.top}px`
   }
   const sync = () => {
@@ -31,5 +32,5 @@ export function valueTip(input: HTMLInputElement, out: HTMLElement) {
   })
   input.addEventListener('input', () => hover || drag ? place() : undefined)
   // lane-driven values and remote drags change the text without any input event
-  new MutationObserver(() => (hover || drag) && place()).observe(out, { childList: true, characterData: true, subtree: true })
+  if (typeof out !== 'function') new MutationObserver(() => (hover || drag) && place()).observe(out, { childList: true, characterData: true, subtree: true })
 }

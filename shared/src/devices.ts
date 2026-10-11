@@ -65,7 +65,7 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 1, name: 'time', min: 10, max: 2000, def: 375, scale: 'log', unit: 'ms' },
       { id: 2, name: 'feedback', min: 0, max: 1.2, def: 0.4, scale: 'lin' },
       { id: 3, name: 'warble', min: 0, max: 1, def: 0.25, scale: 'lin' },
-      { id: 4, name: 'drive', min: 0, max: 1, def: 0.3, scale: 'lin' },
+      { id: 4, name: 'drive', min: 0, max: 1, def: 0, scale: 'lin' },
       { id: 5, name: 'filter', min: 0, max: 2, def: 0, scale: 'lin', options: ['lowpass', 'highpass', 'bandpass'] },
       { id: 6, name: 'cutoff', min: 100, max: 20000, def: 4000, scale: 'log', unit: 'hz' },
       { id: 7, name: 'resonance', min: 0, max: 1, def: 0, scale: 'lin' },

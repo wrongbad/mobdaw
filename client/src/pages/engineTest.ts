@@ -4,6 +4,7 @@ import { h, mount } from '../dom'
 import { nav } from '../ui/nav'
 import { getCtx } from '../audio/context'
 import { EngineHost, P } from '../audio/engine-host'
+import { valueTip } from '../ui/valueTip'
 
 type Slider = { label: string; id: number; min: number; max: number; log: boolean; init: number; unit: string }
 const SLIDERS: Slider[] = [
@@ -60,6 +61,7 @@ export function engineTestPage(me: Me) {
         host?.setParam(s.id, v)
       },
     })
+    valueTip(input, out)
     return h('label', { className: 'row' }, h('span', { style: 'width:90px' }, s.label), input, out)
   })
 

@@ -294,7 +294,7 @@ resampler, with an SVF and a soft saturator in the feedback loop.
 | time | 1 | 10..2000 ms | 375 | The read head's distance behind the write head. Glides (see below), not smoothed by the device. |
 | feedback | 2 | 0..1.2 | 0.4 | Gain of one trip round the loop. Above 1 the echoes build until the saturator holds them (self-oscillation). Smoothed. |
 | warble | 3 | 0..1 | 0.25 | Tape wow and flutter, the looper's: about ±30 cents at 1. Glides. |
-| drive | 4 | 0..1 | 0.3 | Soft saturation in the loop (the looper's curve). Small signals pass at unity gain, so the tail still decays at `feedback` per echo; loud echoes are squashed. Smoothed. |
+| drive | 4 | 0..1 | 0 | Soft saturation in the loop (the looper's curve). Small signals pass at unity gain, so the tail still decays at `feedback` per echo; loud echoes are squashed. Smoothed. |
 | filter | 5 | 0..2 (rounded) | 0 | The loop's SVF: 0 low-pass, 1 high-pass, 2 band-pass. Not smoothed. |
 | cutoff | 6 | 100..20000 Hz | 4000 | Smoothed in the log2 domain. |
 | resonance | 7 | 0..1 | 0 | 0 is Butterworth, 1 rings. Smoothed. |
