@@ -42,23 +42,23 @@ export function localSection(me: Me | null): HTMLElement {
       details: [`edited ${dateOf(p.updatedAt)}`],
       preview: () => readLocalPreview(p.id),
       actions: [
-        { label: 'Export', title: 'save this project and its audio as a file', onclick: () => busy(`Exporting ${p.name}…`, async () => {
+        { label: 'export', title: 'save this project and its audio as a file', onclick: () => busy(`exporting ${p.name}…`, async () => {
           saveBlob(writeProjectFile(await collectLocal(p.id)), safeName(p.name) + PROJECT_FILE_EXT)
         }) },
         ...(me ? [{
-          label: 'Upload to cloud', disabled: !canUpload,
+          label: 'upload to cloud', disabled: !canUpload,
           title: canUpload ? 'move a copy to the cloud, where you can share it' : 'your subscription has ended',
-          onclick: () => busy('Uploading…', async () => {
+          onclick: () => busy('uploading…', async () => {
             const id = await localToCloud(p.id, me, (m) => (status.textContent = m))
             location.hash = `#/project/${id}`
           }),
         }] : []),
-        { label: 'Rename', onclick: () => {
-          const n = prompt('Rename project', p.name)?.trim()
+        { label: 'rename', onclick: () => {
+          const n = prompt('rename project', p.name)?.trim()
           if (n && n !== p.name) (renameLocal(p.id, n), render())
         } },
         { label: 'Delete', danger: true, onclick: () => {
-          if (confirm(`Delete "${p.name}" from this device? Its audio is deleted too, and this cannot be undone. Export it first to keep a copy.`)) busy('Deleting…', () => removeLocal(p.id))
+          if (confirm(`delete "${p.name}" from this device? its audio is deleted too, and this cannot be undone. export it first to keep a copy.`)) busy('deleting…', () => removeLocal(p.id))
         } },
       ],
     })
@@ -67,24 +67,24 @@ export function localSection(me: Me | null): HTMLElement {
   function render() {
     const all = listLocal()
     list.replaceChildren(
-      newProjectTile(() => (location.hash = `#/local/${createLocal(silliName()).id}`), { title: 'start a new project on this device' }),
+      newProjectTile(() => (location.hash = `#/local/${createLocal(silliName()).id}`), { title: 'start a new local project' }),
       ...all.map(row))
   }
 
   picker.onchange = () => {
     const file = picker.files?.[0]
     picker.value = ''
-    if (file) void busy(`Importing ${file.name}…`, async () => void (location.hash = `#/local/${(await importProjectFile(file)).id}`))
+    if (file) void busy(`importing ${file.name}…`, async () => void (location.hash = `#/local/${(await importProjectFile(file)).id}`))
   }
 
   const section = h('section', { className: 'section' },
-    h('h2', {}, 'On this device'),
+    h('h2', {}, 'local'),
     h('p', { className: 'dim' },
-      'These projects are saved in this browser, on this device only. Nothing is sent to a server, and no account is needed. ' +
-      'Clearing your browser\'s site data deletes them, so export a project file to keep a backup.'),
-    h('div', { className: 'row' }, h('button', { type: 'button', onclick: () => picker.click() }, 'Import file')),
+      'these projects are saved in this browser, on this device only. nothing is sent to a server, and no account is needed. ' +
+      'clearing your browser\'s site data deletes them, so export a project file to keep a backup.'),
+    h('div', { className: 'row' }, h('button', { type: 'button', onclick: () => picker.click() }, 'import file')),
     picker, status, err, list,
-    me ? null : h('p', { className: 'dim' }, h('a', { href: '#/login' }, 'Sign in'), ' or ', h('a', { href: '#/register' }, 'create a free account'), '. Cloud storage and real-time editing with others are part of mobdaw Pro.'))
+    me ? null : h('p', { className: 'dim' }, h('a', { href: '#/login' }, 'sign in'), ' or ', h('a', { href: '#/register' }, 'create a free account'), '. cloud storage and real-time editing with others are part of mobdaw pro.'))
   render()
   return section
 }

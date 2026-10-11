@@ -16,17 +16,17 @@ export function accountPage(me: Me) {
 
   const months = monthsLeft(me.paidThrough)
   const plan = me.planStatus === 'read_only' && me.retentionEndsAt
-    ? h('p', {}, 'Your pre-paid time has run out. Your account is read-only until ', h('strong', {}, dateOf(me.retentionEndsAt)),
-        ` (${daysLeft(me.retentionEndsAt)} days). After that, your cloud audio and projects are permanently deleted. Your account stays, and you can use the cloud again whenever you add time.`)
+    ? h('p', {}, 'your pre-paid time has run out. your account is read-only until ', h('strong', {}, dateOf(me.retentionEndsAt)),
+        ` (${daysLeft(me.retentionEndsAt)} days). after that, your cloud audio and projects are permanently deleted. your account stays, and you can use the cloud again whenever you add time.`)
     : me.planStatus === 'lapsed'
-    ? h('p', {}, 'Your pre-paid time ran out and your cloud audio and projects have been deleted. Your account is still here: add time to use the cloud again, starting fresh.')
+    ? h('p', {}, 'your pre-paid time ran out and your cloud audio and projects have been deleted. your account is still here: add time to use the cloud again, starting fresh.')
     : h('div', {},
-        h('p', {}, 'mobdaw Pro is active.'),
-        h('p', {}, 'Paid through ', h('strong', {}, dateOf(me.paidThrough)),
+        h('p', {}, 'mobdaw pro is active.'),
+        h('p', {}, 'paid through ', h('strong', {}, dateOf(me.paidThrough)),
           ` (${months} ${months === 1 ? 'month' : 'months'} of pre-paid time).`),
         h('p', { className: 'dim' },
-          'When pre-paid time runs out, your cloud audio and projects become read-only for 30 days so you can download your data, and then your cloud audio and projects are deleted. Your account is never deleted automatically. ' +
-          'Payments are not set up yet; time comes from invites and gifts.'))
+          'when pre-paid time runs out, your cloud audio and projects become read-only for 30 days so you can download your data, and then your cloud audio and projects are deleted. your account is never deleted automatically. ' +
+          'payments are not set up yet; time comes from invites and gifts.'))
 
   const progress = h('p', { className: 'dim' })
   const buttons: HTMLButtonElement[] = []
@@ -36,7 +36,7 @@ export function accountPage(me: Me) {
     buttons.forEach((b) => (b.disabled = true))
     try {
       await fn()
-      progress.textContent = 'Done.'
+      progress.textContent = 'done.'
     } catch (e) {
       progress.textContent = ''
       err.textContent = describeError(e)
@@ -47,9 +47,9 @@ export function accountPage(me: Me) {
   const downloadUploads = job(async () => {
     const uploads = await api.uploads()
     for (const [i, u] of uploads.entries()) {
-      progress.textContent = `Downloading ${i + 1} of ${uploads.length}: ${u.name || u.hash.slice(0, 12)}…`
+      progress.textContent = `downloading ${i + 1} of ${uploads.length}: ${u.name || u.hash.slice(0, 12)}…`
       const res = await fetch((await api.uploadFileUrl(u.hash)).url)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) throw new Error(`http ${res.status}`)
       saveBlob(await res.blob(), safeName(u.name, u.hash.slice(0, 12)))
     }
   })
@@ -58,27 +58,27 @@ export function accountPage(me: Me) {
     for (const p of mine) saveBlob(writeProjectFile(await collectCloud(p.id, me, (m) => (progress.textContent = m))), safeName(p.name) + PROJECT_FILE_EXT)
   })
   buttons.push(
-    h('button', { onclick: downloadUploads }, 'Download my uploads'),
-    h('button', { onclick: downloadProjects }, 'Download my projects'),
+    h('button', { onclick: downloadUploads }, 'download my uploads'),
+    h('button', { onclick: downloadProjects }, 'download my projects'),
   )
 
   const del = h('button', { className: 'danger', onclick: () => {
-    if (!password.value) return void (err.textContent = 'Enter your password to confirm.')
-    if (!confirm('Delete your account now? Your projects (for every member you shared them with) and all of your uploads are permanently deleted. This cannot be undone.')) return
+    if (!password.value) return void (err.textContent = 'enter your password to confirm.')
+    if (!confirm('delete your account now? your projects (for every member you shared them with) and all of your uploads are permanently deleted. this cannot be undone.')) return
     api.deleteAccount(password.value).then(() => go('/'), (e) => (err.textContent = describeError(e)))
-  } }, 'Delete my account')
+  } }, 'delete my account')
 
   mount(nav(me), h('main', {},
-    h('h2', {}, 'Account'),
+    h('h2', {}, 'account'),
     h('p', {}, h('strong', {}, me.username)),
     plan,
-    h('p', { className: 'dim' }, `${bytes(me.bytesUsed)} of ${bytes(me.quotaBytes)} storage used.`, ' ', h('a', { href: '#/uploads' }, 'Manage uploads')),
-    h('h3', {}, 'Download your data'),
-    h('p', { className: 'dim' }, 'Your uploads come back as the original audio files. Your projects come back as project files, each with its audio; open one with Import on the "on this device" page.'),
+    h('p', { className: 'dim' }, `${bytes(me.bytesUsed)} of ${bytes(me.quotaBytes)} storage used.`, ' ', h('a', { href: '#/uploads' }, 'manage uploads')),
+    h('h3', {}, 'download your data'),
+    h('p', { className: 'dim' }, 'your uploads come back as the original audio files. your projects come back as project files, each with its audio; open one with import on the local page.'),
     h('div', { className: 'row' }, ...buttons),
     progress,
-    h('h3', {}, 'Delete account'),
-    h('p', { className: 'dim' }, 'Deletes your account, your cloud audio and your projects immediately. This is the only way an account is ever deleted. Download anything you want to keep first.'),
+    h('h3', {}, 'delete account'),
+    h('p', { className: 'dim' }, 'deletes your account, your cloud audio and your projects immediately. this is the only way an account is ever deleted. download anything you want to keep first.'),
     h('div', { className: 'row' }, password, del),
     err))
 }

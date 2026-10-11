@@ -30,22 +30,22 @@ export function nav(me: Me | null): HTMLElement {
 function retentionBanner(endsAt: number) {
   const n = daysLeft(endsAt)
   return h('p', { className: 'banner' },
-    `Your subscription has ended. Your account is read-only, and your cloud audio and projects will be permanently deleted on ${dateOf(endsAt)} ` +
+    `your subscription has ended. your account is read-only, and your cloud audio and projects will be permanently deleted on ${dateOf(endsAt)} ` +
     `(${n} ${n === 1 ? 'day' : 'days'} left). `,
-    h('a', { href: '#/account' }, 'Download your data'), '. Add time before then to keep everything. Your account itself is never deleted.')
+    h('a', { href: '#/account' }, 'download your data'), '. add time before then to keep everything. your account itself is never deleted.')
 }
 
 /** After the retention window: the cloud data is gone, the account is not. */
 function lapsedBanner() {
   return h('p', { className: 'banner' },
-    'Your subscription has ended and your cloud audio and projects have been deleted. Your account is still here: add time to use the cloud again. ',
-    'Projects on this device are untouched.')
+    'your subscription has ended and your cloud audio and projects have been deleted. your account is still here: add time to use the cloud again. ',
+    'local projects are untouched.')
 }
 
 /** Shown in the last two weeks of pre-paid time. */
 function endingBanner(paidThrough: number) {
   const n = daysLeft(paidThrough)
   return h('p', { className: 'banner' },
-    `Your pre-paid time ends on ${dateOf(paidThrough)} (${n} ${n === 1 ? 'day' : 'days'}). After that your cloud audio and projects become read-only for 30 days, then your cloud audio and projects are deleted. `,
-    h('a', { href: '#/account' }, 'Account'))
+    `your pre-paid time ends on ${dateOf(paidThrough)} (${n} ${n === 1 ? 'day' : 'days'}). after that your cloud audio and projects become read-only for 30 days, then your cloud audio and projects are deleted. `,
+    h('a', { href: '#/account' }, 'account'))
 }

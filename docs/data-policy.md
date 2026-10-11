@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-10-10
 
-This policy covers data stored in the cloud with [mobdaw Pro](pro-tier.md). In free local
+This policy covers data stored in the cloud with [mobdaw pro](pro-tier.md). In free local
 mode, your data never leaves your device.
 
 ## The policy

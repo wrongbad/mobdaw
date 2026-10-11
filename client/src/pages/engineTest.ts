@@ -7,10 +7,10 @@ import { EngineHost, P } from '../audio/engine-host'
 
 type Slider = { label: string; id: number; min: number; max: number; log: boolean; init: number; unit: string }
 const SLIDERS: Slider[] = [
-  { label: 'freq', id: P.freq, min: 20, max: 10000, log: true, init: 220, unit: 'Hz' },
+  { label: 'freq', id: P.freq, min: 20, max: 10000, log: true, init: 220, unit: 'hz' },
   { label: 'rolloff b', id: P.rolloff, min: 0.001, max: 3, log: true, init: 0.3, unit: '' },
-  { label: 'cutoff', id: P.cutoff, min: 20, max: 20000, log: true, init: 2000, unit: 'Hz' },
-  { label: 'damping R', id: P.damping, min: 0.05, max: 2, log: false, init: Math.SQRT1_2, unit: '' },
+  { label: 'cutoff', id: P.cutoff, min: 20, max: 20000, log: true, init: 2000, unit: 'hz' },
+  { label: 'damping r', id: P.damping, min: 0.05, max: 2, log: false, init: Math.SQRT1_2, unit: '' },
   { label: 'gain', id: P.gain, min: 0, max: 1, log: false, init: 0.3, unit: '' },
 ]
 
@@ -40,14 +40,14 @@ export function engineTestPage(me: Me) {
         }
         on = !on
         host.setParam(P.gate, on ? 1 : 0)
-        startBtn.textContent = on ? 'Stop' : 'Start'
+        startBtn.textContent = on ? 'stop' : 'start'
         status.textContent = `${on ? 'playing' : 'stopped'} (engine ready)`
       } catch (e) {
         err.textContent = String((e as Error).message ?? e)
         status.textContent = 'error'
       }
     },
-  }, 'Start')
+  }, 'start')
 
   const rows = SLIDERS.map((s) => {
     const out = h('span', { className: 'dim' }, `${fmt(s.init)} ${s.unit}`)
@@ -65,8 +65,8 @@ export function engineTestPage(me: Me) {
 
   const ctx = getCtx()
   mount(nav(me), h('main', {},
-    h('h2', {}, 'Engine test'),
-    h('p', { className: 'dim' }, `sample rate: ${ctx.sampleRate} Hz · finnwave → SVF low-pass → gain`),
+    h('h2', {}, 'engine test'),
+    h('p', { className: 'dim' }, `sample rate: ${ctx.sampleRate} hz · finnwave → svf low-pass → gain`),
     h('div', { className: 'row' }, startBtn), ...rows, status, err))
 
   return () => {

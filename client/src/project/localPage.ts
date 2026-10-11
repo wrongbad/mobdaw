@@ -8,7 +8,7 @@ import { mountTimeline } from '../ui/timeline'
 export function localProjectPage(id: string) {
   const project = getLocal(id)
   if (!project) {
-    mount(h('main', { className: 'center' }, h('p', { className: 'error' }, 'That project is not on this device.'), h('a', homeLink, 'back')))
+    mount(h('main', { className: 'center' }, h('p', { className: 'error' }, 'that project is not on this device.'), h('a', homeLink, 'back')))
     return
   }
   const session = openLocalSession(id)

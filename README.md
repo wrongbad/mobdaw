@@ -3,7 +3,7 @@
 A collaborative web DAW: invite-only, real-time editing of the same project. See `docs/spec.md`.
 
 Free and open source under the [Apache License 2.0](LICENSE.md). See
-[`docs/pro-tier.md`](docs/pro-tier.md) for free vs mobdaw Pro, and
+[`docs/pro-tier.md`](docs/pro-tier.md) for free vs mobdaw pro, and
 [`docs/data-policy.md`](docs/data-policy.md) for how cloud data is handled.
 
 ## Quick start
@@ -44,7 +44,7 @@ Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Ru
 - `node:sqlite` is built into Node 24; it may print an ExperimentalWarning.
 - Without `SESSION_SECRET` in dev, a random secret is used per boot, so a server restart logs
   everyone out. Set one in `.env`.
-- **Free / Pro** ([`docs/pro-tier.md`](docs/pro-tier.md)): with no account the editor runs entirely in the browser. A local
+- **free / pro** ([`docs/pro-tier.md`](docs/pro-tier.md)): with no account the editor runs entirely in the browser. A local
   project's document is saved with `y-indexeddb` and its audio as blobs in IndexedDB (per project, keyed by SHA-256); the
   list of projects is in `localStorage`. A `.mobdaw` file (`client/src/projectFile.ts`) holds a project with its audio and is
   how projects are exported, imported and moved between "on this device" and the cloud (`client/src/transfer.ts`). Local

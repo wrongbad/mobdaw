@@ -18,7 +18,7 @@ export function projectPage(me: Me, id: string) {
     // The server closes our connection when access changes (removed, role changed, project deleted).
     const lost = () => {
       if (dead) return
-      mount(h('main', { className: 'center' }, h('p', {}, 'This project was deleted, or you no longer have access.')))
+      mount(h('main', { className: 'center' }, h('p', {}, 'this project was deleted, or you no longer have access.')))
       setTimeout(() => dead || go('/'), 2000)
     }
     session.provider!.on('authenticationFailed', lost)
@@ -29,7 +29,7 @@ export function projectPage(me: Me, id: string) {
       tl.destroy()
       session.destroy()
     }
-  }, () => mount(h('main', { className: 'center' }, h('p', { className: 'error' }, 'Project not found.'),
+  }, () => mount(h('main', { className: 'center' }, h('p', { className: 'error' }, 'project not found.'),
     h('a', homeLink, 'back'))))
   return () => {
     dead = true

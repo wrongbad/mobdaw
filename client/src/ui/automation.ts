@@ -51,8 +51,8 @@ export function automateMenu(label: HTMLElement, m: AutoMenu, readOnly: boolean)
     e.stopPropagation() // not the card's own menu, nor the <label> focusing its control
     const s = m.state()
     const items: [string, () => void][] =
-      s === 'none' ? (readOnly ? [] : [['Automate', m.automate], ['Modulate with LFO', m.lfo]])
-        : [['Show automation', m.show], ...(readOnly ? [] : [[s === 'on' ? 'Disable automation' : 'Enable automation', m.toggle], ['Delete automation', m.remove]] as [string, () => void][])]
+      s === 'none' ? (readOnly ? [] : [['automate', m.automate], ['modulate with lfo', m.lfo]])
+        : [['show automation', m.show], ...(readOnly ? [] : [[s === 'on' ? 'disable automation' : 'enable automation', m.toggle], ['delete automation', m.remove]] as [string, () => void][])]
     if (items.length) popover(label, items, [e.clientX, e.clientY])
   }
   label.addEventListener('click', open)
@@ -92,7 +92,7 @@ export function autoRow(deps: RowDeps) {
   let sig = ''
 
   const name = h('span', { className: 'name' })
-  const modes: [LaneState, string][] = [['off', 'Disabled'], ['keyframes', 'Keyframes'], ['lfo', 'LFO']]
+  const modes: [LaneState, string][] = [['off', 'disabled'], ['keyframes', 'keyframes'], ['lfo', 'lfo']]
   const mode = h('select', { className: 'auto-mode', title: 'what drives the parameter', onchange: () => setLaneState(doc, lane.id, mode.value as LaneState) },
     ...modes.map(([v, t]) => h('option', { value: v }, t)))
   const del = h('button', { className: 'x', title: 'delete automation', onclick: () => deleteLane(doc, lane.id) }, '×')
@@ -178,8 +178,8 @@ export function autoRow(deps: RowDeps) {
     if (readOnly) return
     const next: AutoCurve = p.curve === 'hold' ? 'linear' : 'hold'
     popover(surface as unknown as HTMLElement, [
-      ['Delete point', () => deletePoint(doc, p.id)],
-      [next === 'hold' ? 'Step to next point' : 'Line to next point', () => updatePoint(doc, p.id, { curve: next })],
+      ['delete point', () => deletePoint(doc, p.id)],
+      [next === 'hold' ? 'step to next point' : 'line to next point', () => updatePoint(doc, p.id, { curve: next })],
     ], [e.clientX, e.clientY])
   }
 
@@ -202,7 +202,7 @@ export function autoRow(deps: RowDeps) {
     if (shape.value !== String(d.shape)) shape.value = String(d.shape)
     if (document.activeElement !== rate) rate.value = String(rateToPos(d.rate))
     if (document.activeElement !== depth) depth.value = String(d.depth)
-    rate.title = `rate: ${d.rate < 1 ? d.rate.toFixed(2) : d.rate.toFixed(1)} Hz`
+    rate.title = `rate: ${d.rate < 1 ? d.rate.toFixed(2) : d.rate.toFixed(1)} hz`
     depth.title = `depth: ±${Math.round(d.depth * 100)}% of the slider`
     el.style.setProperty('--c', v.color)
     // the wave is drawn around the param's own value, the keyframes from the points: only what is drawn is in the signature

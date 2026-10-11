@@ -13,16 +13,16 @@ export function registerPage(invite: string, done: () => void) {
   mount(h('main', { className: 'center' },
     h('div', { className: 'card' },
       h('h1', { className: 'logo' }, 'mobdaw'),
-      h('p', { className: 'dim' }, 'Invite only for now. Ask the owner for an invite link.'),
+      h('p', { className: 'dim' }, 'invite only for now. ask the owner for an invite link.'),
       h('form', {
         onsubmit: (e: Event) => {
           e.preventDefault()
           err.textContent = ''
-          if (password.value !== again.value) return void (err.textContent = 'Passwords do not match.')
+          if (password.value !== again.value) return void (err.textContent = 'passwords do not match.')
           api.register({ username: username.value, password: password.value, invite: code.value }).then(done, (x) => (err.textContent = authMessage(x)))
         },
-      }, code, username, password, again, h('button', {}, 'Register')),
+      }, code, username, password, again, h('button', {}, 'register')),
       err,
-      h('p', { className: 'dim' }, 'Already have an account? ', h('a', { href: '#/login' }, 'Log in')),
-      h('p', { className: 'dim' }, h('a', homeLink, 'Continue without an account'), ' to work on this device.'))))
+      h('p', { className: 'dim' }, 'already have an account? ', h('a', { href: '#/login' }, 'log in')),
+      h('p', { className: 'dim' }, h('a', homeLink, 'continue without an account'), ' to work locally.'))))
 }

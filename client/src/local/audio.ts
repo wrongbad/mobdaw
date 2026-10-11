@@ -32,7 +32,7 @@ const store = async (mode: IDBTransactionMode) => (await open()).transaction('au
 /** Turn a browser storage failure into something a person can act on. */
 export function storageError(e: unknown): Error {
   const name = (e as DOMException)?.name
-  if (name === 'QuotaExceededError') return new Error('Your browser has no room left for this file. Delete some local audio or free up disk space.')
+  if (name === 'QuotaExceededError') return new Error('your browser has no room left for this file. delete some local audio or free up disk space.')
   return e instanceof Error ? e : new Error(String(e))
 }
 

@@ -5,37 +5,38 @@ import { requireAdmin, type Ctx, type Env } from '../auth.ts'
 
 type InviteRow = {
   token: string; created_by: string; created_at: number; expires_at: number | null
-  redeemed_by: string | null; redeemed_at: number | null; gift_months: number
+  redeemed_by: string | null; redeemed_at: number | null; gift_months: number; memo: string
 }
 
 export const DEFAULT_GIFT_MONTHS = 1
 export const validGiftMonths = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= MAX_GIFT_MONTHS
 
 /** `giftMonths`: pre-paid time the account created with this invite starts with. */
-export function createInvite(ctx: Ctx, createdBy: string, expiresInDays?: number, giftMonths = DEFAULT_GIFT_MONTHS): CreateInviteResponse {
+export function createInvite(ctx: Ctx, createdBy: string, expiresInDays?: number, giftMonths = DEFAULT_GIFT_MONTHS, memo = ''): CreateInviteResponse {
   const token = randomBytes(32).toString('base64url')
   const now = Date.now()
   const exp = expiresInDays ? now + expiresInDays * 86400_000 : null
   ctx.db
-    .prepare('INSERT INTO invites(token, created_by, created_at, expires_at, gift_months) VALUES(?,?,?,?,?)')
-    .run(token, createdBy, now, exp, giftMonths)
+    .prepare('INSERT INTO invites(token, created_by, created_at, expires_at, gift_months, memo) VALUES(?,?,?,?,?,?)')
+    .run(token, createdBy, now, exp, giftMonths, memo)
   return { token, url: `${ctx.config.publicUrl}/#/register/${token}` }
 }
 
 export const listInvites = (ctx: Ctx): InviteInfo[] =>
   (ctx.db.prepare('SELECT * FROM invites ORDER BY created_at DESC').all() as InviteRow[]).map((i) => ({
     token: i.token, createdBy: i.created_by, createdAt: i.created_at, expiresAt: i.expires_at,
-    redeemedBy: i.redeemed_by, redeemedAt: i.redeemed_at, giftMonths: i.gift_months,
+    redeemedBy: i.redeemed_by, redeemedAt: i.redeemed_at, giftMonths: i.gift_months, memo: i.memo,
   }))
 
 export function inviteRoutes(ctx: Ctx) {
   const r = new Hono<Env>()
 
   r.post('/invites', requireAdmin(ctx), async (c) => {
-    const { expiresInDays, giftMonths } = await c.req.json().catch(() => ({}))
+    const { expiresInDays, giftMonths, memo } = await c.req.json().catch(() => ({}))
     if (expiresInDays != null && !(Number(expiresInDays) > 0)) return c.json({ error: 'bad_request' }, 400)
     if (giftMonths != null && !validGiftMonths(giftMonths)) return c.json({ error: 'bad_request' }, 400)
-    return c.json(createInvite(ctx, c.var.session!.username, expiresInDays && Number(expiresInDays), giftMonths ?? DEFAULT_GIFT_MONTHS))
+    if (memo != null && typeof memo !== 'string') return c.json({ error: 'bad_request' }, 400)
+    return c.json(createInvite(ctx, c.var.session!.username, expiresInDays && Number(expiresInDays), giftMonths ?? DEFAULT_GIFT_MONTHS, memo?.trim() ?? ''))
   })
 
   r.get('/invites', requireAdmin(ctx), (c) => c.json(listInvites(ctx)))

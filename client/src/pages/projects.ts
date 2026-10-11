@@ -39,29 +39,29 @@ export function cloudSection(me: Me): HTMLElement {
       details.push(p.role === 'owner' ? 'read-only' : `read-only: ${p.ownerUsername}'s subscription ended; deleted ${dateOf(p.retentionEndsAt)}`)
     const actions: TileAction[] = [
       {
-        label: 'Copy to this device', title: 'copy this project and its audio to this device',
+        label: 'copy to local', title: 'copy this project and its audio to this device',
         onclick: () => {
-          err.textContent = 'Copying to this device…'
+          err.textContent = 'copying to local…'
           cloudToLocal(p.id, me, (m) => (err.textContent = m)).then(
             (lp) => (location.hash = `#/local/${lp.id}`), (e) => (err.textContent = describeError(e)))
         },
       },
-      { label: 'Save a copy', disabled: accountRO, onclick: () => act(() => api.copyProject(p.id)) },
+      { label: 'save a copy', disabled: accountRO, onclick: () => act(() => api.copyProject(p.id)) },
     ]
     const tile = (extra?: Node[]) => projectTile({
       href: `#/project/${p.id}`, name: p.name, details, preview: () => api.projectPreview(p.id), actions, extra,
     })
     if (!d) {
-      actions.push({ label: 'Leave', danger: true, onclick: () => confirm(`Leave "${p.name}"?`) && act(() => api.leaveProject(p.id).then(() => forgetTakes(p.id))) })
+      actions.push({ label: 'leave', danger: true, onclick: () => confirm(`leave "${p.name}"?`) && act(() => api.leaveProject(p.id).then(() => forgetTakes(p.id))) })
       return tile()
     }
     actions.push(
-      { label: 'Rename', disabled: locked, onclick: () => {
-        const n = prompt('Rename project', p.name)?.trim()
+      { label: 'rename', disabled: locked, onclick: () => {
+        const n = prompt('rename project', p.name)?.trim()
         if (n && n !== p.name) act(() => api.renameProject(p.id, n))
       } },
       { label: 'Delete', danger: true, onclick: () => {
-        if (confirm(`Delete "${p.name}"? This deletes it for all members and cannot be undone.`)) act(() => api.deleteProject(p.id).then(() => forgetTakes(p.id)))
+        if (confirm(`delete "${p.name}"? this deletes it for all members and cannot be undone.`)) act(() => api.deleteProject(p.id).then(() => forgetTakes(p.id)))
       } })
 
     // Members: change role / remove, and share with someone new.
@@ -84,7 +84,7 @@ export function cloudSection(me: Me): HTMLElement {
   }
 
   const section = h('section', { className: 'section' },
-    h('h2', {}, 'Cloud'),
+    h('h2', {}, 'cloud'),
     err, list)
   render().catch((e) => (err.textContent = describeError(e)))
   return section

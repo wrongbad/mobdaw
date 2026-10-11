@@ -29,13 +29,13 @@ export function noteEditor({ doc, undo, readOnly, selectNote }: NoteEditorDeps) 
   bpm.onchange = () => clip && Number(bpm.value) > 0 && updateClip(doc, clip.id, { bpm: Number(bpm.value) })
   bars.onchange = () => clip && Number(bars.value) >= 1 && updateClip(doc, clip.id, { lengthTicks: Math.round(Number(bars.value)) * 4 * clip.ppq })
   const head = h('div', { className: 'ne-head' },
-    h('span', {}, 'MIDI ▾'), h('label', {}, 'bpm ', bpm), h('label', {}, 'bars ', bars))
+    h('span', {}, 'midi ▾'), h('label', {}, 'bpm ', bpm), h('label', {}, 'bars ', bars))
   // inputs must not start a clip drag / zoom-out click on the clip underneath
   head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label') && e.stopPropagation()
   const grid = h('div', { className: 'ne-grid' })
   grid.style.height = `${(PMAX - PMIN + 1) * ROW}px`
   for (let p = PMIN; p <= PMAX; p += 12) {
-    const c = h('span', { className: 'ne-c' }, `C${p / 12 - 1}`)
+    const c = h('span', { className: 'ne-c' }, `c${p / 12 - 1}`)
     c.style.top = `${(PMAX - p) * ROW}px`
     grid.append(c)
   }
@@ -107,7 +107,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote }: NoteEditorDeps) 
       let e = els.get(n.id)
       if (!e) {
         e = h('div', { className: 'note', 'data-id': n.id })
-        deleteMenu(e, 'Delete note', () => deleteNote(doc, n.id), () => !readOnly)
+        deleteMenu(e, 'delete note', () => deleteNote(doc, n.id), () => !readOnly)
         els.set(n.id, e)
         grid.append(e)
       }

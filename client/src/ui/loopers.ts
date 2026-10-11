@@ -44,7 +44,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   const draw = h('button', { title: 'draw the loop region on the track', onclick: () => deps.toggleArm(id) }, 'draw')
   const clear = h('button', { title: 'clear region', onclick: () => deps.clear(id) }, 'clear')
   const remove = h('button', { className: 'x', title: 'remove looper', onclick: () => deps.remove(id) }, '×')
-  const mute = h('button', { className: 'mute', title: 'mute', onclick: () => deps.setMuted(id, !muted) }, 'M')
+  const mute = h('button', { className: 'mute', title: 'mute', onclick: () => deps.setMuted(id, !muted) }, 'm')
   draw.disabled = clear.disabled = remove.disabled = mute.disabled = deps.readOnly
   let muted = false
   const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, disabled: deps.readOnly, title: 'volume' })
@@ -98,7 +98,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
     h('label', { className: 'prm' }, name('warble', 'warble'), warble, warbleOut),
     h('div', { className: 'prm' }, h('span', { className: 'dim' }, 'region'), h('div', { className: 'btns' }, draw, clear)))
   el.style.setProperty('--c', color)
-  deleteMenu(el, 'Delete looper', () => deps.remove(id), () => !deps.readOnly)
+  deleteMenu(el, 'delete looper', () => deps.remove(id), () => !deps.readOnly)
 
   let current = lp
   let lastArmed = false

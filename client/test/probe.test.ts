@@ -28,7 +28,7 @@ describe('analyzeAudio', () => {
   it('reads format, rate, channels and duration from a 16-bit stereo WAV', async () => {
     const a = await analyzeAudio(wav({ rate: 48000, channels: 2, bits: 16, frames: 48000, at: () => 0 }))
     expect(a.info).toEqual({ format: 'WAV', encoding: '16-bit PCM', sampleRate: 48000, channels: 2, duration: 1 })
-    expect(describeAudio(a.info)).toBe('WAV · 16-bit PCM · 48 kHz · stereo · 0:01')
+    expect(describeAudio(a.info)).toBe('wav · 16-bit pcm · 48 khz · stereo · 0:01')
   })
 
   it('draws silence flat and a loud second half tall, folding channels', async () => {

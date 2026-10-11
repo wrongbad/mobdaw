@@ -50,7 +50,7 @@ export function chatPanel({ doc, user, readOnly, onUnread }: ChatDeps) {
       if (!me) b.style.boxShadow = `inset 2px 0 0 ${m.color}`
       else if (!readOnly) b.oncontextmenu = (e) => { // own messages only: the server can't tell who wrote what
         e.preventDefault()
-        popover(b, [['Delete message', () => deleteChatMessage(doc, m.id)]], [e.clientX, e.clientY])
+        popover(b, [['delete message', () => deleteChatMessage(doc, m.id)]], [e.clientX, e.clientY])
       }
       out.push(b)
       prev = m

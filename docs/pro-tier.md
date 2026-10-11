@@ -1,4 +1,4 @@
-# mobdaw Free & Pro
+# mobdaw free & pro
 
 **Last updated:** 2026-10-10
 
@@ -8,28 +8,28 @@
   engine, effects, synths) runs in your browser at no cost, forever.
 - **No account needed.** Open mobdaw and start making music. Your projects and audio are
   saved on your own device.
-- **mobdaw Pro is $5 USD / month** for two things that cost us money to run:
+- **mobdaw pro is $5 USD / month** for two things that cost us money to run:
   **cloud storage** and **real-time collaboration**.
 
-## Free vs Pro
+## free vs pro
 
-| | Free | Pro |
+| | free | pro |
 |---|---|---|
 | Full DAW: editing, engine, effects, instruments | ✓ | ✓ |
 | Account required | No | Yes |
 | Where your projects and audio live | Your device (in the browser) | The cloud, available on any device |
 | Export / import projects as files | ✓ | ✓ |
 | Real-time collaboration (editing together, sharing with editors and viewers) | ✗ | ✓ |
-| Cost | Free | $5 USD / month |
+| Cost | free | $5 USD / month |
 
-## Free: local mode
+## free: local mode
 
 - Everything is stored in your browser on your device. **Nothing is sent to our servers.**
 - Because it lives in your browser, clearing your browser's site data deletes it. Export
   projects you care about to files as a backup.
 - Projects don't sync between devices. Use export/import to move them.
 
-## Pro: cloud storage and collaboration
+## pro: cloud storage and collaboration
 
 - Your projects and uploads are stored in the cloud and available wherever you sign in.
 - Invite others to your projects as editors or viewers, and edit together in real time.
@@ -38,7 +38,7 @@
 - How we handle your cloud data (ownership, deletion, what happens when you cancel) is
   covered in the [Data Policy](data-policy.md).
 
-### Pro limits
+### pro limits
 
 | Limit | Amount |
 |---|---|

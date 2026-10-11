@@ -323,3 +323,8 @@ nav a.on { color: var(--fg); }
 .tile-new .small { font-size: 12px; }
 .project-name { cursor: text; }
 .bar-l .rename { width: 200px; }
+
+.invite-dialog { width: min(480px, 90vw); padding: 16px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
+.invite-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+.invite-dialog input { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
+.invite-dialog p { margin: 0 0 8px; }

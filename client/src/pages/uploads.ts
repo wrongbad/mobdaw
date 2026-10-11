@@ -29,7 +29,7 @@ export function uploadsPage(me: Me) {
     try {
       const { url } = await api.uploadFileUrl(u.hash)
       const res = await fetch(url)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) throw new Error(`http ${res.status}`)
       saveBlob(await res.blob(), safeName(u.name, u.hash.slice(0, 12)))
     } catch (e) {
       err.textContent = describeError(e)
@@ -40,8 +40,8 @@ export function uploadsPage(me: Me) {
     const label = u.name || u.hash.slice(0, 12)
     const used = where(u)
     const msg = used
-      ? `Delete "${label}"? It will be removed from ${used}, for everyone, and cannot be undone.`
-      : `Delete "${label}"? This cannot be undone.`
+      ? `delete "${label}"? it will be removed from ${used}, for everyone, and cannot be undone.`
+      : `delete "${label}"? this cannot be undone.`
     if (!confirm(msg)) return
     api.deleteUpload(u.hash).then(() => ((err.textContent = ''), render()), (e) => (err.textContent = describeError(e)))
   }
@@ -90,7 +90,7 @@ export function uploadsPage(me: Me) {
       try {
         const { url } = await api.uploadFileUrl(r.u.hash)
         const res = await fetch(url)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw new Error(`http ${res.status}`)
         const a = await analyzeAudio(await res.blob())
         const analysis = { info: a.info, peaks: peaksToBase64(a.peaks) }
         await api.saveAnalysis(r.u.hash, analysis)
@@ -111,7 +111,7 @@ export function uploadsPage(me: Me) {
     const menu = h('details', { className: 'menu up-menu' },
       h('summary', { title: 'actions' }, '⋯'),
       h('div', {},
-        h('button', { className: 'link', onclick: () => download(u) }, 'Download'),
+        h('button', { className: 'link', onclick: () => download(u) }, 'download'),
         h('button', { className: 'link danger', onclick: () => remove(u) }, 'Delete')))
     return h('li', { className: 'upload' },
       h('div', { className: 'up-tile' }, r.slot, h('strong', { className: 'up-name' }, u.name || u.hash.slice(0, 12)), menu),
@@ -123,10 +123,10 @@ export function uploadsPage(me: Me) {
     used.textContent = `${bytes(current.bytesUsed)} of ${bytes(current.quotaBytes)} used.`
     generation++
     pending.length = 0
-    list.replaceChildren(...(uploads.length ? uploads.map(row) : [h('li', { className: 'dim' }, 'You have not uploaded any audio.')]))
+    list.replaceChildren(...(uploads.length ? uploads.map(row) : [h('li', { className: 'dim' }, 'you have not uploaded any audio.')]))
     void measure([...pending], generation)
   }
 
-  mount(nav(me), h('main', {}, h('h2', {}, 'Your uploads'), used, err, list))
+  mount(nav(me), h('main', {}, h('h2', {}, 'your uploads'), used, err, list))
   render().catch((e) => (err.textContent = describeError(e)))
 }

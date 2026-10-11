@@ -17,7 +17,7 @@ export const LOOPER_PARAMS: LooperParamDef[] = [
   { id: 0, key: 'gain', name: 'volume', min: 0, max: 1, def: 1, scale: 'lin' },
   { id: 1, key: 'speed', name: 'speed', min: LOOP_SPEED_MIN, max: LOOP_SPEED_MAX, def: 1, scale: 'log', unit: '×' },
   { id: 2, key: 'sat', name: 'saturate', min: 0, max: 1, def: 0, scale: 'lin' },
-  { id: 3, key: 'cutoff', name: 'filter', min: LOOP_CUTOFF_MIN, max: LOOP_CUTOFF_MAX, def: LOOP_CUTOFF_MAX, scale: 'log', unit: 'Hz' },
+  { id: 3, key: 'cutoff', name: 'filter', min: LOOP_CUTOFF_MIN, max: LOOP_CUTOFF_MAX, def: LOOP_CUTOFF_MAX, scale: 'log', unit: 'hz' },
   { id: 4, key: 'warble', name: 'warble', min: 0, max: 1, def: 0, scale: 'lin' },
 ]
 

@@ -61,7 +61,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   const el = h('div', { className: 'dev' },
     h('div', { className: 'dev-head' }, h('strong', {}, def?.name ?? `device ${dev.type}`), h('span', { className: 'grow' }), bypass, def?.instrument ? null : remove),
     ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input, r.out)))
-  if (!def?.instrument) deleteMenu(el, 'Delete device', () => deps.remove(id), () => !deps.readOnly)
+  if (!def?.instrument) deleteMenu(el, 'delete device', () => deps.remove(id), () => !deps.readOnly)
 
   /**
    * `remote`: in-progress values from other users' drags, keyed by param id. `auto`: the params a lane

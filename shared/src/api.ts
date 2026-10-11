@@ -30,7 +30,7 @@ export type Me = {
 }
 
 /** `giftMonths`: pre-paid months the new account starts with (0-999, default 1). */
-export type CreateInviteRequest = { expiresInDays?: number; giftMonths?: number }
+export type CreateInviteRequest = { expiresInDays?: number; giftMonths?: number; memo?: string }
 export type CreateInviteResponse = { token: string; url: string }
 export type InviteInfo = {
   token: string
@@ -40,6 +40,7 @@ export type InviteInfo = {
   redeemedBy: string | null
   redeemedAt: number | null
   giftMonths: number
+  memo: string
 }
 
 export type UserInfo = { username: string }

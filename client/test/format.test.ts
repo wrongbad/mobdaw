@@ -5,9 +5,9 @@ import { bytes, daysLeft } from '../src/format'
 
 describe('format', () => {
   it('bytes', () => {
-    expect(bytes(0)).toBe('0 B')
-    expect(bytes(1536)).toBe('1.5 KB')
-    expect(bytes(40 * 1024 ** 3)).toBe('40.0 GB')
+    expect(bytes(0)).toBe('0 b')
+    expect(bytes(1536)).toBe('1.5 kb')
+    expect(bytes(40 * 1024 ** 3)).toBe('40.0 gb')
   })
   it('daysLeft rounds up and never goes negative', () => {
     expect(daysLeft(Date.now() + 29.2 * 86_400_000)).toBe(30)

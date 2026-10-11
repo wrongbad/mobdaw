@@ -14,7 +14,7 @@ export type Progress = (message: string) => void
 /** Everything in a project on this device: its saved document and its audio. */
 export async function collectLocal(id: string): Promise<ProjectContents> {
   const p = getLocal(id)
-  if (!p) throw new Error('Project not found on this device.')
+  if (!p) throw new Error('project not found on this device.')
   const [state, audio] = await Promise.all([readLocalState(id), listAudio(id)])
   return { name: p.name, state, audio: audio.map((a) => ({ hash: a.hash, mime: a.mime, name: a.name, blob: a.blob })) }
 }
@@ -80,10 +80,10 @@ export async function localToCloud(id: string, me: Pick<Me, 'id' | 'username'>, 
   const project = await api.createProject({ name: c.name })
   try {
     for (const [i, a] of c.audio.entries()) {
-      progress?.(`Uploading audio ${i + 1} of ${c.audio.length}…`)
+      progress?.(`uploading audio ${i + 1} of ${c.audio.length}…`)
       await uploadToProject(project.id, a.blob, a.hash, a.mime, a.name || a.hash.slice(0, 12))
     }
-    progress?.('Saving the project…')
+    progress?.('saving the project…')
     const session = openSession(project.id, me)
     try {
       await session.synced

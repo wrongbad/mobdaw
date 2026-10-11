@@ -135,9 +135,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     return el
   }
   const bar = h('header', { className: 'bar' },
-    h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'All projects' }, 'mobdaw'), projectTitle(),
+    h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'), projectTitle(),
       readOnly ? h('span', { className: 'dim' }, 'view only') : null,
-      s.local ? h('span', { className: 'dim', title: 'Saved in this browser, on this device' }, 'on this device') : null),
+      s.local ? h('span', { className: 'dim', title: 'saved in this browser, on this device' }, 'local') : null),
     transport.el,
     h('div', { className: 'bar-r' }, status, presence, s.local ? null : chatBtn))
   const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }))
@@ -155,11 +155,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const addLink = h('button', { className: 'add-track', title: 'new track', onclick: () => {
     const n = getTracks(doc).length + 1
     popover(addLink, [
-      ['Audio', () => addTrack(doc, `Track ${n}`)],
+      ['audio', () => addTrack(doc, `track ${n}`)],
       ['MIDI', () => {
-        doc.transact(() => addDevice(doc, addTrack(doc, `MIDI ${n}`, 'midi'), FINNWAVE))
+        doc.transact(() => addDevice(doc, addTrack(doc, `midi ${n}`, 'midi'), FINNWAVE))
       }],
-      ['Soundscape', () => addTrack(doc, `Soundscape ${n}`, 'soundscape')],
+      ['soundscape', () => addTrack(doc, `soundscape ${n}`, 'soundscape')],
     ])
   } }, '+')
   const overlay = h('div', { className: 'overlay' })
@@ -168,7 +168,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const rulerHead = h('div', { className: 'playhead' })
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
   overlay.append(playhead)
-  const hint = h('div', { className: 'hint dim' }, readOnly ? 'Nothing here yet.' : 'Drop audio files here, or use + track.')
+  const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio files here, or use + track.')
   const masterAuto = makeAutoSection(MASTER_TRACK, 'global automation')
   const content = h('div', { className: 'content' }, ruler, laneBox, masterAuto.el, hint, readOnly ? null : addLink, bgPicker, overlay)
   const scroll = h('div', { className: 'scroll' }, content)
@@ -261,7 +261,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         preparing = false
       }
       if (destroyed || take) return
-      if (!armedTrack || !tracksMap(doc).has(armedTrack)) armedTrack = addTrack(doc, `Track ${getTracks(doc).length + 1}`)
+      if (!armedTrack || !tracksMap(doc).has(armedTrack)) armedTrack = addTrack(doc, `track ${getTracks(doc).length + 1}`)
       draw()
     }
     const trackId = armedTrack!
@@ -311,8 +311,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       status.textContent = 'arm a track to set the input offset of its microphone'
       return
     }
-    popover(e.currentTarget as HTMLElement, [[`Input offset: ${getInputOffset(info.deviceId)} ms (change…)`, () => {
-      const v = prompt(`Extra input delay in ms for "${info.label || 'this microphone'}".\nPositive if takes land late, negative if early.`, String(getInputOffset(info.deviceId)))
+    popover(e.currentTarget as HTMLElement, [[`input offset: ${getInputOffset(info.deviceId)} ms (change…)`, () => {
+      const v = prompt(`extra input delay in ms for "${info.label || 'this microphone'}".\npositive if takes land late, negative if early.`, String(getInputOffset(info.deviceId)))
       if (v != null && Number.isFinite(Number(v))) setInputOffset(info.deviceId, Number(v))
     }]])
   }
@@ -535,13 +535,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const name = h('span', { className: 'name', ondblclick: () => readOnly || rename(t.id) })
     const mute = h('button', { className: 'mute', title: 'mute', onclick: () => {
       updateTrack(doc, t.id, { muted: !tracksMap(doc).get(t.id)?.get('muted') })
-    } }, 'M')
+    } }, 'm')
     mute.disabled = readOnly
     const solo = h('button', { className: 'solo', title: 'solo', onclick: () => {
       updateTrack(doc, t.id, { soloed: !tracksMap(doc).get(t.id)?.get('soloed') })
-    } }, 'S')
+    } }, 's')
     solo.disabled = readOnly
-    const record = t.kind === 'audio' ? h('button', { className: 'record', title: 'arm for recording', onclick: () => void arm(t.id) }, 'R') : null
+    const record = t.kind === 'audio' ? h('button', { className: 'record', title: 'arm for recording', onclick: () => void arm(t.id) }, 'r') : null
     if (record) record.disabled = readOnly
     const meter = record ? h('i', { className: 'meter', hidden: true, title: 'input level' }) : null
     const gain = h('input', { type: 'range', min: 0, max: 1, step: 0.01, title: 'gain', disabled: readOnly })
@@ -551,14 +551,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (!expanded.delete(t.id)) expanded.add(t.id)
       draw()
     } }, 'fx')
-    const delTrack = () => !locks.has(t.id) && confirm('Delete this track and its clips?') && deleteTrack(doc, t.id)
+    const delTrack = () => !locks.has(t.id) && confirm('delete this track and its clips?') && deleteTrack(doc, t.id)
     const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl track-btns' }, mute, solo, record, meter), h('div', { className: 'ctl' }, gain))
     // Click or right-click on the header (not on its controls) offers the track's menu.
     let menuClosed = false // this press just closed the menu: don't open it again
     head.addEventListener('pointerdown', (e) => (menuClosed = closedBy(e)), true)
     const trackMenu = (e: MouseEvent) => {
       if (readOnly || locks.has(t.id)) return
-      popover(head, [['Rename', () => rename(t.id)], ['Delete track', () => void delTrack()]], [e.clientX, e.clientY])
+      popover(head, [['rename', () => rename(t.id)], ['delete track', () => void delTrack()]], [e.clientX, e.clientY])
     }
     head.addEventListener('click', (e) => {
       if (!menuClosed && !(e.target as HTMLElement).closest('button, input')) trackMenu(e)
@@ -590,9 +590,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       void dropFiles(audioFiles(e.dataTransfer?.files), audio ? t.id : null, fromX(e.clientX - body.getBoundingClientRect().left))
     }
     // background menu: audio lanes take uploads; MIDI lanes and soundscapes make a new region
-    if (t.kind === 'audio') bgMenu(body, (e) => [['Upload', () => pickInto(t.id, atX(e))]])
-    else if (t.kind === 'midi') bgMenu(body, (e) => [['New region', () => newMidiClip(t.id, atX(e))]])
-    else if (t.kind === 'soundscape') bgMenu(body, (e) => [['New region', () => newPad(t.id, atX(e))]])
+    if (t.kind === 'audio') bgMenu(body, (e) => [['upload', () => pickInto(t.id, atX(e))]])
+    else if (t.kind === 'midi') bgMenu(body, (e) => [['new region', () => newMidiClip(t.id, atX(e))]])
+    else if (t.kind === 'soundscape') bgMenu(body, (e) => [['new region', () => newPad(t.id, atX(e))]])
     const fx = h('div', { className: 'fx', hidden: true })
     const add = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
       popover(add, EFFECTS.map((d) => [d.name, () => addDevice(doc, t.id, d.type)] as [string, () => void])) }, '+')
@@ -839,7 +839,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       const at = Math.max(0, Math.round(((e.clientX - body.getBoundingClientRect().left) / src.pps) * rate))
       void dropFiles(audioFiles(e.dataTransfer?.files), trackId, at)
     }
-    bgMenu(body, (e) => [['Upload', () => pickInto(trackId, Math.max(0, Math.round(((e.clientX - body.getBoundingClientRect().left) / src.pps) * rate)))]])
+    bgMenu(body, (e) => [['upload', () => pickInto(trackId, Math.max(0, Math.round(((e.clientX - body.getBoundingClientRect().left) / src.pps) * rate)))]])
     view.addEventListener('scroll', schedule, { passive: true })
     view.addEventListener('wheel', (e) => { // zoom this lane only
       if (!(e.ctrlKey || e.metaKey)) return
@@ -897,7 +897,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (!e) {
         e = h('div', { className: 'clip region' }, 'loopers on') // a clip-styled block: same edges, same hover
         e.onpointerdown = (ev) => padDown(ev, p.id)
-        deleteMenu(e, 'Delete region', () => { deletePad(doc, p.id); if (padSel === p.id) padSel = null; draw() }, () => !readOnly)
+        deleteMenu(e, 'delete region', () => { deletePad(doc, p.id); if (padSel === p.id) padSel = null; draw() }, () => !readOnly)
         l.pads.set(p.id, e)
         l.body.append(e)
       }
@@ -1327,7 +1327,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
   const failed = (err: unknown) => (status.textContent = (err as Error).message)
   function clipMenu(clipId: string): [string, () => void][] {
-    const items: [string, () => void][] = [['Delete clip', () => { // the whole selection if this clip is in it
+    const items: [string, () => void][] = [['delete clip', () => { // the whole selection if this clip is in it
       const ids = selection.includes(clipId) ? [...selection] : [clipId]
       doc.transact(() => ids.forEach((id) => deleteClip(doc, id)))
       select([])
@@ -1338,17 +1338,17 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     items.length = 0 // an incoming take is saved or discarded, not just its clip deleted
     const ctx = takeCtx()
     if (isMine(ctx, meta)) {
-      items.push(['Save', () => {
+      items.push(['save', () => {
         status.textContent = 'uploading take…'
         uploadTake(ctx, hash).then(() => (status.textContent = ''), failed)
       }])
-      if (myTakes(ctx).length > 1) items.push(['Save all', () => {
+      if (myTakes(ctx).length > 1) items.push(['save all', () => {
         status.textContent = 'uploading takes…'
         uploadAll(ctx).then((r) => (status.textContent = r.gone ? `${r.up} uploaded, ${r.gone} not on this device` : ''), failed)
       }])
     }
-    items.push(['Discard', () => {
-      if (!confirm(`Discard "${meta.name}" and every clip that plays it?`)) return
+    items.push(['discard', () => {
+      if (!confirm(`discard "${meta.name}" and every clip that plays it?`)) return
       discardTake(ctx, hash)
       select([])
     }])

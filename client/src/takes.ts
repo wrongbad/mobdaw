@@ -75,7 +75,7 @@ export async function finishTake(c: TakeCtx, t: Pick<Captured, 'pcm' | 'channels
   return { hash, trackId, clipId }
 }
 
-const takeName = () => `Take ${new Date().toLocaleTimeString([], { hour12: false })}`
+const takeName = () => `take ${new Date().toLocaleTimeString([], { hour12: false })}`
 
 /** Without Web Locks, a backup idle for this long is taken to be abandoned (a live take writes every second). */
 const STALE_MS = 10_000
@@ -106,7 +106,7 @@ export async function recoverTakes(c: TakeCtx): Promise<number> {
         const pcm = chunks.map((r) => new Int16Array(r.pcm))
         const frames = pcm.reduce((s, p) => s + p.length, 0) / head.channels
         try {
-          await finishTake(c, { pcm, frames, channels: head.channels, startPos: head.startPos, latency: head.latency, trackId: head.trackId, trackName: head.trackName }, 'Recovered take')
+          await finishTake(c, { pcm, frames, channels: head.channels, startPos: head.startPos, latency: head.latency, trackId: head.trackId, trackName: head.trackName }, 'recovered take')
           n++
         } catch (e) {
           console.warn('take recovery:', e)

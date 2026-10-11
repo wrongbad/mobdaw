@@ -28,7 +28,7 @@ export const getLocal = (id: string) => read().find((p) => p.id === id)
 
 export function createLocal(name: string): LocalProject {
   const now = Date.now()
-  const p = { id: newLocalId(), name: name.trim() || 'Untitled', createdAt: now, updatedAt: now }
+  const p = { id: newLocalId(), name: name.trim() || 'untitled', createdAt: now, updatedAt: now }
   write([...read(), p])
   // Ask the browser not to evict this device's projects under storage pressure (best effort).
   void navigator.storage?.persist?.().catch(() => {})

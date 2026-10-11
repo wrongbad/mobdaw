@@ -48,11 +48,13 @@ if (cmd === 'create-invite') {
   const m = args.indexOf('--months')
   const months = m >= 0 ? Number(args[m + 1]) : DEFAULT_GIFT_MONTHS
   if (!validGiftMonths(months)) throw new Error('--months needs a whole number from 0 to 999')
-  console.log(createInvite(ctx, 'cli', days, months).url)
+  const n = args.indexOf('--memo')
+  const memo = n >= 0 ? (args[n + 1] ?? '') : ''
+  console.log(createInvite(ctx, 'cli', days, months, memo).url)
 } else if (cmd === 'list-invites') {
   for (const i of listInvites(ctx)) {
     const status = i.redeemedBy ? `redeemed by ${i.redeemedBy}` : i.expiresAt && i.expiresAt < Date.now() ? 'expired' : 'open'
-    console.log(`${i.token}  ${new Date(i.createdAt).toISOString()}  ${i.giftMonths} months  ${status}`)
+    console.log(`${i.token}  ${new Date(i.createdAt).toISOString()}  ${i.giftMonths} months  ${status}${i.memo ? `  ${i.memo}` : ''}`)
   }
 } else if (cmd === 'create-user') {
   const username = usernameArg(args[0])
@@ -134,6 +136,6 @@ if (cmd === 'create-invite') {
   // --fix repairs leaks and drift; only broken/orphan-link findings remain a failure.
   process.exit(isClean(fix ? { ...r, leaked: [], drift: [] } : r) ? 0 : 1)
 } else {
-  console.error('usage: npm run admin -- create-invite [--days N] [--months N] | list-invites | create-user <username> [--admin] [--months N] | gift <username> <months> | passwd <username> | make-admin <username> | set-plan <username> active|ended | purge-expired | tree | audit [--fix]')
+  console.error('usage: npm run admin -- create-invite [--days N] [--months N] [--memo TEXT] | list-invites | create-user <username> [--admin] [--months N] | gift <username> <months> | passwd <username> | make-admin <username> | set-plan <username> active|ended | purge-expired | tree | audit [--fix]')
   process.exit(1)
 }

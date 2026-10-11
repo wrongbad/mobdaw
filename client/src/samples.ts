@@ -43,7 +43,7 @@ export function getSampleBuffer(projectId: string, hash: string, rate: number, s
       if (!res) {
         const { url } = await api.sampleUrl(projectId, hash)
         res = await fetch(url)
-        if (!res.ok) throw new Error(`sample ${hash.slice(0, 8)}: HTTP ${res.status}`)
+        if (!res.ok) throw new Error(`sample ${hash.slice(0, 8)}: http ${res.status}`)
         await cache?.put(key(hash), res.clone()).catch(() => {})
       }
       return decode(await res.arrayBuffer(), hash, rate)
@@ -102,7 +102,7 @@ export async function uploadToProject(projectId: string, blob: Blob, hash: strin
   if (up.exists) return
   // Passing the Blob lets the browser stream it from disk.
   const res = await fetch(up.url, { method: up.method, headers: up.headers, body: blob })
-  if (!res.ok) throw new Error(`upload failed (HTTP ${res.status})`)
+  if (!res.ok) throw new Error(`upload failed (http ${res.status})`)
   await api.completeSample(projectId, hash) // also links it into this project's library
   void saveAnalysis(hash, blob)
 }

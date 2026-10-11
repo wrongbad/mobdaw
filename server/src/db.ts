@@ -135,6 +135,8 @@ const migrations: (string | ((db: Db) => void))[] = [
    CREATE INDEX project_samples_owner ON project_samples(owner_id, hash);`,
   // What the file is and a small waveform (UploadAnalysis as JSON), measured by the owner's browser and cached here.
   'ALTER TABLE uploads ADD COLUMN analysis TEXT;',
+  // A free-text note an admin attaches to an invite (who it is for).
+  `ALTER TABLE invites ADD COLUMN memo TEXT NOT NULL DEFAULT '';`,
 ]
 
 export function openDb(path: string): Db {

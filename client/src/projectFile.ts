@@ -55,7 +55,7 @@ const isRange = (o: unknown, max: number) => {
 }
 
 export async function readProjectFile(file: Blob): Promise<ProjectContents> {
-  const bad = (why: string) => new ProjectFileError(`Not a valid mobdaw project file (${why}).`)
+  const bad = (why: string) => new ProjectFileError(`not a valid mobdaw project file (${why}).`)
   if (file.size < HEADER) throw bad('too small')
   const head = new Uint8Array(await file.slice(0, HEADER).arrayBuffer())
   if (new TextDecoder().decode(head.subarray(0, MAGIC.length)) !== MAGIC) throw bad('wrong header')

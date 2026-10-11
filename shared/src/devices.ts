@@ -21,15 +21,15 @@ export const TREMOLO = 5
 
 export const DEVICES: Record<number, DeviceDef> = {
   [SIMPLE_FILTER]: {
-    type: SIMPLE_FILTER, name: 'Simple filter', instrument: false,
+    type: SIMPLE_FILTER, name: 'simple filter', instrument: false,
     params: [
-      { id: 0, name: 'mode', min: 0, max: 4, def: 0, scale: 'lin', options: ['LP', 'HP', 'BP', 'Notch', 'Peak'] },
-      { id: 1, name: 'cutoff', min: 20, max: 20000, def: 1000, scale: 'log', unit: 'Hz' },
+      { id: 0, name: 'mode', min: 0, max: 4, def: 0, scale: 'lin', options: ['lp', 'hp', 'bp', 'notch', 'peak'] },
+      { id: 1, name: 'cutoff', min: 20, max: 20000, def: 1000, scale: 'log', unit: 'hz' },
       { id: 2, name: 'damping', min: 0.05, max: 2, def: 0.7071, scale: 'lin' },
     ],
   },
   [REVERB]: {
-    type: REVERB, name: 'Reverb', instrument: false,
+    type: REVERB, name: 'reverb', instrument: false,
     params: [
       { id: 0, name: 'mix', min: 0, max: 1, def: 0.3, scale: 'lin' },
       { id: 1, name: 'size', min: 0, max: 1, def: 0.5, scale: 'lin' },
@@ -38,26 +38,26 @@ export const DEVICES: Record<number, DeviceDef> = {
     ],
   },
   [COMPRESSOR]: {
-    type: COMPRESSOR, name: 'Compressor', instrument: false,
+    type: COMPRESSOR, name: 'compressor', instrument: false,
     params: [
-      { id: 0, name: 'threshold', min: -60, max: 0, def: -18, scale: 'lin', unit: 'dB' },
+      { id: 0, name: 'threshold', min: -60, max: 0, def: -18, scale: 'lin', unit: 'db' },
       { id: 1, name: 'ratio', min: 1, max: 20, def: 4, scale: 'log', unit: ':1' },
       { id: 2, name: 'attack', min: 0.1, max: 100, def: 10, scale: 'log', unit: 'ms' },
       { id: 3, name: 'release', min: 10, max: 1000, def: 100, scale: 'log', unit: 'ms' },
-      { id: 4, name: 'makeup', min: 0, max: 24, def: 0, scale: 'lin', unit: 'dB' },
+      { id: 4, name: 'makeup', min: 0, max: 24, def: 0, scale: 'lin', unit: 'db' },
     ],
   },
   [TREMOLO]: {
-    type: TREMOLO, name: 'Tremolo', instrument: false,
+    type: TREMOLO, name: 'tremolo', instrument: false,
     params: [
-      { id: 0, name: 'rate', min: 0.1, max: 20, def: 4, scale: 'log', unit: 'Hz' },
+      { id: 0, name: 'rate', min: 0.1, max: 20, def: 4, scale: 'log', unit: 'hz' },
       { id: 1, name: 'depth', min: 0, max: 1, def: 0.5, scale: 'lin' },
-      { id: 2, name: 'shape', min: 0, max: 2, def: 0, scale: 'lin', options: ['Sine', 'Triangle', 'Square'] },
+      { id: 2, name: 'shape', min: 0, max: 2, def: 0, scale: 'lin', options: ['sine', 'triangle', 'square'] },
       { id: 3, name: 'spread', min: 0, max: 1, def: 0, scale: 'lin' },
     ],
   },
   [FINNWAVE]: {
-    type: FINNWAVE, name: 'Finnwave', instrument: true,
+    type: FINNWAVE, name: 'finnwave', instrument: true,
     params: [
       { id: 0, name: 'rolloff', min: 0.001, max: 3, def: 0.3, scale: 'log' },
       { id: 1, name: 'env→rolloff', min: 0, max: 3, def: 0.5, scale: 'lin' },
