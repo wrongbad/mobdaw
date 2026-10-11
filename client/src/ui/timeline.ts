@@ -14,6 +14,8 @@ import { shape } from '../audio/probe'
 import { getInputOffset, setInputOffset, type Captured } from '../audio/recording'
 import type { PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
+import { renderProject } from '../audio/render'
+import { exportDialog } from './exportDialog'
 import { h } from '../dom'
 import { importFile, playable, PLAYBACK_MAX_BYTES } from '../samples'
 import { discardTake, finishTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, takeJournal, uploadAll, uploadTake, type TakeCtx } from '../takes'
@@ -141,12 +143,16 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     }
     return el
   }
+  const exportBtn = h('button', { className: 'bar-btn', title: 'render the whole project to a file', onclick: () => {
+    if (!pb) return // (the project has not synced yet)
+    exportDialog({ name: projectName, render: (o) => renderProject(doc, s.projectId, rate, s.userId, o) })
+  } }, 'export')
   const bar = h('header', { className: 'bar' },
     h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'), projectTitle(),
       readOnly ? h('span', { className: 'dim' }, 'view only') : null,
       s.local ? h('span', { className: 'dim', title: 'saved in this browser, on this device' }, 'local') : null),
     transport.el,
-    h('div', { className: 'bar-r' }, status, presence, s.local ? null : chatBtn))
+    h('div', { className: 'bar-r' }, status, presence, h('div', { className: 'bar-btns' }, exportBtn, s.local ? null : chatBtn)))
   const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }))
   const rulerBody = h('div', { className: 'ruler-body' })
   ruler.append(rulerBody)

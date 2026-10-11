@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeWav, latencySamples, placeTake, toPcm16 } from '../src/audio/wav'
+import { encodeWav, encodeWavPlanar, latencySamples, placeTake, toPcm16 } from '../src/audio/wav'
 
 describe('wav', () => {
   it('converts planar floats to clipped, interleaved 16-bit', () => {
@@ -18,6 +18,31 @@ describe('wav', () => {
       .toEqual([1, 2, 48000, 192000, 4, 16])
     expect(v.getUint32(40, true)).toBe(12)
     expect([...new Int16Array(await wav.slice(44).arrayBuffer())]).toEqual([1, 2, 3, 4, 5, 6])
+  })
+})
+
+describe('planar wav', () => {
+  const planar = [Float32Array.of(0, 1, -1, 2), Float32Array.of(0.5, -0.5, 0, -3)]
+  const view = async (b: Blob) => new DataView(await b.arrayBuffer())
+
+  it('matches the 16-bit encoder', async () => {
+    const v = await view(encodeWavPlanar(planar, 48000, 16))
+    expect([...new Int16Array(v.buffer, 44)]).toEqual([...toPcm16(planar)])
+  })
+
+  it('writes 24-bit PCM, clipped', async () => {
+    const wav = encodeWavPlanar(planar, 44100, 24)
+    expect(wav.size).toBe(44 + 4 * 2 * 3)
+    const v = await view(wav)
+    expect([v.getUint16(20, true), v.getUint16(32, true), v.getUint16(34, true), v.getUint32(40, true)]).toEqual([1, 6, 24, 24])
+    const s24 = (o: number) => (v.getUint8(o) | (v.getUint8(o + 1) << 8) | (v.getInt8(o + 2) << 16))
+    expect([s24(44), s24(47), s24(50), s24(53)]).toEqual([0, 0x400000, 0x7fffff, -0x400000])
+  })
+
+  it('writes 32-bit float untouched', async () => {
+    const v = await view(encodeWavPlanar(planar, 48000, 32))
+    expect([v.getUint16(20, true), v.getUint16(34, true)]).toEqual([3, 32])
+    expect([44, 52, 60, 68].map((o) => v.getFloat32(o, true))).toEqual([0, 1, -1, 2])
   })
 })
 

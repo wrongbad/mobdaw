@@ -75,6 +75,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       else if (m?.type === 'record') this.record(m.on, m.channels)
       else if (m?.type === 'meter') this.meter = !!m.on
       else if (m?.type === 'monitor') this.monitor(m.h, !!m.on)
+      else if (m?.type === 'ping') this.port.postMessage({ type: 'pong', id: m.id })
     }
     this.port.postMessage({ type: 'ready' })
   }

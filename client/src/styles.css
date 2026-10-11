@@ -89,7 +89,8 @@ button.link.danger { color: var(--danger); }
 .logo { text-transform: lowercase; font-family: 'Pirata One', system-ui, sans-serif; font-size: 22px; line-height: 1; letter-spacing: 1px; color: #b01e1e; text-decoration: none; }
 a.logo:hover { color: #e03a3a; }
 h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
-.chat-btn { height: 36px; padding: 0 14px; border: 0; border-left: 1px solid var(--line); background: none; color: var(--dim); }
+.bar-btns { display: flex; }
+.bar-btn, .chat-btn { height: 36px; padding: 0 14px; border: 0; border-left: 1px solid var(--line); background: none; color: var(--dim); }
 .chat-btn.on { color: var(--fg); background: var(--raise); }
 .transport { gap: 0; padding: 0; }
 .bar[data-status="disconnected"] strong::after { content: ' (offline)'; color: var(--dim); font-weight: normal; }
@@ -346,6 +347,9 @@ nav a.on { color: var(--fg); }
 .invite-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 .invite-dialog input { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
 .invite-dialog p { margin: 0 0 8px; }
+.export-dialog .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.export-dialog .field input, .export-dialog .field select { margin-bottom: 0; }
+.export-dialog progress { width: 100%; margin-bottom: 8px; }
 
 /* simple filter response curve + XY pad: one view per run of adjacent filters, hosted in the run's first card */
 .dev .fslot { position: relative; height: 56px; }

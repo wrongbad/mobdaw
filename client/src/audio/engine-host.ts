@@ -16,7 +16,7 @@ const loadWasm = () => (wasmBytes ??= fetch(wasmUrl).then((r) => {
 }))
 
 const modulesAdded = new WeakMap<BaseAudioContext, Promise<void>>()
-const addProcessor = (ctx: AudioContext) => {
+const addProcessor = (ctx: BaseAudioContext) => {
   let p = modulesAdded.get(ctx)
   if (!p) modulesAdded.set(ctx, (p = ctx.audioWorklet.addModule(processorUrl)))
   return p
@@ -26,7 +26,7 @@ export class EngineHost {
   private constructor(readonly node: AudioWorkletNode) {}
 
   /** Create the engine node (not yet connected). Rejects with a readable error on failure. */
-  static async create(ctx: AudioContext): Promise<EngineHost> {
+  static async create(ctx: BaseAudioContext): Promise<EngineHost> {
     const [bytes] = await Promise.all([loadWasm(), addProcessor(ctx)])
     // Each node gets its own copy of the bytes (cloned, not transferred, so we can reuse them).
     const node = new AudioWorkletNode(ctx, 'mobdaw-engine', {
@@ -46,7 +46,8 @@ export class EngineHost {
     node.onprocessorerror = (e) => console.error('engine processor error', e)
     const host = new EngineHost(node)
     node.port.onmessage = (ev) => {
-      if (ev.data?.type === 'pos') host.onpos?.(ev.data)
+      if (ev.data?.type === 'pong') host.pings.get(ev.data.id)?.(), host.pings.delete(ev.data.id)
+      else if (ev.data?.type === 'pos') host.onpos?.(ev.data)
       else if (ev.data?.type === 'preview') host.onpreview?.(ev.data)
       else if (ev.data?.type === 'loopers') host.onloopers?.(ev.data)
       else if (ev.data?.type === 'recstart') host.onrecstart?.(ev.data)
@@ -54,6 +55,18 @@ export class EngineHost {
       else if (ev.data?.type === 'level') host.onlevel?.(ev.data)
     }
     return host
+  }
+
+  private pings = new Map<number, () => void>()
+  private pingId = 0
+
+  /** Resolves once the worklet has handled every message posted before this call (messages arrive in order). */
+  sync(): Promise<void> {
+    return new Promise((resolve) => {
+      const id = ++this.pingId
+      this.pings.set(id, resolve)
+      this.node.port.postMessage({ type: 'ping', id })
+    })
   }
 
   /** Called with the processor's {type:'pos'} messages. */
