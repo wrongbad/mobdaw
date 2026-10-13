@@ -108,6 +108,14 @@ impl Device {
         }
     }
 
+    /// Release the notes with a scheduled release (clip notes; a transport loop wrap). Held live keys and drum tails
+    /// keep sounding.
+    pub fn release_scheduled(&mut self) {
+        if let DeviceKind::Synth(s) = &mut self.kind {
+            s.release_scheduled();
+        }
+    }
+
     pub fn set_param(&mut self, param: u32, value: f32) {
         match &mut self.kind {
             DeviceKind::Filter(f) => f.set_param(param, value),

@@ -25,8 +25,13 @@
 //!    instrument whose note range holds its pitch). Run the instruments (summed) per segment.
 //!    Then run each effect in `order` over the whole block (split only at its own lanes'
 //!    breakpoints, and into pieces of at most 32 frames if it has lanes), and add the result,
-//!    scaled by the gain/pan ramp across the block, into the master output.
-//! 4. Mix in the M1 test voice if its gate is on; advance the transport.
+//!    scaled by the gain/pan ramp across the block, into the master output, keeping the track's
+//!    post-fader peak for the meters.
+//! 4. Mix in the M1 test voice if its gate is on; keep the master peak; advance the transport.
+//!
+//! With the transport cycle on (`set_loop`), a block that reaches the cycle's end is rendered in
+//! pieces (steps 1-4 per piece): up to the end, then on from the start, so the wrap is on the exact
+//! sample. At the wrap, clip notes are released and the position jumps like a seek.
 //!
 //! # Automation
 //! A [`Lane`] drives one param (a device's, or a looper's) from keyframes in *timeline* time; while
@@ -112,6 +117,9 @@ struct Track {
     /// Soundscape track: its clips are the *source* tape the loopers read (in source time),
     /// never played linearly.
     soundscape: bool,
+    /// Post-fader peak per channel since the last [`Engine::meters_read`], as the bits of `|x|` (for
+    /// non-negative floats the bit patterns order like the values, and an integer max vectorizes).
+    peak: [u32; 2],
 }
 
 /// A device in a chain, by dense index into the device map (derived by `rebuild_routing`, which
@@ -434,6 +442,13 @@ pub struct Engine {
     monitor_gain: Ramp,
     /// The track the input is (still) being mixed into while `monitor_gain` fades out.
     monitor_track: Option<u32>,
+    /// The transport cycle `[start, end)` while it is on (and `end > start`); see [`Engine::set_loop`].
+    cycle: Option<(i64, i64)>,
+    /// Master output peak per channel since the last [`Engine::meters_read`] (bits of `|x|`, like `Track::peak`).
+    master_peak: [u32; 2],
+    /// What [`Engine::meters_read`] fills: master L, R, then `(handle bits, L, R)` per track. Sized by
+    /// `rebuild_routing`, so reading never allocates.
+    meters: Vec<f32>,
 }
 
 fn note_order(e: &NoteEntry, clip: u32, tick: f64, handle: u32) -> Ordering {
@@ -468,6 +483,9 @@ impl Engine {
             monitor: None,
             monitor_gain: Ramp::new(0.0),
             monitor_track: None,
+            cycle: None,
+            master_peak: [0; 2],
+            meters: vec![0.0; 2],
         }
     }
 
@@ -539,6 +557,62 @@ impl Engine {
 
     pub fn position(&self) -> i64 {
         self.main.position
+    }
+
+    /// The transport cycle: while playing with it on, reaching `end` continues from `start` within the same block, on
+    /// exactly the sample (see [`Self::process`]). Off, or `end <= start`, disables it. A playhead already at or past
+    /// `end` plays on; only reaching `end` from before it wraps.
+    pub fn set_loop(&mut self, start: i64, end: i64, on: bool) {
+        self.cycle = (on && end > start).then_some((start, end));
+    }
+
+    /// The cycle `(start, end)` while it is on.
+    pub fn loop_region(&self) -> Option<(i64, i64)> {
+        self.cycle
+    }
+
+    /// The wrap from the cycle's end back to its start: like a seek for everything stateless (clips, automation, pads,
+    /// MIDI notes, which fire from `start` on), except that only clip notes are released (their scheduled releases are
+    /// in the old timeline), not held live keys or drum tails; effect tails ring on.
+    fn wrap_to(&mut self, start: i64) {
+        for d in self.devices.values_mut() {
+            d.release_scheduled();
+        }
+        self.main.seek(start);
+    }
+
+    // ---- meters ---------------------------------------------------------------------------
+
+    /// Fill the meter buffer with the post-fader peaks (linear, `|x|`) since the last read and reset them: master L, R,
+    /// then per track (in handle order) the handle (as the bits of a `u32`), L, R. Returns the number of tracks. Never
+    /// allocates; the buffer is at [`Self::meters_ptr`] and only moves on structural calls.
+    pub fn meters_read(&mut self) -> usize {
+        let Engine { meters, tracks, master_peak, .. } = self;
+        meters[0] = f32::from_bits(master_peak[0]);
+        meters[1] = f32::from_bits(master_peak[1]);
+        *master_peak = [0; 2];
+        let mut k = 0;
+        for (h, t) in tracks.iter_mut() {
+            let at = 2 + 3 * k;
+            if at + 3 > meters.len() {
+                break; // (rebuild_routing keeps it sized; never true)
+            }
+            meters[at] = f32::from_bits(h);
+            meters[at + 1] = f32::from_bits(t.peak[0]);
+            meters[at + 2] = f32::from_bits(t.peak[1]);
+            t.peak = [0; 2];
+            k += 1;
+        }
+        k
+    }
+
+    pub fn meters_ptr(&self) -> *const f32 {
+        self.meters.as_ptr()
+    }
+
+    /// The meter buffer as [`Self::meters_read`] last filled it.
+    pub fn meters(&self) -> &[f32] {
+        &self.meters
     }
 
     pub fn is_playing(&self) -> bool {
@@ -654,6 +728,7 @@ impl Engine {
                 play: Vec::new(),
                 play_max_end: Vec::new(),
                 soundscape: kind == KIND_SOUNDSCAPE,
+                peak: [0; 2],
             },
         );
         self.rebuild_routing();
@@ -974,7 +1049,8 @@ impl Engine {
     /// a device, clip, lane or track, so every such command must end here. Allocation is
     /// allowed here; this is never called from `process`.
     fn rebuild_routing(&mut self) {
-        let Engine { tracks, devices, clips, loopers, pads, master_chain, lanes, tape_refs, .. } = self;
+        let Engine { tracks, devices, clips, loopers, pads, master_chain, lanes, tape_refs, meters, .. } = self;
+        meters.resize(2 + 3 * tracks.len(), 0.0);
         master_chain.clear();
         for t in tracks.values_mut() {
             t.chain.clear();
@@ -1077,7 +1153,6 @@ impl Engine {
 
     // ---- rendering ------------------------------------------------------------------------
 
-    /// Render `frames` (<= 128) into the output buffer. Never allocates.
     /// Turn the sleep optimisation (skipping silent tracks' idle devices) on or off. Rendered
     /// audio is the same either way; this exists for tests.
     pub fn set_sleep(&mut self, on: bool) {
@@ -1089,16 +1164,40 @@ impl Engine {
         self.sleep_skips
     }
 
+    /// Render `frames` (<= 128) into the output buffer. Never allocates. With the cycle on, a block that reaches its end
+    /// is rendered in pieces: up to `end`, then on from `start` (as often as the block crosses it).
     pub fn process(&mut self, frames: usize) {
         let n = frames.min(BLOCK);
+        self.out.fill(0.0);
+        let mut off = 0;
+        while off < n {
+            let mut m = n - off;
+            let p = self.main.position;
+            let wrap = match self.cycle {
+                Some((start, end)) if self.main.playing && p < end && p + m as i64 >= end => {
+                    m = (end - p) as usize;
+                    Some(start)
+                }
+                _ => None,
+            };
+            self.render(off, m);
+            off += m;
+            if let Some(start) = wrap {
+                self.wrap_to(start);
+            }
+        }
+    }
+
+    /// Render `n` frames from the current position into `out[off..off + n]` (both channels), adding the meters' peaks.
+    fn render(&mut self, off: usize, n: usize) {
         let p = self.main.position;
         let playing = self.main.playing;
         let sr = self.sr;
         let sr32 = self.sample_rate;
         let smooth = self.smooth_samples;
-        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, lanes, input, monitor, monitor_gain, monitor_track, tape_refs, sleep, sleep_skips, .. } = self;
-        out.fill(0.0);
+        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, lanes, input, monitor, monitor_gain, monitor_track, tape_refs, sleep, sleep_skips, master_peak, .. } = self;
         let (out_l, out_r) = out.split_at_mut(BLOCK);
+        let (out_l, out_r) = (&mut out_l[off..off + n], &mut out_r[off..off + n]);
 
         // 1. Mute/solo/gain/pan targets. Solo: if any track is soloed, the rest are silent.
         //    Mute always wins. Silence is a gain target of 0, so it ramps over 10 ms.
@@ -1282,8 +1381,8 @@ impl Engine {
                 let (sl, sr_buf) = t.scratch.split_at_mut(BLOCK);
                 for j in 0..n {
                     let g = g0 + d * (j + 1) as f32;
-                    sl[j] += input[j] * g;
-                    sr_buf[j] += input[BLOCK + j] * g;
+                    sl[j] += input[off + j] * g;
+                    sr_buf[j] += input[BLOCK + off + j] * g;
                 }
                 t.has_audio = true;
             }
@@ -1386,23 +1485,33 @@ impl Engine {
             let (l0, r0) = (t.gain_l.value() as f32, t.gain_r.value() as f32);
             let (l1, r1) = (t.gain_l.advance(n) as f32, t.gain_r.advance(n) as f32);
             let (dl, dr) = ((l1 - l0) / n as f32, (r1 - r0) / n as f32);
-            for (j, (o, x)) in out_l[..n].iter_mut().zip(sl.iter()).enumerate() {
-                *o += *x * (l0 + dl * (j as u32 + 1) as f32);
+            // The meter's peak rides along: an integer max of the `|v|` bits, which vectorizes (a float max reduction
+            // would not without fast-math).
+            let (mut pl, mut pr) = (t.peak[0], t.peak[1]);
+            for (j, (o, x)) in out_l.iter_mut().zip(sl.iter()).enumerate() {
+                let v = *x * (l0 + dl * (j as u32 + 1) as f32);
+                *o += v;
+                pl = pl.max(v.to_bits() & 0x7fff_ffff);
             }
-            for (j, (o, x)) in out_r[..n].iter_mut().zip(sr_buf.iter()).enumerate() {
-                *o += *x * (r0 + dr * (j as u32 + 1) as f32);
+            for (j, (o, x)) in out_r.iter_mut().zip(sr_buf.iter()).enumerate() {
+                let v = *x * (r0 + dr * (j as u32 + 1) as f32);
+                *o += v;
+                pr = pr.max(v.to_bits() & 0x7fff_ffff);
             }
+            t.peak = [pl, pr];
         }
 
         // 3b. The global fx chain, over everything the tracks summed.
         for s in master_chain.iter() {
-            run_device(s, devices, lanes, p, playing, &mut out_l[..n], &mut out_r[..n], sr32);
+            run_device(s, devices, lanes, p, playing, out_l, out_r, sr32);
         }
 
-        // 4. Test voice and transport.
+        // 4. Test voice, the master meter and the transport.
         if voice.is_active() {
-            voice.process(&mut out_l[..n], &mut out_r[..n]);
+            voice.process(out_l, out_r);
         }
+        let peak = |x: &[f32], m: u32| x.iter().fold(m, |m, v| m.max(v.to_bits() & 0x7fff_ffff));
+        *master_peak = [peak(out_l, master_peak[0]), peak(out_r, master_peak[1])];
         self.main.advance(n);
         for pv in previews.values_mut() {
             pv.transport.advance(n);

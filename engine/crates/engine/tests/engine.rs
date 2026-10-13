@@ -1582,3 +1582,179 @@ fn live_note_is_held_until_its_off_and_sounds_with_the_transport_stopped() {
     assert!(after.iter().all(|v| v.abs() < 1e-4), "the off releases it");
     e.note_live(9, 69, 1.0, true); // unknown track: a no-op
 }
+
+// ---- meters ------------------------------------------------------------------------------
+
+/// The meter buffer after a read: `(master [l, r], [(handle, l, r)])`.
+fn read_meters(e: &mut Engine) -> ([f32; 2], Vec<(u32, f32, f32)>) {
+    let n = e.meters_read();
+    let m = e.meters();
+    let tracks = (0..n).map(|k| (m[2 + 3 * k].to_bits(), m[3 + 3 * k], m[4 + 3 * k])).collect();
+    ([m[0], m[1]], tracks)
+}
+
+#[test]
+fn meters_report_post_fader_peaks_per_track_and_master_and_reset_on_read() {
+    // A constant 0.5 source: track 1 at gain 0.8 centred (equal-power: 0.8 * cos(pi/4) per side), track 2 at gain 1
+    // hard left, track 3 muted.
+    let src = vec![0.5f32; 48_000];
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[&src]);
+    e.track_upsert(1, 0, 0.8, 0.0, false, false, false);
+    e.track_upsert(2, 0, 1.0, -1.0, false, false, false);
+    e.track_upsert(3, 0, 1.0, 0.0, true, false, false);
+    for t in 1..=3u32 {
+        e.clip_audio_upsert(t, t, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
+    }
+    e.play(0);
+    render(&mut e, 4096); // past the 64-sample declick
+    let (master, tracks) = read_meters(&mut e);
+    let side = 0.8 * std::f32::consts::FRAC_1_SQRT_2;
+    assert_eq!(tracks.iter().map(|t| t.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+    assert!((tracks[0].1 - 0.5 * side).abs() < 1e-5 && (tracks[0].2 - 0.5 * side).abs() < 1e-5, "{tracks:?}");
+    assert!((tracks[1].1 - 0.5).abs() < 1e-6 && tracks[1].2 == 0.0, "{tracks:?}");
+    assert_eq!((tracks[2].1, tracks[2].2), (0.0, 0.0), "a muted track meters silence");
+    // The master is the sum of the tracks (it equals the output's peak).
+    assert!((master[0] - (0.5 * side + 0.5)).abs() < 1e-5 && (master[1] - 0.5 * side).abs() < 1e-5, "{master:?}");
+    let (l, r) = e.output();
+    assert_eq!(master[0], l.iter().fold(0.0f32, |m, x| m.max(x.abs())));
+    assert_eq!(master[1], r.iter().fold(0.0f32, |m, x| m.max(x.abs())));
+
+    // A read resets: nothing rendered since, so all zero.
+    let (master, tracks) = read_meters(&mut e);
+    assert_eq!(master, [0.0, 0.0]);
+    assert!(tracks.iter().all(|t| t.1 == 0.0 && t.2 == 0.0));
+
+    // The master follows the faders: halve track 2 and mute track 1, and after the 10 ms ramp only 0.25 is left.
+    e.track_upsert(2, 0, 0.5, -1.0, false, false, false);
+    e.track_upsert(1, 0, 0.8, 0.0, true, false, false);
+    render(&mut e, 1024);
+    read_meters(&mut e);
+    render(&mut e, 1024);
+    let (master, tracks) = read_meters(&mut e);
+    assert!((master[0] - 0.25).abs() < 1e-6 && master[1] == 0.0, "{master:?}");
+    assert_eq!((tracks[0].1, tracks[0].2), (0.0, 0.0));
+
+    // Stopped and silent: zeros. A removed track leaves the buffer.
+    e.stop();
+    render(&mut e, 512);
+    read_meters(&mut e);
+    e.track_remove(2);
+    let (master, tracks) = read_meters(&mut e);
+    assert_eq!(master, [0.0, 0.0]);
+    assert_eq!(tracks.iter().map(|t| t.0).collect::<Vec<_>>(), vec![1, 3]);
+}
+
+#[test]
+fn meters_hold_the_peak_across_blocks_and_see_negative_samples() {
+    let mut src = vec![0.0f32; 10_000];
+    src[3000] = -0.75; // a single negative spike, in the middle of a block
+    let mut e = one_clip(&src, 0, 10_000, 0, 0.0, 0.0, 0);
+    e.play(0);
+    render(&mut e, 8000);
+    let (master, tracks) = read_meters(&mut e);
+    assert_eq!(tracks, vec![(1, 0.75, 0.0)]);
+    assert_eq!(master, [0.75, 0.0]);
+}
+
+// ---- transport cycle ---------------------------------------------------------------------
+
+#[test]
+fn loop_wrap_is_sample_accurate_and_repeats_a_click_every_cycle() {
+    // A one-sample click at `start`, inside a clip that covers the whole loop. The click is heard at `start` and then
+    // again exactly `end - start` samples later, every pass; the transport never reaches `end`.
+    for (start, end) in [(1000i64, 1300i64), (500, 777), (200, 250), (4096, 4096 + 128)] {
+        let mut src = vec![0.0f32; 20_000];
+        src[start as usize] = 1.0;
+        let mut e = one_clip(&src, 0, 20_000, 0, 0.0, 0.0, 0);
+        e.set_loop(start, end, true);
+        e.play(start - 37);
+        let frames = 3000usize;
+        let (l, _) = render(&mut e, frames);
+        let clicks: Vec<usize> = (0..frames).filter(|&i| l[i] != 0.0).collect();
+        let len = (end - start) as usize;
+        let expected: Vec<usize> = (0..).map(|k| 37 + k * len).take_while(|&i| i < frames).collect();
+        assert_eq!(clicks, expected, "loop [{start}, {end})");
+        assert!(l.iter().all(|&x| x == 0.0 || x == 1.0), "the click is untouched (no fades at the wrap)");
+        let pos = e.position();
+        assert!(pos >= start && pos < end, "position {pos} stays inside the loop");
+        assert_eq!(pos, start + ((frames as i64 - 37) % len as i64));
+    }
+}
+
+#[test]
+fn loop_off_or_empty_plays_straight_through_and_a_playhead_past_the_end_plays_on() {
+    let mut src = vec![0.0f32; 10_000];
+    src[100] = 1.0;
+    for (on, start, end, from) in [(false, 0, 500, 0), (true, 500, 500, 0), (true, 600, 400, 0), (true, 0, 50, 60)] {
+        let mut e = one_clip(&src, 0, 10_000, 0, 0.0, 0.0, 0);
+        e.set_loop(start, end, on);
+        e.play(from);
+        let (l, _) = render(&mut e, 2000);
+        let clicks: Vec<usize> = (0..2000).filter(|&i| l[i] != 0.0).collect();
+        assert_eq!(clicks, vec![(100 - from) as usize]);
+        assert_eq!(e.position(), from + 2000);
+    }
+}
+
+#[test]
+fn loop_wrap_releases_clip_notes_and_refires_notes_at_the_loop_start() {
+    // A note from tick 0 lasting past the loop end: it is released at the wrap (its scheduled release lies outside the
+    // loop and would never come) and starts again at the loop start, sample-accurately, every pass.
+    let mut e = midi_engine();
+    let (bpm, ppq) = (120.0, 960u32);
+    e.clip_midi_upsert(1, 1, 0, bpm, ppq, 100_000.0, 0.0);
+    e.note_upsert(1, 1, 0.0, 50_000.0, 69, 1.0); // far longer than the loop
+    let len = 10_000usize;
+    e.set_loop(0, len as i64, true);
+    e.play(0);
+    let (l, _) = render(&mut e, 3 * len + 500);
+    // instant release: silence right at each wrap, then a fresh onset (finnwave starts at phase 0, so +1)
+    assert_eq!(onsets(&l), vec![1, len + 1, 2 * len + 1, 3 * len + 1]);
+    assert_eq!(offsets(&l)[..3], [len - 1, 2 * len - 1, 3 * len - 1]);
+}
+
+#[test]
+fn a_held_live_key_survives_the_wrap() {
+    let mut e = midi_engine();
+    e.set_loop(0, 1000, true);
+    e.play(0);
+    e.note_live(1, 60, 1.0, true);
+    let (l, _) = render(&mut e, 5000);
+    assert_eq!(onsets(&l), vec![1], "one continuous note across the wraps");
+    e.note_live(1, 60, 1.0, false);
+    render(&mut e, 256);
+    let (l, _) = render(&mut e, 256);
+    assert!(l.iter().all(|&x| x == 0.0));
+}
+
+#[test]
+fn looping_render_matches_the_straight_render_of_each_pass() {
+    // Automation and a looping audio clip: every pass of the cycle renders the same samples as playing that stretch
+    // straight from its start (the wrap behaves like a seek for stateless content).
+    let src: Vec<f32> = (0..30_000).map(|i| ((i as f32) * 0.013).sin() * 0.5).collect();
+    let build = || {
+        let mut e = one_clip(&src, 0, 30_000, 0, 0.0, 0.0, 0);
+        e.device_upsert(5, 1, 1, 1.0, false); // a filter whose cutoff is automated
+        e.lane_upsert(1, 0, 5, 1, true, 20.0, 20_000.0, 1);
+        e.point_upsert(1, 1, 0, 1.0, false);
+        e.point_upsert(2, 1, 20_000, 0.0, false);
+        e
+    };
+    let (start, end) = (3000i64, 3000 + 2500i64);
+    let mut a = build();
+    a.set_loop(start, end, true);
+    a.play(start);
+    let (la, _) = render(&mut a, 2500 * 3);
+    let mut b = build();
+    b.play(start);
+    let (lb, _) = render(&mut b, 2500);
+    // Pass 1 is identical; later passes start with the filter's state from the end of the previous pass (effects keep
+    // ringing across the wrap like across a seek), so compare them after the filter has settled.
+    assert_eq!(&la[..2500], &lb[..]);
+    for k in 1..3 {
+        let pass = &la[k * 2500..(k + 1) * 2500];
+        let err = pass[500..].iter().zip(&lb[500..]).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        assert!(err < 1e-3, "pass {k}: max error {err}");
+    }
+}

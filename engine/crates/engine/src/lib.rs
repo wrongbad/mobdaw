@@ -127,6 +127,29 @@ pub unsafe extern "C" fn engine_is_playing(e: *mut Engine) -> u32 {
     (*e).is_playing() as u32
 }
 
+/// The transport cycle: while playing with `on` = 1 and `end > start`, reaching `end` continues from `start` on exactly
+/// that sample, within the block. `on` = 0 turns it off.
+#[no_mangle]
+pub unsafe extern "C" fn engine_set_loop(e: *mut Engine, start: f64, end: f64, on: u32) {
+    (*e).set_loop(start as i64, end as i64, on != 0);
+}
+
+// ---- meters --------------------------------------------------------------------------------
+
+/// Write the post-fader peaks (linear `|x|`) since the last read into the meter buffer and reset them. Layout: master
+/// L, R, then per track (handle order) the handle as `u32` bits, L, R. Returns the number of tracks. Never allocates.
+#[no_mangle]
+pub unsafe extern "C" fn engine_meters_read(e: *mut Engine) -> u32 {
+    (*e).meters_read() as u32
+}
+
+/// The meter buffer (`2 + 3 * tracks` f32). It moves when tracks are added or removed: read it after each
+/// `engine_meters_read`.
+#[no_mangle]
+pub unsafe extern "C" fn engine_meters_ptr(e: *mut Engine) -> *const f32 {
+    (*e).meters_ptr()
+}
+
 // ---- sources -------------------------------------------------------------------------------
 
 /// Returns a pointer to a planar buffer (channel 0 frames, then channel 1, ...). The host must

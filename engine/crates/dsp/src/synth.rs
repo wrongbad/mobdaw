@@ -268,6 +268,26 @@ impl Synth {
         }
     }
 
+    /// Release the notes that carry a scheduled release (clip notes) and drop pending stolen-voice ones; held live keys
+    /// (`release_at` of `i64::MAX`) keep sounding. Used at a transport loop wrap, where the clock jumps back and a
+    /// scheduled release in the old timeline would otherwise never come.
+    pub fn release_scheduled(&mut self) {
+        for v in self.voices.iter_mut() {
+            match v.state {
+                State::Active if !v.released && v.release_at != i64::MAX => {
+                    v.released = true;
+                    v.adsr.release();
+                }
+                State::Stealing => {
+                    if v.pending.is_some_and(|p| p.release_at != i64::MAX) {
+                        v.pending = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Hard stop: silence, no release tail (used when the device is bypassed).
     pub fn reset(&mut self) {
         for v in self.voices.iter_mut() {

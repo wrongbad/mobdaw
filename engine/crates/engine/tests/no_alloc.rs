@@ -121,6 +121,9 @@ fn process_never_allocates_across_a_busy_scene() {
         unsafe { *input.add(block as usize % 128) = (block % 17) as f32 * 0.01 };
         e.source_live_append_input(60, 128);
         e.process(128);
+        if block % 12 == 0 {
+            e.meters_read();
+        }
         match block % 97 {
             10 => e.param_set(101, 1, 200.0 + block as f32),
             20 => e.param_set(424, 0, 0.05 + (block % 7) as f32 * 0.1),
@@ -133,6 +136,9 @@ fn process_never_allocates_across_a_busy_scene() {
             55 => {
                 e.source_live_written(60);
             }
+            // the transport cycle (wrapping mid-block, sometimes several times per block) and meter reads
+            65 => e.set_loop((block as i64 * 41) % 30_000, (block as i64 * 41) % 30_000 + 40 + (block as i64 % 3) * 5000, true),
+            75 => e.set_loop(0, 0, false),
             60 => {
                 e.stop();
                 e.play((block as i64 * 31) % 50_000);
