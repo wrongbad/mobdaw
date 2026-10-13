@@ -276,7 +276,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   overlay.append(playhead, snapLine)
   const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio files here, or use + track.')
   const masterAuto = makeAutoSection(MASTER_TRACK, 'global automation')
-  const content = h('div', { className: 'content' }, ruler, laneBox, masterAuto.el, hint, readOnly ? null : addLink, bgPicker, overlay)
+  const master = h('div', { className: 'lane master' }) // like a track's lane: the fx row, then its automation, as one block (filled below)
+  const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, readOnly ? null : addLink, bgPicker, overlay)
   const scroll = h('div', { className: 'scroll' }, content)
   // Drops outside any lane start a new track.
   scroll.ondragover = (e) => e.preventDefault()
@@ -308,9 +309,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const masterAdd = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
     popover(masterAdd, EFFECTS.map((d) => [d.name, () => addDevice(doc, MASTER_TRACK, d.type)] as [string, () => void])) }, '+')
   masterFx.append(masterAdd)
+  master.append(h('div', { className: 'fx-row' }, masterMore, masterFx), masterAuto.el)
   openOnClick(masterFx, () => (masterOpen = true))
-  const master = h('div', { className: 'lane master' }, h('div', { className: 'fx-row' }, masterMore, masterFx))
-  masterAuto.el.before(master)
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
 
   const x = (smp: number) => (smp / rate) * pps
@@ -1482,7 +1482,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       rulerHeads.append(h('div', { className: 'remote-head', style: `left:${x(r.playhead)}px;${color}` }))
     }
     // The playhead lines run through the ruler, the lanes and the master automation, not the empty space below them.
-    const last = masterAuto.el.offsetHeight ? masterAuto.el : laneBox
+    const last = master
     overlay.style.height = `${last.offsetTop + last.offsetHeight}px`
     drawPlayhead()
     if (refreshPreviews()) ensurePreviewTick()
