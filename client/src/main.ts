@@ -1,4 +1,5 @@
-import '@fontsource/pirata-one'
+import './theme/tokens.css'
+import './theme/base.css'
 import './styles.css'
 import './ui/touchSlider'
 import { api, ApiError, getToken } from './api'

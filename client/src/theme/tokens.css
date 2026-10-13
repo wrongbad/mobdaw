@@ -1,0 +1,65 @@
+/*
+ * mobdaw design tokens: a tape-era console (docs/redesign.md §2).
+ * Warm graphite surfaces, paper-white text, one warm accent that means "lit", and red for record and clipping.
+ * Every colour, radius and type size in the app should come from here.
+ */
+@import '@fontsource/barlow-semi-condensed/latin-400.css';
+@import '@fontsource/barlow-semi-condensed/latin-500.css';
+@import '@fontsource/barlow-semi-condensed/latin-600.css';
+@import '@fontsource/pirata-one/latin-400.css';
+
+:root {
+  /* surfaces, back to front */
+  --bg: #17181b;          /* app background, gutters between tracks */
+  --panel: #1f2125;       /* bars, track headers, dock, browser */
+  --raise: #272a2f;       /* inputs, menus, hovered rows, clip bodies before tinting */
+  --line: #33373d;        /* 1px separators, hover tint for buttons */
+  --line-strong: #454a52; /* focused or selected borders */
+
+  /* ink */
+  --fg: #ebe6dc;          /* text */
+  --dim: #8f8b84;         /* secondary text, inactive icons */
+  --faint: #5d5b57;       /* grid lines, disabled */
+
+  /* signal */
+  --accent: #f0b44c;      /* lit counter, selection, playhead, toggled-on */
+  --rec: #ee5a52;         /* record, armed, clipping */
+  --ok: #7cc489;          /* meter low range, "saved" */
+  --on-accent: #1d1608;   /* text and icons on an accent fill */
+  --on-rec: #1f0c0b;      /* text and icons on a record fill */
+  --accent-soft: rgba(240, 180, 76, .16); /* selection wash, focus halo */
+  --rec-soft: rgba(238, 90, 82, .18);
+
+  /* grid */
+  --grid-bar: rgba(235, 230, 220, .10);
+  --grid-beat: rgba(235, 230, 220, .04);
+
+  /* track colours (mirror TRACK_COLORS in shared/src/tempo.ts; use trackColor() in code) */
+  --tc-0: #58b4a8; --tc-1: #6c9bd6; --tc-2: #a68bd9; --tc-3: #d97c9e;
+  --tc-4: #d9a648; --tc-5: #8db86b; --tc-6: #e0896a; --tc-7: #8e9cb0;
+
+  /* shape */
+  --r-sm: 3px;            /* clips and controls */
+  --r-md: 6px;            /* panels, menus, tiles */
+  --track-h: 64px;        /* default lane height */
+  --shadow: 0 10px 28px rgba(6, 6, 8, .5), 0 1px 0 rgba(255, 255, 255, .03) inset;
+  --scrim: rgba(12, 12, 14, .62);
+
+  /* type */
+  --font-ui: 'Barlow Semi Condensed', 'Arial Narrow', system-ui, sans-serif;
+  --font-logo: 'Pirata One', 'Barlow Semi Condensed', serif;
+  --fs-xs: 11px;          /* ticks, meter scales, kbd */
+  --fs-sm: 12px;          /* labels */
+  --fs: 13px;             /* base */
+  --fs-h3: 15px;
+  --fs-h2: 18px;
+  --fs-h1: 24px;
+  --fs-counter: 22px;     /* the transport counter, weight 600 */
+
+  /* motion */
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --t-fast: 90ms;
+  --t: 160ms;
+
+  color-scheme: dark;
+}

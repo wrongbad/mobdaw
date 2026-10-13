@@ -1,6 +1,8 @@
-/* Flat and tiled: surfaces are told apart by background hints and 1px lines; only the timeline's tracks are rounded tiles with a gutter between them. */
-* { scrollbar-width: none; }
-*::-webkit-scrollbar { display: none; }
+/*
+ * Component styles of the original editor and pages. Global styling (reset, type, buttons, fields, scrollbars, menus,
+ * tooltips, dialogs) lives in theme/base.css and the tokens in theme/tokens.css; the old variable names below map onto
+ * the new tokens so the timeline keeps working while it moves to client/src/studio.
+ */
 /* no page pinch-zoom (a pinch is not a browser gesture here); scrolling and the controls' own touch handling are unaffected */
 html, body { touch-action: pan-x pan-y; }
 /* nothing is selectable by dragging or long-pressing (it kept catching titles and labels while scrolling on a phone), except where text is typed or read */
@@ -8,33 +10,17 @@ body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none
 /* picked up by a long press (ui/lift.ts) */
 .lifted { outline: 2px solid var(--accent); outline-offset: -2px; }
 input, textarea, .chat-log, [contenteditable] { -webkit-user-select: text; user-select: text; }
-/* the timeline's horizontal scrollbar stays visible (a plain mouse has no sideways wheel); the vertical one stays hidden */
-.scroll { scrollbar-width: auto; }
-.scroll::-webkit-scrollbar { display: block; height: 12px; width: 0; }
-.scroll::-webkit-scrollbar-track { background: var(--panel); }
-.scroll::-webkit-scrollbar-thumb { background: #4a3536; border-radius: 6px; border: 2px solid var(--panel); }
-.scroll::-webkit-scrollbar-thumb:hover { background: #6b4a4a; }
-@supports not selector(::-webkit-scrollbar) { .scroll { scrollbar-width: thin; scrollbar-color: #4a3536 var(--panel); } }
 :root {
-  --bg: #000; --panel: #1d1314; --raise: #271c1d; --line: #2f2223; --fg: #ddd5d5; --dim: #8c7f80; --accent: #ffa84a; --danger: #ff7a7a; --divider: #8c1818; --switch: #a32424; --switch-track: #4a1616;
-  color-scheme: dark;
-  font: 14px/1.4 system-ui, -apple-system, sans-serif;
+  --danger: var(--rec); --divider: var(--line-strong); --switch: var(--accent); --switch-track: color-mix(in srgb, var(--accent) 28%, var(--bg));
+  --clip: color-mix(in srgb, var(--accent) 22%, var(--raise)); --clip-sel: color-mix(in srgb, var(--accent) 36%, var(--raise));
+  --clip-midi: color-mix(in srgb, var(--tc-1) 22%, var(--raise)); --clip-midi-sel: color-mix(in srgb, var(--tc-1) 36%, var(--raise));
 }
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
-#app { height: 100%; display: flex; flex-direction: column; }
-a { color: var(--accent); text-decoration: none; cursor: pointer; }
-.dim { color: var(--dim); }
-.grow { flex: 1; }
-.error { color: var(--danger); }
-input, select, button {
-  font: inherit; color: var(--fg); background: var(--raise); border: 1px solid var(--line);
-  border-radius: 0; padding: 6px 10px;
+/* the timeline's horizontal scrollbar stays visible and roomy (a plain mouse has no sideways wheel); the vertical one stays hidden */
+@supports selector(::-webkit-scrollbar) {
+  .scroll::-webkit-scrollbar { height: 12px; width: 0; }
+  .scroll::-webkit-scrollbar-track { background: var(--panel); }
+  .scroll::-webkit-scrollbar-thumb { border-width: 3px; }
 }
-/* buttons are floating text: no background or border until hovered or toggled on */
-button { cursor: pointer; background: none; border: 0; }
-button:hover { background: var(--line); }
-:disabled { opacity: 0.4; cursor: default; }
 nav { display: flex; gap: 20px; align-items: center; padding: 14px 24px; }
 main { width: 100%; max-width: 640px; margin: 0 auto; padding: 24px; }
 main.wide { max-width: 860px; }
@@ -56,8 +42,6 @@ main.center { margin: auto; text-align: center; }
 .row input { flex: 1; }
 .list { list-style: none; padding: 0; margin: 0; }
 .list li { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--line); }
-summary { cursor: pointer; list-style: none; }
-summary::-webkit-details-marker { display: none; }
 .menu { position: relative; }
 .menu > summary { cursor: pointer; }
 .menu > summary.dim:hover, .menu[open] > summary.dim { color: var(--fg); }
@@ -68,12 +52,12 @@ summary::-webkit-details-marker { display: none; }
 }
 .uploads { list-style: none; padding: 0; margin: 12px 0; display: flex; flex-direction: column; gap: 14px; }
 .upload { display: flex; flex-direction: column; gap: 6px; }
-.up-tile { position: relative; height: 84px; background: #3a2a2c; border: 1px solid var(--line); }
+.up-tile { position: relative; height: 84px; border-radius: var(--r-md); overflow: hidden; background: var(--raise); border: 1px solid var(--line); }
 .up-slot { position: absolute; inset: 0; }
-.up-wave { display: block; width: 100%; height: 100%; padding: 6px 0; fill: #ffb0b0; }
-.up-name { position: absolute; top: 6px; left: 10px; right: 52px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; text-shadow: 0 1px 3px #000; }
+.up-wave { display: block; width: 100%; height: 100%; padding: 6px 0; fill: var(--accent); }
+.up-name { position: absolute; top: 6px; left: 10px; right: 52px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; text-shadow: 0 1px 3px var(--bg); }
 .up-menu { position: absolute; top: 0; right: 0; }
-.up-menu > summary { padding: 4px 10px; list-style: none; background: rgba(22, 15, 16, 0.7); }
+.up-menu > summary { padding: 4px 10px; list-style: none; background: color-mix(in srgb, var(--bg) 70%, transparent); }
 .up-menu > summary::-webkit-details-marker { display: none; }
 .up-menu > div { top: 100%; margin-top: 0; }
 .tiles { list-style: none; padding: 0; margin: 12px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
@@ -84,17 +68,11 @@ summary::-webkit-details-marker { display: none; }
 .tile-link .picture { height: 64px; margin-bottom: 6px; background: var(--bg); display: flex; align-items: center; justify-content: center; }
 .tile-link .picture svg { width: 100%; height: 100%; padding: 6px; }
 .tile-link strong { padding-right: 28px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.preview .clip { fill: #f0a840; opacity: 0.85; }
-.preview .clip.midi { fill: #d97a7a; }
-.preview .clip.soundscape { fill: #e0b36a; }
 .tile-menu { position: absolute; right: 6px; bottom: 8px; }
 .tile-menu > summary { padding: 0 8px; list-style: none; }
 .tile-menu > summary::-webkit-details-marker { display: none; }
 .tile-menu > div { right: 0; bottom: 100%; top: auto; margin: 0 0 6px; z-index: 5; min-width: 180px; }
 .tile:has(details[open]) { z-index: 5; }
-button.link { border: 0; background: none; padding: 0; text-align: left; color: var(--accent); }
-button.link:hover { background: none; text-decoration: underline; }
-button.link.danger { color: var(--danger); }
 .members { flex-basis: 100%; font-size: 13px; }
 .members .row { padding-top: 6px; }
 .hint { padding: 48px 12px; text-align: center; font-size: 13px; }
@@ -115,11 +93,11 @@ button.link.danger { color: var(--danger); }
 .bar-r { justify-content: flex-end; padding-right: 0; }
 /* a long message is cut off (tap it to read it all) rather than stretching the bar */
 .bar .status { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.logo { text-transform: lowercase; font-family: 'Pirata One', system-ui, sans-serif; font-size: 22px; line-height: 1; letter-spacing: 1px; color: #b01e1e; text-decoration: none; }
-a.logo:hover { color: #e03a3a; }
+.logo { text-transform: lowercase; font-family: var(--font-logo); font-weight: 400; font-size: 22px; line-height: 1; letter-spacing: 1px; color: var(--rec); text-decoration: none; }
+a.logo:hover { color: color-mix(in srgb, var(--rec) 80%, white); text-decoration: none; }
 h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .bar-btns { display: flex; }
-.cpu { font-size: 11px; font-variant-numeric: tabular-nums; color: #5c5152; cursor: default; }
+.cpu { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); cursor: default; }
 .cpu.hot { color: var(--danger); }
 .bar-btn, .chat-btn { height: 36px; padding: 0 14px; border: 0; background: none; color: var(--dim); }
 .chat-btn.on { color: var(--fg); background: var(--raise); }
@@ -147,7 +125,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
   clip-path: polygon(evenodd, 30% 0, 70% 0, 100% 100%, 0 100%, 30% 0, 38% 16%, 18% 86%, 82% 86%, 62% 16%, 38% 16%, 30% 0); }
 .metro::after { content: ''; position: absolute; left: calc(50% - 1px); top: calc(50% - 10px); width: 2px; height: 15px; background: currentColor; transform: rotate(22deg); transform-origin: 50% 100%; }
 .presence { display: flex; }
-.dot { width: 20px; height: 20px; font-size: 10px; color: #111; display: grid; place-items: center; }
+.dot { width: 20px; height: 20px; font-size: 10px; color: var(--on-accent); display: grid; place-items: center; }
 .body { display: flex; flex: 1; min-height: 0; }
 .scroll { flex: 1; min-width: 0; overflow: auto; min-height: 0; }
 .content { position: relative; min-width: 100%; }
@@ -169,11 +147,11 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .playhead, .remote-head { position: absolute; top: 0; bottom: 0; width: 1px; }
 .playhead { background: var(--fg); }
 .remote-head { opacity: .8; }
-.snap-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent, #6cf); z-index: 3; }
+.snap-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); z-index: 3; }
 .snap-line[hidden] { display: none; }
 
 /* lanes: header, clip row, FX chain */
-.lane { --lane: #1a1112; background: var(--lane); position: relative; margin: var(--gutter) 0 0 var(--gutter); border-radius: 5px; overflow: clip; } /* clip, not hidden: the sticky headers must still stick to the scroller */
+.lane { --lane: var(--panel); background: var(--lane); position: relative; margin: var(--gutter) 0 0 var(--gutter); border-radius: var(--r-md); overflow: clip; } /* clip, not hidden: the sticky headers must still stick to the scroller */
 .lane-row { display: flex; height: 72px; }
 .lane.editing .lane-row { height: 320px; }
 /* the drum grid: header, a row per drum, the "add drum" button */
@@ -191,18 +169,18 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 input[type=range] {
   touch-action: none; /* a finger on a slider only ever moves the slider, never scrolls */
   -webkit-appearance: none; appearance: none; height: 18px; margin: 0; padding: 0; border: 0; cursor: pointer;
-  background: var(--ticks, linear-gradient(transparent, transparent)), linear-gradient(var(--dim), var(--dim)) 0 50% / 100% 2px no-repeat;
+  background: var(--ticks, linear-gradient(transparent, transparent)), linear-gradient(var(--line-strong), var(--line-strong)) 0 50% / 100% 2px no-repeat;
 }
 input[type=range]:disabled { opacity: .5; cursor: default; }
 input[type=range]::-webkit-slider-runnable-track { height: 18px; background: transparent; }
-input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 4px; height: 16px; margin-top: 1px; border: 0; border-radius: 0; background: #e8e8ea; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 4px; height: 16px; margin-top: 1px; border: 0; border-radius: 0; background: var(--fg); }
 input[type=range]::-moz-range-track { background: transparent; }
-input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; border-radius: 0; background: #e8e8ea; }
+input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; border-radius: 0; background: var(--fg); }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {
   position: absolute; top: 0; bottom: 0; padding: 2px 6px; overflow: hidden; white-space: nowrap; font-size: 12px;
-  background: #5a3c10; cursor: grab; user-select: none;
+  background: var(--clip); cursor: grab; user-select: none;
 }
 .clip::before, .clip::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; z-index: 1; cursor: inherit; }
 .clip::after { right: 0; }
@@ -217,20 +195,20 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .clip:hover[data-zone=loop]::after { background-position: right top; background-size: 2px 50%; }
 .clip.looping:hover[data-zone=loop]::after, .clip.editing:hover[data-zone=loop]::after { background-size: 2px 100%; }
 /* a dim loop glyph in the top-right corner while hovered says the upper right edge loops */
-.clip.loopable:not(.editing):not(.looping):not(.forever):hover { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M8.5 5a3.5 3.5 0 1 1-1.3-2.7M8 .8v2H6' fill='none' stroke='%238c7f80' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px top 3px; }
-.clip.sel { background: #6e4a14; }
+.clip.loopable:not(.editing):not(.looping):not(.forever):hover { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M8.5 5a3.5 3.5 0 1 1-1.3-2.7M8 .8v2H6' fill='none' stroke='%238f8b84' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px top 3px; }
+.clip.sel { background: var(--clip-sel); box-shadow: inset 0 0 0 1px var(--accent); }
 .clip.unplayable { opacity: 0.55; }
-.clip .wave { position: absolute; top: 0; height: 100%; color: #ffc060; opacity: .6; pointer-events: none; }
+.clip .wave { position: absolute; top: 0; height: 100%; color: var(--accent); opacity: .75; pointer-events: none; }
 .clip .label { position: relative; }
-.clip.midi { background: #3a1414; }
-.clip.midi.sel { background: #4a1a1a; }
-.clip .mark { position: absolute; min-width: 2px; height: 2px; background: #e0a0a0; pointer-events: none; }
+.clip.midi { background: var(--clip-midi); }
+.clip.midi.sel { background: var(--clip-midi-sel); box-shadow: inset 0 0 0 1px var(--tc-1); }
+.clip .mark { position: absolute; min-width: 2px; height: 2px; background: var(--tc-1); pointer-events: none; }
 .clip .mark.rep { opacity: .35; }
-.clip .seams { position: absolute; top: 0; bottom: 0; color: #ffc060; opacity: .3; pointer-events: none; background-image: linear-gradient(to right, currentColor 1px, transparent 1px); background-repeat: repeat-x; }
+.clip .seams { position: absolute; top: 0; bottom: 0; color: var(--accent); opacity: .3; pointer-events: none; background-image: linear-gradient(to right, currentColor 1px, transparent 1px); background-repeat: repeat-x; }
 /* the first seam's lower half lights up when it is the pass handle under the pointer */
 .clip .seam-first { display: none; position: absolute; top: 50%; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; }
 .clip.looping:hover[data-zone=pass] .seam-first { display: block; }
-.clip .loop-edge { position: absolute; top: 0; bottom: 0; width: 1px; background: #e0a0a0; opacity: .3; pointer-events: none; }
+.clip .loop-edge { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--fg); opacity: .3; pointer-events: none; }
 /* an open MIDI clip is the editor: the clip itself grows to fill the (taller) lane row */
 .clip.editing { z-index: 1; padding: 0; cursor: default; background: var(--bg); }
 .clip.editing::before, .clip.editing::after { bottom: auto; height: 20px; }
@@ -241,8 +219,8 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .fx-toggle.on { color: var(--fg); }
 .fx { position: sticky; left: calc(var(--head) + var(--gutter)); width: calc(100vw - var(--head) - var(--gutter)); display: flex; align-items: stretch; min-height: 72px; overflow-x: auto; overflow-y: hidden; } /* cards stay one row and scroll sideways; they stretch to the row's tallest, so borders line up */
 .fx::-webkit-scrollbar { display: block; height: 8px; }
-.fx::-webkit-scrollbar-thumb { background: #4a3536; border-radius: 4px; }
-@supports not selector(::-webkit-scrollbar) { .fx { scrollbar-width: thin; scrollbar-color: #4a3536 transparent; } }
+.fx::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+@supports not selector(::-webkit-scrollbar) { .fx { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; } }
 .fx > * { flex: none; }
 .fx[hidden] { display: none; }
 /* shut: only each card's title bar */
@@ -280,7 +258,6 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .dev .prm select { grid-column: 2; padding: 1px 4px; }
 .dev .keys > div { display: flex; gap: 4px; align-items: center; color: var(--dim); }
 .dev .keys input.key { width: 44px; padding: 1px 4px; text-align: center; background: rgba(0, 0, 0, .3); }
-.value-tip { position: fixed; z-index: 100; transform: translate(-50%, calc(-100% - 4px)); padding: 1px 6px; font-size: 11px; white-space: nowrap; pointer-events: none; background: var(--raise); color: var(--fg); border: 1px solid var(--line); }
 .add-fx:hover { color: var(--fg); border-color: var(--dim); }
 /* automation: a collapsible section per track (and one for the global fx) with a drawable lane per automated param */
 .auto-section[hidden], .auto-box[hidden] { display: none; }
@@ -307,39 +284,36 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .automatable:hover { color: var(--fg); text-decoration: underline dotted; }
 .dev .prm .auto { color: var(--accent); }
 .dev .prm .driven + input { opacity: .6; }
-.popover { position: fixed; z-index: 10; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); }
-.popover button { border: 0; text-align: left; background: none; padding: 4px 12px; }
-.popover button:hover { background: var(--line); }
 
 /* note editor (lives inside the open clip; x scale follows timeline zoom via --beat) */
 .ne { display: flex; flex-direction: column; height: 100%; }
-.ne-head { display: flex; flex: none; gap: 12px; align-items: center; height: 20px; padding: 0 8px; font-size: 11px; background: #1c0808; border-bottom: 1px solid #3a1616; cursor: pointer; }
-.ne-head input { width: 56px; height: 16px; padding: 0 4px; border: 0; background: rgba(0, 0, 0, .3); }
+.ne-head { display: flex; flex: none; gap: 12px; align-items: center; height: 20px; padding: 0 8px; font-size: 11px; background: var(--panel); border-bottom: 1px solid var(--line); cursor: pointer; }
+.ne-head input { width: 56px; height: 16px; padding: 0 4px; border: 0; background: var(--raise); }
 .ne-head button { border: 0; padding: 0 6px; font-size: 11px; line-height: 20px; color: inherit; }
 .ne-head button.on { color: var(--bg); background: var(--accent); }
 .ne-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
-.ne-grid { position: relative; cursor: crosshair; background-color: #1c0808;
-  background-image: linear-gradient(to right, #b08a8a 1px, transparent 1px), linear-gradient(to right, #6b4444 1px, transparent 1px), linear-gradient(to bottom, #3a1616 1px, transparent 1px);
+.ne-grid { position: relative; cursor: crosshair; background-color: var(--bg);
+  background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-beat) 1px, transparent 1px);
   background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, 100% var(--row, 10px); }
-.ne-c { position: absolute; left: 6px; font-size: 9px; color: #b08a8a; pointer-events: none; transform: translateY(-1px); }
+.ne-c { position: absolute; left: 6px; font-size: 9px; color: var(--dim); pointer-events: none; transform: translateY(-1px); }
 .ne-tint { position: absolute; inset: 0; pointer-events: none; }
 .ne-keys { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; z-index: 1; pointer-events: none; }
-.note { position: absolute; height: calc(var(--row, 10px) - 1px); background: #e8d8d0; cursor: grab; }
+.note { position: absolute; height: calc(var(--row, 10px) - 1px); border-radius: 2px; background: var(--tc-1); cursor: grab; }
 .note.sel { background: var(--accent); }
 .note.ignored { opacity: .35; }
-.ne-loop { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid #e0a0a0; pointer-events: none; }
+.ne-loop { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid var(--line-strong); pointer-events: none; }
 .ne-grip { position: absolute; top: 0; bottom: 0; left: -4px; width: 7px; cursor: ew-resize; pointer-events: auto; }
 .ne-grip:hover { background: linear-gradient(var(--accent), var(--accent)) no-repeat center / 2px 100%; }
 
 /* drum grid: a row per drum, 4 steps to a beat (x scale follows timeline zoom via --beat) */
 .dg { position: relative; }
-.dg-row { position: relative; height: 18px; cursor: crosshair; border-bottom: 1px solid #3a1616; background-color: #1c0808;
-  background-image: linear-gradient(to right, #b08a8a 1px, transparent 1px), linear-gradient(to right, #6b4444 1px, transparent 1px), linear-gradient(to right, #3a1616 1px, transparent 1px);
+.dg-row { position: relative; height: 18px; cursor: crosshair; border-bottom: 1px solid var(--line); background-color: var(--bg);
+  background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to right, var(--grid-beat) 1px, transparent 1px);
   background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, calc(var(--beat) / 4) 100%; }
 .dg-label { position: absolute; left: 4px; top: 3px; font-size: 9px; color: var(--dim); pointer-events: none; white-space: nowrap; }
-.dg-hit { position: absolute; top: 2px; bottom: 2px; background: #e8d8d0; pointer-events: none; }
+.dg-hit { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--tc-1); pointer-events: none; }
 .dg-hit.rep { opacity: .35; }
-.dg-rep { position: absolute; top: 0; bottom: 0; right: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid #e0a0a0; pointer-events: none; }
+.dg-rep { position: absolute; top: 0; bottom: 0; right: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid var(--line-strong); pointer-events: none; }
 .dg-add { display: block; position: sticky; left: 0; margin: 6px 4px; height: 20px; padding: 0 10px; font-size: 11px; color: var(--dim); background: none; border: 1px dashed var(--line); }
 .dg-add:hover { color: var(--fg); border-color: var(--dim); background: none; }
 .note::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
@@ -350,7 +324,7 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .chat-log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 8px; }
 .msg { max-width: 85%; padding: 6px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
 .msg.them { align-self: flex-start; background: var(--raise); }
-.msg.me { align-self: flex-end; background: #364a78; }
+.msg.me { align-self: flex-end; background: color-mix(in srgb, var(--accent) 22%, var(--raise)); }
 .msg-meta { padding-top: 8px; font-size: 10px; color: var(--dim); }
 .msg-meta.them { align-self: flex-start; }
 .msg-meta.me { align-self: flex-end; }
@@ -360,8 +334,8 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 
 /* soundscape: pad stripes on the main lane, and a source lane in its own time world below it */
 /* soundscape: the main lane is an ordinary blank lane; regions are clip-styled blocks, and the source lane below has its own time world */
-.clip.region { background: color-mix(in srgb, #ffd060 20%, var(--bg)); color: var(--dim); }
-.clip.region.sel { background: color-mix(in srgb, #ffd060 36%, var(--bg)); }
+.clip.region { background: color-mix(in srgb, var(--accent) 20%, var(--bg)); color: var(--dim); }
+.clip.region.sel { background: color-mix(in srgb, var(--accent) 36%, var(--bg)); }
 /* The source lane is opaque and above the playhead overlay: the timeline's playhead means nothing in source time. */
 .src-row { position: relative; z-index: 2; background: var(--lane); border-top: 1px solid var(--line); }
 .src-head { padding: 0; gap: 0; justify-content: flex-start; align-items: stretch; }
@@ -397,26 +371,24 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 
 /* pages: banner, small text, danger buttons */
 .top { flex: none; }
-.banner { margin: 0; padding: 10px 24px; background: var(--raise); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--fg); }
-.small { font-size: 12px; }
 button.danger:hover { color: var(--danger); }
 nav a.on { color: var(--fg); }
 
 /* recording */
 .rec { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--danger); }
 .rec::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); border-radius: 50%; background: currentColor; }
-.rec.on { color: #fff; }
+.rec.on { color: var(--fg); }
 .rec.on::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent); }
-.ctl button.record.on { color: #fff; background: var(--danger); }
+.ctl button.record.on { color: var(--on-rec); background: var(--rec); }
 .clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); pointer-events: none; z-index: 1; }
 .ctl.track-btns { background: none; } /* the strip beside M S R shows only while the meter is live */
 .ctl button.listen[hidden] { display: none; }
 .ctl .meter { background: var(--line); flex: 1; align-self: stretch; position: relative; overflow: hidden; }
-.ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: #6fcf8f; transition: width 60ms linear; }
+.ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: var(--ok); transition: width 60ms linear; }
 .ctl .meter.clipping::before { background: var(--danger); }
 .ctl .meter[hidden] { display: none; }
-.clip.incoming { background: #4a3a1c; animation: incoming 1.6s ease-in-out infinite; }
-.clip.missing { opacity: 0.55; background: repeating-linear-gradient(135deg, #5a3c10 0 6px, #3f2a0b 6px 12px); }
+.clip.incoming { background: var(--clip); animation: incoming 1.6s ease-in-out infinite; }
+.clip.missing { opacity: 0.55; background: repeating-linear-gradient(135deg, var(--clip) 0 6px, var(--raise) 6px 12px); }
 @keyframes incoming { 50% { opacity: 0.55; } }
 @media (prefers-reduced-motion: reduce) {
   .clip.incoming { animation: none; box-shadow: none; outline: 1px dashed var(--dim); outline-offset: -2px; }
@@ -440,7 +412,7 @@ nav a.on { color: var(--fg); }
 /* project settings panel */
 .settings { width: 280px; padding: 8px 12px; font-size: 13px; }
 .settings-sec + .settings-sec { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
-.settings h3 { margin: 0 0 6px; font-size: 12px; font-weight: normal; color: var(--dim); text-transform: uppercase; }
+.settings h3 { margin: 0 0 8px; font-size: var(--fs-sm); font-weight: 500; color: var(--dim); }
 .settings .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .settings .field input, .settings .field select, .settings select { width: 100%; box-sizing: border-box; }
 .settings .field.inline { flex-direction: row; align-items: center; }
@@ -453,10 +425,6 @@ nav a.on { color: var(--fg); }
 .settings button, .popover.panel .settings button { padding: 2px 8px; border: 1px solid var(--line); background: var(--raise); text-align: center; }
 .settings p:empty { display: none; }
 
-.invite-dialog { width: min(480px, 90vw); padding: 16px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
-.invite-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
-.invite-dialog input { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
-.invite-dialog p { margin: 0 0 8px; }
 .export-dialog .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .export-dialog .field input, .export-dialog .field select { margin-bottom: 0; }
 .export-dialog progress { width: 100%; margin-bottom: 8px; }
@@ -475,7 +443,7 @@ nav a.on { color: var(--fg); }
 .fcurve .ticks text { fill: var(--dim); font-size: 8px; pointer-events: none; opacity: .7; }
 .fcurve .read { fill: var(--dim); font-size: 9px; pointer-events: none; }
 .dev .prm[hidden] { display: none; }
-.dev.reordering { z-index: 5; opacity: .9; box-shadow: 0 4px 14px #000a; background: var(--panel); }
+.dev.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); background: var(--panel); }
 .dev.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
 .dev.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
 /* a `forever` MIDI clip runs on past the right edge: no end edge, no resize handle, a faded tail */
@@ -487,7 +455,7 @@ nav a.on { color: var(--fg); }
 .pedal-btn:hover { color: var(--fg); }
 .pedal-btn.on { color: var(--bg); background: var(--accent); }
 .pedal-btn:disabled { opacity: .4; }
-.pedal-st { font-size: 11px; color: #5c5152; cursor: default; white-space: nowrap; }
+.pedal-st { font-size: 11px; color: var(--faint); cursor: default; white-space: nowrap; }
 .pedal-st.rec { color: var(--danger); }
 .pedal-row { margin-bottom: 6px; }
 .clip.live-loop { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); pointer-events: none; z-index: 1; }
