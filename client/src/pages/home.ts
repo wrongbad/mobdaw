@@ -3,7 +3,6 @@ import { h, mount } from '../dom'
 import { icon } from '../theme/icons'
 import { nav } from '../ui/nav'
 import { aboutColumn } from './about'
-import { demoSection } from './demos'
 import { localSection } from './local'
 import { cloudSection } from './projects'
 import { startSection } from './start'
@@ -11,7 +10,7 @@ import './home.css'
 
 /**
  * Home: the studio launcher. The wordmark, a row of ways to start (templates and the demo song), then the projects on
- * this device. Below: the account's cloud projects (or a sign-in pitch), the server's demos, and an about column.
+ * this device. Below: the account's cloud projects (or a sign-in pitch), and an about column.
  */
 export function homePage(me: Me | null) {
   const intro = h('header', { className: 'home-intro' },
@@ -20,7 +19,7 @@ export function homePage(me: Me | null) {
       h('span', {}, 'A multitrack studio in a browser tab.'),
       h('span', { className: 'dim' }, ' Record, loop, sequence, automate and mix. Nothing to install, and your projects stay on this device.')))
   const main = h('main', { className: 'home-main' }, intro, startSection(), localSection(me))
-  main.append(me ? cloudSection(me) : cloudPitch(), demoSection(me))
+  main.append(me ? cloudSection(me) : cloudPitch())
   const top = nav(me)
   const about = aboutColumn()
   // The big wordmark below is the brand here; the bar's spot for it shows / hides the about column instead.
