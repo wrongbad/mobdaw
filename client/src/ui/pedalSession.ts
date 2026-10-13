@@ -1,7 +1,7 @@
 // A loop-pedal session against the engine and the doc (docs/engine.md §9.2): one continuous take of the whole session goes
 // into a live source, every loop is an engine-only clip on its own new track, and when the session ends the take is saved
 // and the surviving loops are written as ordinary audio clips. The decisions are audio/pedal.ts; this carries them out.
-import { addAudioClip, deleteTrack, foreverSamples, getClips, getTracks, addTrack, isLooping, passLength, updateTrack, type Clip } from '@mobdaw/shared'
+import { addAudioClip, deleteTrack, foreverSamples, getClips, getTracks, nextTrackColor, addTrack, isLooping, passLength, updateTrack, type Clip } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import type { Action, Grid, Op } from '../audio/pedal'
 import { Pedal } from '../audio/pedal'
@@ -58,7 +58,7 @@ export function pedalSession(d: PedalDeps) {
       if (o.op === 'begin') begin(s)
       else if (o.op === 'layer') {
         undo.stopCapturing()
-        s.tracks.set(o.id, addTrack(doc, nextName()))
+        s.tracks.set(o.id, addTrack(doc, nextName(), 'audio', undefined, undefined, nextTrackColor(getTracks(doc))))
         undo.stopCapturing()
       } else if (o.op === 'cancel') drop(s, o.id)
       else if (o.op === 'add') {

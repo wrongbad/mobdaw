@@ -7,7 +7,7 @@ import {
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
   type Point, type SampleMeta, type Track,
-  type Role,
+  type Role, nextTrackColor, trackColor,
 } from '@mobdaw/shared'
 import { homeLink } from '../router'
 import { drawWave, onPeaks, peaksFor, storedPeaks } from '../audio/peaks'
@@ -260,11 +260,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const addLink = h('button', { className: 'add-track', title: 'new track', onclick: () => {
     const n = getTracks(doc).length + 1
     popover(addLink, [
-      ['audio', () => addTrack(doc, `track ${n}`)],
+      ['audio', () => addTrack(doc, `track ${n}`, 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))],
       ['midi', () => {
-        doc.transact(() => addDevice(doc, addTrack(doc, `midi ${n}`, 'midi'), FINNWAVE))
+        doc.transact(() => addDevice(doc, addTrack(doc, `midi ${n}`, 'midi', undefined, undefined, nextTrackColor(getTracks(doc))), FINNWAVE))
       }],
-      ['soundscape', () => addTrack(doc, `soundscape ${n}`, 'soundscape')],
+      ['soundscape', () => addTrack(doc, `soundscape ${n}`, 'soundscape', undefined, undefined, nextTrackColor(getTracks(doc)))],
     ])
   } }, '+')
   const overlay = h('div', { className: 'overlay' })
@@ -386,7 +386,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         preparing = false
       }
       if (destroyed || take) return
-      if (!armedTrack || !tracksMap(doc).has(armedTrack)) armedTrack = addTrack(doc, `track ${getTracks(doc).length + 1}`)
+      if (!armedTrack || !tracksMap(doc).has(armedTrack)) armedTrack = addTrack(doc, `track ${getTracks(doc).length + 1}`, 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))
       draw()
     }
     const trackId = armedTrack!
@@ -1363,6 +1363,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (laneBox.children[i] !== l.el) laneBox.insertBefore(l.el, laneBox.children[i] ?? null)
       l.body.style.width = `${x(total)}px`
       l.el.dataset.kind = t.kind
+      l.el.style.setProperty('--tc', trackColor(t, i))
       l.el.classList.toggle('editing', t.id === editTrack)
       l.el.classList.toggle('drums', t.id === editTrack && gridRows >= 0) // the lane fits the drum grid instead of the piano roll
       if (t.id === editTrack && gridRows >= 0) l.el.style.setProperty('--dg-rows', String(gridRows))
@@ -1891,7 +1892,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         const m = await importFile(s.projectId, doc, f)
         const length = Math.round(m.duration * rate)
         doc.transact(() => {
-          trackId ??= addTrack(doc, f.name.replace(/\.[^.]+$/, ''))
+          trackId ??= addTrack(doc, f.name.replace(/\.[^.]+$/, ''), 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))
           addAudioClip(doc, { trackId, sourceHash: m.hash, start: at, length })
         })
         at += length

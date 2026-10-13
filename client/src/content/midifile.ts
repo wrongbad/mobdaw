@@ -11,7 +11,7 @@
 // has no clips yet); later tempo changes are dropped, which makes a file with tempo changes play at a steady tempo.
 // Time signatures are read as quarter-note beats per bar (6/8 → 3, 12/8 → 6; odd eighths round).
 import {
-  DEFAULT_PPQ, FINNWAVE, addDevice, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getSampleRate, getTracks,
+  DEFAULT_PPQ, FINNWAVE, nextTrackColor, addDevice, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getSampleRate, getTracks,
   DEFAULT_MIDI_BPM, DEVICES, isDrum, patternTicks, tracksMap, type Device, type MidiClip, type Note,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
@@ -405,7 +405,7 @@ export function importSmf(doc: Y.Doc, smf: Smf, o: { at: number; trackId?: strin
     }
     parts.forEach((p, i) => {
       const name = p.name || (parts.length > 1 ? `${o.base} ${i + 1}` : o.base)
-      const id = addTrack(doc, name, 'midi', undefined, undefined, getTracks(doc).length % 8)
+      const id = addTrack(doc, name, 'midi', undefined, undefined, nextTrackColor(getTracks(doc)))
       if (p.drums) addDrumKit(doc, id, DRUM_KITS[0])
       else {
         const pre = p.preset ? instrumentPreset(p.preset) : undefined

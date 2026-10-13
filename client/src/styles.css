@@ -156,7 +156,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .lane.editing .lane-row { height: 320px; }
 /* the drum grid: header, a row per drum, the "add drum" button */
 .lane.editing.drums .lane-row { height: calc(20px + var(--dg-rows, 0) * 18px + 32px + 2px); }
-.head { background: var(--lane); display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 0 12px; border-right: 1px solid var(--line); }
+.head { background: var(--lane); box-shadow: inset 3px 0 0 var(--tc, transparent), calc(-1 * var(--gutter)) 0 0 var(--bg); display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 0 12px; border-right: 1px solid var(--line); }
 .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; padding-right: 14px; }
 .rename { width: 100%; padding: 0 4px; }
 .ctl { display: flex; gap: 1px; align-items: center; background: var(--line); }

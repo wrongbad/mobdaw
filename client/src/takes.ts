@@ -1,5 +1,5 @@
 // Recorded takes in the document (docs/engine.md §9): finishing a take, crash recovery, and the incoming-take actions.
-import { addAudioClip, addSample, addTrack, discardSample, getClips, getSamples, newId, samplesMap, setSampleStatus, tracksMap, type SampleMeta } from '@mobdaw/shared'
+import { addAudioClip, addSample, addTrack, discardSample, getClips, getTracks, nextTrackColor, getSamples, newId, samplesMap, setSampleStatus, tracksMap, type SampleMeta } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { analyzeAudio, peaksToBase64 } from './audio/probe'
 import type { Captured } from './audio/recording'
@@ -78,7 +78,7 @@ export async function finishTake(
   let trackId = t.trackId, clipId = ''
   doc.transact(() => {
     if (meta) addSample(doc, meta)
-    if (!tracksMap(doc).has(trackId)) trackId = addTrack(doc, t.trackName)
+    if (!tracksMap(doc).has(trackId)) trackId = addTrack(doc, t.trackName, 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))
     clipId = addAudioClip(doc, { trackId, sourceHash: hash, start: place.start, length: place.length, sourceOffset: place.sourceOffset })
     inTx?.({ trackId, hash })
   })
