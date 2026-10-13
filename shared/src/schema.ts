@@ -192,9 +192,9 @@ const patchMap = (doc: Y.Doc, m: YM | undefined, patch: object) => {
 }
 
 // --- tracks
-export function addTrack(doc: Y.Doc, name: string, kind: TrackKind = 'audio', order?: number, role?: TrackRole): string {
+export function addTrack(doc: Y.Doc, name: string, kind: TrackKind = 'audio', order?: number, role?: TrackRole, color?: number): string {
   const id = newId()
-  const t: Track = { id, name, kind, order: order ?? orderBetween(getTracks(doc).at(-1)?.order), gain: 1, pan: 0, muted: false, soloed: false, ...(role ? { role } : {}) }
+  const t: Track = { id, name, kind, order: order ?? orderBetween(getTracks(doc).at(-1)?.order), gain: 1, pan: 0, muted: false, soloed: false, ...(role ? { role } : {}), ...(color != null ? { color } : {}) }
   doc.transact(() => {
     tracksMap(doc).set(id, toMap(t))
     if (kind === 'soundscape') for (let slot = 0; slot < LOOPERS_PER_TRACK; slot++) addLooper(doc, id, slot)
