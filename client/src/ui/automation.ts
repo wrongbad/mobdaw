@@ -13,6 +13,8 @@ import {
 import { h } from '../dom'
 import { clamp, dragPointer } from './blocks'
 import { popover } from './popover'
+import { inUse } from './held'
+import { lift } from './lift'
 import { valueTip } from './valueTip'
 
 export const AUTO_H = 64
@@ -139,6 +141,9 @@ export function autoRow(deps: RowDeps) {
   /** Press on empty space: add a point there and carry on dragging it. Shift: draw a line freehand. */
   surface.addEventListener('pointerdown', (e) => {
     if (readOnly || e.button !== 0 || e.target !== surface || laneState(lane) === 'lfo') return
+    lift(e, () => addAt(e)) // (a finger long-presses to add a point; until then it scrolls)
+  })
+  function addAt(e: PointerEvent) {
     e.preventDefault()
     deps.grab()
     const first = at(e)
@@ -161,7 +166,7 @@ export function autoRow(deps: RowDeps) {
       return
     }
     dragPoint(e, addPoint(doc, lane.id, first.pos, first.value, newCurve()))
-  })
+  }
 
   function dragPoint(e: PointerEvent, id: string) {
     dragPointer(e, {
@@ -202,8 +207,8 @@ export function autoRow(deps: RowDeps) {
     surface.setAttribute('height', String(lfo ? LFO_H : AUTO_H))
     const d = { shape: l.shape ?? LFO_DEFAULTS.shape, rate: l.rate ?? LFO_DEFAULTS.rate, depth: l.depth ?? LFO_DEFAULTS.depth }
     if (shape.value !== String(d.shape)) shape.value = String(d.shape)
-    if (document.activeElement !== rate) rate.value = String(rateToPos(d.rate))
-    if (document.activeElement !== depth) depth.value = String(d.depth)
+    if (!inUse(rate)) rate.value = String(rateToPos(d.rate))
+    if (!inUse(depth)) depth.value = String(d.depth)
     rate.title = `rate: ${d.rate < 1 ? d.rate.toFixed(2) : d.rate.toFixed(1)} hz`
     depth.title = `depth: ±${Math.round(d.depth * 100)}% of the slider`
     el.style.setProperty('--c', v.color)

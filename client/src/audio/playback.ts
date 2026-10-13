@@ -1,7 +1,7 @@
 // Glue for one open project: the wasm engine host + the doc bridge + transport.
 import type * as Y from 'yjs'
 import { Bridge, type Drag, type LiveClip, type PreviewMode, type PreviewTransport } from './bridge'
-import { getCtx } from './context'
+import { getCtx, holdPlayback } from './context'
 import { EngineHost } from './engine-host'
 import { heardPosition, type PosReport } from './pedal'
 import { Recorder } from './recording'
@@ -41,6 +41,29 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     me,
   )
   const recorder = new Recorder(ctx, hostP, rate)
+
+  // The iOS audio session is 'playback' (so the silent switch doesn't mute us) only while something sounds; the rest
+  // of the time it is released so the page doesn't sit in the notification center as a now-playing tile.
+  const sounding = new Set<{ playing: boolean }>() // private transports (soundscape previews) that were started
+  let releasePlayback: (() => void) | null = null
+  let quietSince = 0
+  let settleTimer = 0
+  const TAIL_MS = 3000 // effect tails and note releases keep sounding a little after the transport stops
+  const busy = () => bridge.isPlaying || [...sounding].some((p) => p.playing)
+  const sound = () => {
+    releasePlayback ??= holdPlayback()
+    quietSince = 0
+    settleTimer ||= window.setInterval(() => {
+      for (const p of sounding) if (!p.playing) sounding.delete(p)
+      if (busy()) return void (quietSince = 0)
+      quietSince ||= performance.now()
+      if (performance.now() - quietSince < TAIL_MS) return
+      releasePlayback?.()
+      releasePlayback = null
+      clearInterval(settleTimer)
+      settleTimer = 0
+    }, 500)
+  }
   return {
     rate,
     recorder,
@@ -49,6 +72,7 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     get playing() { return bridge.isPlaying },
     position: () => bridge.position(),
     play(from?: number) {
+      sound()
       void ctx.resume()
       bridge.play(from)
     },
@@ -60,6 +84,8 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
         get playing() { return p.playing },
         position: () => p.position(),
         play(from?: number) {
+          sound()
+          sounding.add(p)
           void ctx.resume()
           p.play(from)
         },
@@ -84,8 +110,10 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     /** Hear the armed microphone through this track's effects (null: stop). Only audible while the recorder is armed. */
     monitor: (trackId: string | null) => void hostP.then((h) => h.monitor(trackId == null ? null : bridge.trackHandle(trackId)), () => {}),
     /** Gate a key on the track's instruments (held until `on` is false), whether or not the transport runs. */
-    noteLive: (trackId: string, pitch: number, velocity: number, on: boolean) =>
-      void hostP.then((h) => h.call('engine_note_live', [bridge.trackHandle(trackId), pitch, velocity, on ? 1 : 0]), () => {}),
+    noteLive: (trackId: string, pitch: number, velocity: number, on: boolean) => {
+      if (on) sound()
+      void hostP.then((h) => h.call('engine_note_live', [bridge.trackHandle(trackId), pitch, velocity, on ? 1 : 0]), () => {})
+    },
     /** A looper's read head on the source tape (samples), or null while it isn't sounding. */
     looperHead: (id: string) => bridge.looperHead(id),
     /**
@@ -110,6 +138,9 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     live: (deviceId: string, paramId: number, v: number) => bridge.live(deviceId, paramId, v),
     setOverrides: (d: Drag[]) => bridge.setOverrides(d),
     destroy() {
+      clearInterval(settleTimer)
+      releasePlayback?.()
+      releasePlayback = null
       recorder.disarm(true)
       bridge.stop()
       bridge.destroy()

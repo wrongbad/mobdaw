@@ -1,3 +1,5 @@
+import { isLifted, lift } from './lift'
+
 // Shared mechanics for draggable blocks on the timeline: audio clips, MIDI clips and soundscape
 // regions all have a start and a length in samples, move by their body and resize by their edges.
 
@@ -52,6 +54,8 @@ export function dragPointer(
   ev: PointerEvent,
   h: { onDrag(m: PointerEvent): void; onEnd?(moved: boolean): void },
 ) {
+  // a finger picks the block up with a long press (see lift.ts); a tap ends as a click, a swipe as a scroll
+  if (ev.pointerType === 'touch' && !isLifted(ev)) return lift(ev, () => dragPointer(ev, h), (why) => h.onEnd?.(why === 'moved'))
   let last: PointerEvent | null = null
   let pending = 0
   let moved = false

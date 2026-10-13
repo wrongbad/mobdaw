@@ -1,5 +1,6 @@
 import '@fontsource/pirata-one'
 import './styles.css'
+import './ui/touchSlider'
 import { api, ApiError, getToken } from './api'
 import { go, route, start } from './router'
 import { h, mount } from './dom'
@@ -13,6 +14,8 @@ import { projectPage } from './project/page'
 import { localProjectPage } from './project/localPage'
 import { engineTestPage } from './pages/engineTest'
 import type { Me } from '@mobdaw/shared'
+// iOS Safari's page pinch arrives as proprietary gesture events; cancelling them keeps a pinch from zooming the page.
+for (const t of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(t, (e) => e.preventDefault())
 
 async function getMe(): Promise<Me | null> {
   try {

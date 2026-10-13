@@ -4,6 +4,7 @@ import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
 import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
 import { fmtDb } from './slider'
+import { inUse } from './held'
 import { valueTip } from './valueTip'
 
 export const LOOP_COLORS = ['#ff6b6b', '#ffd166', '#06d6a0', '#4cc9f0']
@@ -121,7 +122,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
       names[key].classList.toggle('auto', !!a)
       names[key].classList.toggle('driven', driven)
       input.disabled = deps.readOnly || driven
-      return { v: driven ? a!.value! : stat, show: driven || document.activeElement !== input }
+      return { v: driven ? a!.value! : stat, show: driven || !inUse(input) }
     }
     const sp = val('speed', speed, l.speed)
     if (sp.show) {

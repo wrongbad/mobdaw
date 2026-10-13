@@ -2,6 +2,7 @@
 // in the same call that advances the engine, so every captured frame maps to a timeline sample. Monitoring (hearing the input through a track's effects) is a separate path: see Playback.monitor.
 import type { EngineHost } from './engine-host'
 import { LIVE_HEADROOM_S } from './bridge'
+import { holdCapture } from './context'
 import { latencySamples, toPcm16 } from './wav'
 
 export type InputInfo = { deviceId: string; label: string; channels: number }
@@ -30,6 +31,7 @@ export class Recorder {
   info: InputInfo | null = null
   private host: EngineHost | null = null
   private stream: MediaStream | null = null
+  private release: (() => void) | null = null
   private src: MediaStreamAudioSourceNode | null = null
   private take: Take | null = null
   private pk = new Float32Array(4096)
@@ -72,13 +74,15 @@ export class Recorder {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('this browser cannot record audio')
     const off = { echoCancellation: false, noiseSuppression: false, autoGainControl: false } // call-style processing ruins music
     let stream: MediaStream
+    const release = holdCapture()
     try {
       const pick = getPreferredInput()
       // (a chosen microphone that is unplugged falls back to the default one)
       stream = await navigator.mediaDevices.getUserMedia({ audio: pick ? { ...off, deviceId: { exact: pick } } : off })
         .catch((e: DOMException) => (pick && e.name === 'OverconstrainedError' ? navigator.mediaDevices.getUserMedia({ audio: off }) : Promise.reject(e)))
     } catch (e) {
-      throw new Error((e as DOMException).name === 'NotAllowedError' ? 'microphone access was denied' : `no microphone: ${(e as Error).message}`)
+      release()
+      throw new Error((e as DOMException).name === 'NotAllowedError' ? 'microphone blocked: allow it in the site settings' : `no microphone: ${(e as Error).message}`)
     }
     const track = stream.getAudioTracks()[0]
     const max = (track.getCapabilities?.().channelCount as { max?: number } | undefined)?.max
@@ -88,12 +92,14 @@ export class Recorder {
     try {
       this.host = await this.hostP
     } catch {
+      release()
       stream.getTracks().forEach((t) => t.stop())
       throw new Error('the audio engine did not start')
     }
     try {
       this.src = this.ctx.createMediaStreamSource(stream)
     } catch (e) {
+      release()
       stream.getTracks().forEach((t) => t.stop())
       // Firefox refuses a microphone whose rate differs from the project's (docs/engine.md §9.2).
       const r = s.sampleRate
@@ -101,6 +107,7 @@ export class Recorder {
     }
     this.src.connect(this.host.node)
     this.stream = stream
+    this.release = release
     this.level = 0
     this.clipAt = -Infinity
     this.host.onlevel = (m) => this.onLevel(m)
@@ -121,6 +128,8 @@ export class Recorder {
     this.src?.disconnect()
     this.stream?.getTracks().forEach((t) => t.stop())
     this.src = this.stream = this.info = null
+    this.release?.()
+    this.release = null
   }
 
   /**

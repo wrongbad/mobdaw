@@ -1,6 +1,7 @@
 import type { ProjectDetail, Role } from '@mobdaw/shared'
 import { api } from '../api'
 import { getInputOffset, getPreferredInput, setInputOffset, setPreferredInput } from '../audio/recording'
+import { holdCapture } from '../audio/context'
 import { h } from '../dom'
 import { describeError } from '../errors'
 import { memberRows } from './members'
@@ -86,28 +87,43 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   const mic = h('select', {})
   const offset = h('input', { type: 'number', step: 1, title: 'extra input delay for this microphone, in ms: positive if takes land late, negative if early' })
   const offsetField = field('input delay (ms)', offset)
-  const grant = h('button', { hidden: true, onclick: () => void ask() }, 'allow access to show device names')
+  const grant = h('button', { hidden: true, onclick: () => void ask() }, 'allow microphone access')
+  const note = h('p', { className: 'dim', hidden: true })
+  let denied = false
   async function listMics() {
+    denied = (await navigator.permissions?.query?.({ name: 'microphone' as PermissionName }).catch(() => null))?.state === 'denied'
     const devs = ((await navigator.mediaDevices?.enumerateDevices?.().catch(() => [])) ?? []).filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications')
     const want = getPreferredInput()
-    mic.replaceChildren(h('option', { value: '' }, 'system default'),
-      ...devs.map((d, i) => h('option', { value: d.deviceId }, d.label || `microphone ${i + 1}`)))
-    if (want && !devs.some((d) => d.deviceId === want)) mic.append(h('option', { value: want }, 'unavailable (using the default)'))
-    mic.value = want
-    grant.hidden = devs.length === 0 || devs.every((d) => d.label)
+    // Browsers hide device labels until the page has microphone access, so no labels means no access yet.
+    const access = devs.some((d) => d.label)
+    mic.disabled = !access
+    if (!access) {
+      mic.replaceChildren(h('option', { value: '' }, 'no microphone available'))
+      note.textContent = denied ? 'microphone access is blocked: allow it in the browser settings for this site, then reload.' : 'allow access to choose a microphone.'
+      note.className = denied ? 'error' : 'dim'
+    } else {
+      mic.replaceChildren(h('option', { value: '' }, 'system default'),
+        ...devs.map((d, i) => h('option', { value: d.deviceId }, d.label || `microphone ${i + 1}`)))
+      if (want && !devs.some((d) => d.deviceId === want)) mic.append(h('option', { value: want }, 'unavailable (using the default)'))
+      mic.value = want
+    }
+    note.hidden = access
+    grant.hidden = access || denied
     syncOffset()
   }
   async function ask() {
+    const release = holdCapture()
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true })
       s.getTracks().forEach((t) => t.stop())
     } catch (e) {
       fail(e)
     }
+    release()
     void listMics()
   }
   const syncOffset = () => {
-    offsetField.hidden = !mic.value
+    offsetField.hidden = !mic.value || mic.disabled
     if (mic.value) offset.value = String(getInputOffset(mic.value))
   }
   mic.onchange = () => {
@@ -123,7 +139,7 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   ...SAMPLE_RATES.map((r) => h('option', { value: String(r) }, `${+(r / 1000).toFixed(1)} kHz`)))
   rate.value = String(sr.value)
   rate.onchange = () => sr.set(Number(rate.value))
-  const audio = section('audio', field('sample rate', rate), field('microphone', mic), grant, offsetField)
+  const audio = section('audio', field('sample rate', rate), field('microphone', mic), note, grant, offsetField)
   void listMics()
 
   const pedal = o.onPedalChanged && section('foot pedal', pedalSettings(o.onPedalChanged))

@@ -3,6 +3,7 @@ import { addNote, deleteNote, isLooping, patternTicks, setMidiView, updateClip, 
 import type * as Y from 'yjs'
 import { h } from '../dom'
 import { clamp, dragPointer } from './blocks'
+import { lift } from './lift'
 import { deleteMenu } from './popover'
 
 const ROW_MIN = 6, ROW_MAX = 40
@@ -105,6 +106,14 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   grid.onpointerdown = (e) => {
     e.stopPropagation() // the clip underneath would otherwise start dragging
     if (readOnly || e.button !== 0 || !clip) return
+    // a finger long-presses to add or drag a note (until then it scrolls); a tap on a note just selects it
+    lift(e, () => gridDown(e), (why) => {
+      const id = why === 'tap' ? (e.target as HTMLElement).closest<HTMLElement>('.note')?.dataset.id : undefined
+      if (id) selectNote(id)
+    })
+  }
+  function gridDown(e: PointerEvent) {
+    if (!clip) return
     const c = clip
     const r = grid.getBoundingClientRect()
     const noteEl = (e.target as HTMLElement).closest<HTMLElement>('.note')

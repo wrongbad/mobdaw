@@ -1,6 +1,13 @@
 /* Flat and tiled: surfaces are told apart by background hints and 1px lines; only the timeline's tracks are rounded tiles with a gutter between them. */
 * { scrollbar-width: none; }
 *::-webkit-scrollbar { display: none; }
+/* no page pinch-zoom (a pinch is not a browser gesture here); scrolling and the controls' own touch handling are unaffected */
+html, body { touch-action: pan-x pan-y; }
+/* nothing is selectable by dragging or long-pressing (it kept catching titles and labels while scrolling on a phone), except where text is typed or read */
+body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* picked up by a long press (ui/lift.ts) */
+.lifted { outline: 2px solid var(--accent); outline-offset: -2px; }
+input, textarea, .chat-log, [contenteditable] { -webkit-user-select: text; user-select: text; }
 /* the timeline's horizontal scrollbar stays visible (a plain mouse has no sideways wheel); the vertical one stays hidden */
 .scroll { scrollbar-width: auto; }
 .scroll::-webkit-scrollbar { display: block; height: 12px; width: 0; }
@@ -102,9 +109,12 @@ button.link.danger { color: var(--danger); }
 
 /* timeline: top bar with a centred transport */
 .timeline { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.bar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); }
+/* the sides never shrink below their content: on a narrow screen the bar scrolls sideways instead of overlapping */
+.bar { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .bar-l, .bar-r, .transport { display: flex; gap: 16px; align-items: center; padding: 0 16px; }
 .bar-r { justify-content: flex-end; padding-right: 0; }
+/* a long message is cut off (tap it to read it all) rather than stretching the bar */
+.bar .status { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .logo { text-transform: lowercase; font-family: 'Pirata One', system-ui, sans-serif; font-size: 22px; line-height: 1; letter-spacing: 1px; color: #b01e1e; text-decoration: none; }
 a.logo:hover { color: #e03a3a; }
 h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
@@ -179,6 +189,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 
 /* sliders: a thin track, optional tick marks (`--ticks`, set by ui/slider.ts) and a thick pale bar for the handle */
 input[type=range] {
+  touch-action: none; /* a finger on a slider only ever moves the slider, never scrolls */
   -webkit-appearance: none; appearance: none; height: 18px; margin: 0; padding: 0; border: 0; cursor: pointer;
   background: var(--ticks, linear-gradient(transparent, transparent)), linear-gradient(var(--dim), var(--dim)) 0 50% / 100% 2px no-repeat;
 }
@@ -228,7 +239,11 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .fx-row { position: relative; z-index: 2; display: flex; background: var(--lane); border-top: 1px solid var(--line); }
 .fx-toggle { position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
 .fx-toggle.on { color: var(--fg); }
-.fx { position: sticky; left: calc(var(--head) + var(--gutter)); width: calc(100vw - var(--head) - var(--gutter)); display: flex; flex-wrap: wrap; align-items: stretch; min-height: 72px; } /* cards stretch to the row's tallest, so borders line up */
+.fx { position: sticky; left: calc(var(--head) + var(--gutter)); width: calc(100vw - var(--head) - var(--gutter)); display: flex; align-items: stretch; min-height: 72px; overflow-x: auto; overflow-y: hidden; } /* cards stay one row and scroll sideways; they stretch to the row's tallest, so borders line up */
+.fx::-webkit-scrollbar { display: block; height: 8px; }
+.fx::-webkit-scrollbar-thumb { background: #4a3536; border-radius: 4px; }
+@supports not selector(::-webkit-scrollbar) { .fx { scrollbar-width: thin; scrollbar-color: #4a3536 transparent; } }
+.fx > * { flex: none; }
 .fx[hidden] { display: none; }
 /* shut: only each card's title bar */
 .fx.collapsed { min-height: 0; align-items: stretch; }
@@ -416,7 +431,10 @@ nav a.on { color: var(--fg); }
 .tile-new button:hover:not(:disabled) { color: var(--fg); }
 .tile-new button:disabled { opacity: .5; cursor: default; }
 .tile-new .small { font-size: 12px; }
-.project-name { font-weight: bold; border: 0; background: none; padding: 2px 6px; cursor: pointer; }
+.project-name { display: block; width: 100%; height: 100%; text-align: left; font-weight: bold; font-size: 12px; border: 0; background: none; padding: 0 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.corner { display: flex; align-items: center; min-width: 0; }
+.where { flex: none; display: inline-flex; align-items: center; padding-left: 8px; }
+.where + .project-name { flex: 1; min-width: 0; width: auto; padding-left: 5px; }
 .project-name:hover { background: var(--raise); }
 
 /* project settings panel */

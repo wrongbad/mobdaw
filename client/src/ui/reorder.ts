@@ -1,6 +1,8 @@
 // Drag a card by its title bar to move it within its row of sibling cards. The card follows the pointer (a transform; the
 // DOM order is left alone, so redraws don't fight it) and the card it would land before shows a bar on that edge.
 // Nothing is written until the drop.
+import { lift } from './lift'
+
 const THRESHOLD = 4 // px before a press becomes a drag
 
 export type ReorderDeps = {
@@ -64,8 +66,11 @@ export function dragToReorder(handle: HTMLElement, card: HTMLElement, deps: Reor
 
   handle.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest('button, input, select')) return
-    from = { x: e.clientX, y: e.clientY, id: e.pointerId }
-    handle.setPointerCapture(e.pointerId)
+    // (a finger has to long-press the title bar first, see lift.ts; until then it scrolls)
+    lift(e, () => {
+      from = { x: e.clientX, y: e.clientY, id: e.pointerId }
+      handle.setPointerCapture(e.pointerId)
+    })
   })
   handle.addEventListener('pointermove', (e) => {
     if (!from) return

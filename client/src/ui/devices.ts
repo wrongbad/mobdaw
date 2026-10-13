@@ -5,6 +5,7 @@ import { NO_AUTO, type AutoInfo } from './automation'
 import { CARD_W, FILTER_COLORS, filterCurve, type FilterChange, type FilterLocks, type FilterMember } from './filterCurve'
 import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
 import { noteName, parseNote } from './noteName'
+import { inUse } from './held'
 import { dragToReorder } from './reorder'
 import { valueTip } from './valueTip'
 
@@ -190,7 +191,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
       input.disabled = deps.readOnly || driven
       const v = (driven ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def
       const mine = nodeDrag?.get(p.id) // the pointer is on this card's curve
-      const free = driven || (document.activeElement !== input && mine == null) // a driven slider follows the lane even while focused
+      const free = driven || (!inUse(input) && mine == null) // a driven slider follows the lane even while focused
       if (free) shown.set(p.id, v)
       if (p.id >= 1 && p.id <= 3) locks[(['cutoff', 'damping', 'gain'] as const)[p.id - 1]] = deps.readOnly || driven
       if (free) input instanceof HTMLSelectElement ? (input.value = String(Math.round(v))) : (input.value = String(paramToPos(p, v)))

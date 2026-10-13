@@ -36,6 +36,7 @@ import { clamp, dragPointer, grabAt, passBoundaries, rotatePhase, rotateTick, sn
 import { closedBy, deleteMenu, popover } from './popover'
 import { fmt, transportControls, type TransportControls } from './transport'
 import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
+import { inUse } from './held'
 import { valueTip } from './valueTip'
 
 const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in styles.css
@@ -118,7 +119,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     title: 'play / pause (space)', onToggle: () => toggle(), onRewind: () => { seek(0); scroll.scrollLeft = 0 },
     record: readOnly ? undefined : { onToggle: () => void toggleRecord(), onMenu: (e) => offsetMenu(e) },
   })
-  const status = h('span', { className: 'dim' })
+  const status = h('span', { className: 'dim status', onclick: () => status.textContent && alert(status.textContent) })
+  /** Show a line in the bar; `bad` marks a problem (red) rather than a note. */
+  const say = (text: string, bad = false) => ((status.textContent = text), (status.className = bad ? 'error' : 'dim'))
   const cpu = h('span', { className: 'cpu', title: 'audio engine load: share of the real-time budget used by DSP (peak call in the last half second)' })
   const showCpu = (m: { load: number; peak: number }) => {
     const pct = Math.round(m.load * 100)
@@ -138,7 +141,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   })
   /** The project's name in the bar: a button that opens the project settings (rename, sharing, audio input). */
   function projectTitle() {
-    const el = h('button', { className: 'project-name', title: 'project settings', onclick: () => {
+    const el = h('button', { className: 'project-name', title: 'project settings', onpointerdown: (e) => e.stopPropagation(), onclick: () => {
       projectMenu(el, {
         name: projectName,
         rename: renameProject,
@@ -178,7 +181,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       pb.oncpu = showCpu
     } catch (err) {
       pb = null
-      status.textContent = `sample rate: ${(err as Error).message}`
+      say(`sample rate: ${(err as Error).message}`, true)
     }
     draw()
   }
@@ -186,16 +189,16 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   async function reopenInput() {
     if (!pb?.recorder.armed) return
     if (take) {
-      status.textContent = 'the new microphone is used from the next take'
+      say('the new microphone is used from the next take')
       return
     }
     pb.recorder.disarm()
     try {
       await pb.recorder.arm()
-      status.textContent = ''
+      say('')
     } catch (err) {
       armedTrack = null
-      status.textContent = `record: ${(err as Error).message}`
+      say(`record: ${(err as Error).message}`, true)
     }
     draw()
   }
@@ -229,13 +232,17 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   zoomOut.innerHTML = glass('')
   const zoomIn = h('button', { className: 'bar-btn zoom', title: 'zoom in (ctrl + scroll)', onclick: () => zoomButton(1.5) })
   zoomIn.innerHTML = glass('M8.5 6v5')
+  // Where the project lives: a phone for this device's browser storage, a cloud for the server.
+  const where = h('span', { className: 'dim where', onpointerdown: (e) => e.stopPropagation(), title: s.local ? 'saved in this browser, on this device' : 'saved in the cloud' })
+  where.innerHTML = s.local
+    ? '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="1.5" width="9" height="17" rx="2"/><path d="M9 15.5h2"/></svg>'
+    : '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 15.5a3.5 3.5 0 0 1-.4-6.98 5 5 0 0 1 9.7-.5A4 4 0 0 1 14.5 15.5z"/></svg>'
   const bar = h('header', { className: 'bar' },
-    h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'), projectTitle(),
-      readOnly ? h('span', { className: 'dim' }, 'view only') : null,
-      s.local ? h('span', { className: 'dim', title: 'saved in this browser, on this device' }, 'local') : null),
+    h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'),
+      readOnly ? h('span', { className: 'dim' }, 'view only') : null),
     transport.el,
     h('div', { className: 'bar-r' }, pedalText, cpu, status, presence, h('div', { className: 'bar-btns' }, zoomOut, zoomIn, exportBtn, s.local ? null : chatBtn)))
-  const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }))
+  const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }, where, projectTitle()))
   const rulerBody = h('div', { className: 'ruler-body' })
   ruler.append(rulerBody)
   const laneBox = h('div', { className: 'lanes' })
@@ -351,10 +358,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     try {
       await pb.recorder.arm()
     } catch (err) {
-      status.textContent = `record: ${(err as Error).message}`
+      say(`record: ${(err as Error).message}`, true)
       return
     }
-    status.textContent = ''
+    say('')
     armedTrack = id
     draw()
   }
@@ -363,14 +370,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let preparing = false // asking for the microphone: ignore further presses
   async function toggleRecord() {
     if (!pb || readOnly || preparing) return
-    if (pedal?.active) return void (status.textContent = 'record: the loop pedal is recording')
+    if (pedal?.active) return void say('record: the loop pedal is recording', true)
     if (take) return stop()
     if (!armedTrack || !tracksMap(doc).has(armedTrack) || !pb.recorder.armed) {
       preparing = true
       try {
         await pb.recorder.arm()
       } catch (err) {
-        status.textContent = `record: ${(err as Error).message}`
+        say(`record: ${(err as Error).message}`, true)
         return
       } finally {
         preparing = false
@@ -387,11 +394,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       pb.recorder.start((pcm, seq) => journal.chunk(pcm, seq), (pos) => journal.header(pos, pb!.recorder.latency()))
     } catch (err) {
       journal.release()
-      status.textContent = `record: ${(err as Error).message}`
+      say(`record: ${(err as Error).message}`, true)
       return
     }
     take = { ...info, start: from, journal }
-    status.textContent = ''
+    say('')
     s.setLocal({ recording: { trackId, start: from } })
     if (!pb.playing) pb.play(from)
     transport.setPlaying(true)
@@ -403,15 +410,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   async function saveTake(t: NonNullable<typeof take>, captured: Promise<Captured | null>) {
     const cap = await captured
     if (!cap) return t.journal.discard(), t.journal.release()
-    status.textContent = 'saving take…'
+    say('saving take…')
     undo.stopCapturing()
     try {
       await finishTake(takeCtx(), { ...cap, trackId: t.trackId, trackName: t.trackName })
-      status.textContent = ''
+      say('')
       await t.journal.settled()
       t.journal.discard() // (on failure the backup stays, and is recovered next time)
     } catch (err) {
-      status.textContent = `take: ${(err as Error).message}`
+      say(`take: ${(err as Error).message}`, true)
     }
     t.journal.release()
     undo.stopCapturing()
@@ -437,15 +444,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       await openMidi()
       await pb.recorder.arm()
     } catch (err) {
-      status.textContent = `pedal: ${(err as Error).message}`
+      say(`pedal: ${(err as Error).message}`, true)
       return
     }
     if (destroyed || pedalOn || !pb) return
     pedalOn = true
-    status.textContent = ''
+    say('')
     pedal = pedalSession({
       doc, undo, pb, rate, projectId: s.projectId, takeCtx, play: startTransport, changed: afterPedal,
-      fail: (m) => (status.textContent = m),
+      fail: (m) => say(m, true),
     })
     listenPedal()
     afterPedal()
@@ -459,7 +466,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
   function pedalPress(a: Action, at: number) {
     if (!pedal || destroyed) return
-    if (take) return void (status.textContent = 'pedal: stop recording first')
+    if (take) return void say('pedal: stop recording first', true)
     pedal.press(a, at)
   }
   const afterPedal = () => (syncPedalBtn(), draw())
@@ -503,7 +510,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function offsetMenu(e: MouseEvent) {
     const info = pb?.recorder.info
     if (!info) {
-      status.textContent = 'arm a track to set the input offset of its microphone'
+      say('arm a track to set the input offset of its microphone')
       return
     }
     popover(e.currentTarget as HTMLElement, [[`input offset: ${getInputOffset(info.deviceId)} ms (change…)`, () => {
@@ -565,12 +572,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     // A take over the playback limit couldn't be played back: end it there (16-bit, so 2 bytes a sample).
     if (take && (position() - take.start) * pb.recorder.info!.channels * 2 >= PLAYBACK_MAX_BYTES - 1024 * 1024) {
       stop()
-      status.textContent = 'take stopped: it reached the longest take that can be played back yet'
+      say('take stopped: it reached the longest take that can be played back yet')
       return
     }
     if (pedal?.active && (position() - pedal.since) * pb.recorder.info!.channels * 2 >= PLAYBACK_MAX_BYTES - 1024 * 1024) {
       stop()
-      status.textContent = 'pedal take stopped: it reached the longest take that can be played back yet'
+      say('pedal take stopped: it reached the longest take that can be played back yet')
       return
     }
     drawPlayhead()
@@ -1345,7 +1352,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       l.mute.classList.toggle('on', t.muted)
       l.el.classList.toggle('muted', t.muted)
       l.solo.classList.toggle('on', t.soloed)
-      if (document.activeElement !== l.gain) l.gain.value = String(gainToPos(t.gain))
+      if (!inUse(l.gain)) l.gain.value = String(gainToPos(t.gain))
       drawFx(l, t, devices)
       drawLoopers(l, t, loopers)
       drawPads(l, t, pads)
@@ -1802,7 +1809,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (mine && stagedHere(m.hash)) return 'local only · click for options'
     return `incoming from ${m.byName ?? 'someone'}${mine ? ', not on this device' : ''}`
   }
-  const failed = (err: unknown) => (status.textContent = (err as Error).message)
+  const failed = (err: unknown) => say((err as Error).message, true)
   function clipMenu(clipId: string): [string, () => void][] {
     const items: [string, () => void][] = [['delete clip', () => { // the whole selection if this clip is in it
       const ids = selection.includes(clipId) ? [...selection] : [clipId]
@@ -1830,12 +1837,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const ctx = takeCtx()
     if (isMine(ctx, meta)) {
       items.push(['save', () => {
-        status.textContent = 'uploading take…'
-        uploadTake(ctx, hash).then(() => (status.textContent = ''), failed)
+        say('uploading take…')
+        uploadTake(ctx, hash).then(() => say(''), failed)
       }])
       if (myTakes(ctx).length > 1) items.push(['save all', () => {
-        status.textContent = 'uploading takes…'
-        uploadAll(ctx).then((r) => (status.textContent = r.gone ? `${r.up} uploaded, ${r.gone} not on this device` : ''), failed)
+        say('uploading takes…')
+        uploadAll(ctx).then((r) => say(r.gone ? `${r.up} uploaded, ${r.gone} not on this device` : ''), failed)
       }])
     }
     items.push(['discard', () => {
@@ -1849,11 +1856,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   // --- file drop
   async function dropFiles(files: File[], trackId: string | null, at: number) {
     if (trackId && locks.has(trackId)) {
-      status.textContent = `${locks.get(trackId)} is recording on that track`
+      say(`${locks.get(trackId)} is recording on that track`)
       return
     }
     for (const f of files) {
-      status.textContent = `uploading ${f.name}…`
+      say(`uploading ${f.name}…`)
       try {
         const m = await importFile(s.projectId, doc, f)
         const length = Math.round(m.duration * rate)
@@ -1862,9 +1869,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
           addAudioClip(doc, { trackId, sourceHash: m.hash, start: at, length })
         })
         at += length
-        status.textContent = ''
+        say('')
       } catch (err) {
-        status.textContent = `${f.name}: ${(err as Error).message}`
+        say(`${f.name}: ${(err as Error).message}`, true)
       }
     }
   }
@@ -1885,6 +1892,20 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     e.preventDefault()
     zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX)
   }, { passive: false })
+  // Touch pinch: two fingers zoom around their midpoint. (The page itself cannot pinch-zoom, see styles.css; handling
+  // the gesture here also keeps iOS Safari from taking it as its tab-overview pinch.)
+  let pinch = 0
+  const spread = (e: TouchEvent) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY)
+  scroll.addEventListener('touchstart', (e) => { pinch = e.touches.length === 2 ? spread(e) : 0 }, { passive: true })
+  scroll.addEventListener('touchmove', (e) => {
+    if (e.touches.length !== 2 || !pinch) return
+    if (e.cancelable) e.preventDefault()
+    const d = spread(e)
+    if (d > 0) zoomAt(d / pinch, (e.touches[0].clientX + e.touches[1].clientX) / 2)
+    pinch = d
+  }, { passive: false })
+  scroll.addEventListener('touchend', (e) => { pinch = e.touches.length === 2 ? spread(e) : 0 }, { passive: true })
+  scroll.addEventListener('touchcancel', () => (pinch = 0), { passive: true })
   /** The buttons zoom around the middle of what is visible (right of the track headers). */
   function zoomButton(factor: number) {
     const r = scroll.getBoundingClientRect()
@@ -1931,7 +1952,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const offPeaks = onPeaks(schedule)
   const onStatus = ({ status: st }: { status: string }) => (bar.dataset.status = st)
   s.provider?.on('status', onStatus)
-  s.provider?.on('authenticationFailed', () => (status.textContent = 'no access'))
+  s.provider?.on('authenticationFailed', () => say('no access'))
   // After the first sync: migrate old projects (editors only: a viewer's writes never reach the server),
   // then start the engine at the project's sample rate.
   void s.synced.then(() => {
@@ -1949,7 +1970,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     draw()
     if (!readOnly) sweepUnusedTakes(takeCtx())
     if (!readOnly) recoverTakes(takeCtx()).then((n) => {
-      if (n && !destroyed) status.textContent = `recovered ${n} unfinished take${n > 1 ? 's' : ''}`
+      if (n && !destroyed) say(`recovered ${n} unfinished take${n > 1 ? 's' : ''}`)
     }, (err) => console.warn('take recovery:', err))
   })
   draw()
