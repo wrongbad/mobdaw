@@ -297,7 +297,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     })
   }
-  // The global fx lane: the master bus chain, between the ruler and the first track.
+  // The global fx lane: the master bus chain. It closes the track list, directly above the global automation (one unit, after every track).
   let masterOpen = false
   const masterCards = new Map<string, ReturnType<typeof deviceCard>>()
   const masterMore = h('button', { className: 'fx-toggle', title: 'effects on the whole mix', onclick: () => {
@@ -310,7 +310,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   masterFx.append(masterAdd)
   openOnClick(masterFx, () => (masterOpen = true))
   const master = h('div', { className: 'lane master' }, h('div', { className: 'fx-row' }, masterMore, masterFx))
-  ruler.after(master)
+  masterAuto.el.before(master)
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
 
   const x = (smp: number) => (smp / rate) * pps
