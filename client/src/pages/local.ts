@@ -8,8 +8,6 @@ import { readLocalPreview } from '../local/session'
 import { PROJECT_FILE_EXT, writeProjectFile } from '../projectFile'
 import { collectLocal, localToCloud } from '../transfer'
 import { silliName } from '../projectName'
-import { demoContents } from '../content/demo'
-import { importToLocal } from '../transfer'
 import { newProjectTile, projectTile } from '../ui/tile'
 
 /**
@@ -65,17 +63,10 @@ export function localSection(me: Me | null): HTMLElement {
     })
   }
 
-  const demoTile = () => h('li', { className: 'tile tile-new' },
-    h('button', {
-      title: 'make your own copy of the built-in demo song and open it',
-      onclick: () => busy('creating the demo…', async () => { location.hash = `#/local/${(await importToLocal(demoContents())).id}` }),
-    }, '\u266a', h('span', { className: 'small' }, 'demo song')))
-
   function render() {
     const all = listLocal()
     list.replaceChildren(
       newProjectTile(() => (location.hash = `#/local/${createLocal(silliName()).id}`), { title: 'start a new local project' }),
-      demoTile(),
       ...all.map(row))
   }
 
