@@ -203,9 +203,9 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .fx-toggle { position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
 .fx-toggle.on { color: var(--fg); }
 .fx { position: sticky; left: calc(var(--head) + var(--gutter)); width: calc(100vw - var(--head) - var(--gutter)); display: flex; align-items: stretch; min-height: 72px; overflow-x: auto; overflow-y: hidden; } /* cards stay one row and scroll sideways; they stretch to the row's tallest, so borders line up */
-.fx::-webkit-scrollbar { display: block; height: 8px; }
-.fx::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
-@supports not selector(::-webkit-scrollbar) { .fx { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; } }
+/* the device rows (synth, effects, loopers, global fx) and the presets drawer never show scroll bars; wheel, trackpad and touch still scroll them */
+.fx, .preset-grid { scrollbar-width: none; }
+.fx::-webkit-scrollbar, .preset-grid::-webkit-scrollbar { display: none; }
 .fx > * { flex: none; }
 .fx[hidden] { display: none; }
 /* shut: only each card's title bar */
