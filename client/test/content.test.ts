@@ -14,7 +14,7 @@ import { encodeWavPlanar } from '../src/audio/wav'
 import { contentEnd } from '../src/audio/range'
 import { DRUM_KITS, EFFECT_PRESETS, INSTRUMENT_PRESETS, addDrumKit, effectPreset, instrumentPreset, addEffectPreset, addInstrument, applyPreset, presetsFor } from '../src/content/presets'
 import { TEMPLATES } from '../src/content/templates'
-import { DEMO_BARS, DEMO_BPM, buildDemo } from '../src/content/demo'
+import { DEMO_BARS, DEMO_BPM, DEMO_NAME, buildDemo, demoContents } from '../src/content/demo'
 
 const SR = 48000
 
@@ -300,4 +300,19 @@ describe('demo render', () => {
     // and the tail dies away
     expect(stats([L, R], frames - SR / 2, frames).rms).toBeLessThan(all.rms / 10)
   }, 120_000)
+})
+
+describe('demo as a project', () => {
+  it('gives an independent, audio-free copy named after the demo each time', () => {
+    const a = demoContents(), b = demoContents()
+    expect(a.name).toBe(DEMO_NAME)
+    expect(a.audio).toEqual([])
+    const doc = new Y.Doc()
+    Y.applyUpdate(doc, a.state)
+    const other = new Y.Doc()
+    Y.applyUpdate(other, b.state)
+    doc.getMap('meta').set('x', 1)
+    expect(other.getMap('meta').get('x')).toBeUndefined()
+    expect(a.state.byteLength).toBeGreaterThan(1000)
+  })
 })

@@ -7,7 +7,7 @@
 //   bars 21-28  B       Dm9 | Bbmaj9 | Gm9 | A7b9, twice: busier comping, clap on the backbeat, a new melody; a snare roll
 //   bars 29-32  outro   A's chords once more, resolving to Fmaj9; the drums thin out and the master reverb opens up
 // The loop region (off) covers A and A', bars 5-20. The piano's voicings move by step from chord to chord.
-import type * as Y from 'yjs'
+import * as Y from 'yjs'
 import { DELAY, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum } from '@mobdaw/shared'
 import { MASTER_TRACK, automate, barPos, clip, initProject, rng, track, type ClipWriter, type Song } from './compose'
 import { GM, addDrumKit, addEffectPreset, addInstrument, drumKit, effectPreset, instrumentPreset } from './presets'
@@ -264,4 +264,11 @@ function writeDust(s: Song, t: string, r: () => number) {
     const hits = 2 + Math.floor(r() * 4)
     for (let i = 0; i < hits; i++) c.note(bar * 4 + r() * 4, 60, 0.1, 0.1 + r() * 0.45)
   }
+}
+
+/** A fresh copy of the demo as project contents (no audio: it only uses built-in synths). Built anew on every call. */
+export function demoContents(): { name: string; state: Uint8Array; audio: [] } {
+  const doc = new Y.Doc()
+  buildDemo(doc)
+  return { name: DEMO_NAME, state: Y.encodeStateAsUpdate(doc), audio: [] }
 }
