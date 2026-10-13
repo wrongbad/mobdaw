@@ -1,5 +1,6 @@
 // Plain absolutely-positioned DOM timeline. Isolated so it can be redesigned.
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
+import { MAX_PPS, MIN_PPS, fitPps } from './zoomFit'
 import {
   DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, FINNWAVE, SIMPLE_FILTER, addAudioClip, addClickTrack, addDevice, addDrum, isLooping, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
@@ -1914,7 +1915,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   /** Zoom the timeline by `factor`, keeping the time under screen x `clientX` where it is. */
   function zoomAt(factor: number, clientX: number) {
     const t = (clientX - rulerBody.getBoundingClientRect().left) / pps
-    pps = Math.min(800, Math.max(10, pps * factor))
+    pps = Math.min(MAX_PPS, Math.max(MIN_PPS, pps * factor))
     draw()
     scroll.scrollLeft += HEADER + t * pps - (clientX - scroll.getBoundingClientRect().left) - scroll.scrollLeft
   }
@@ -1937,6 +1938,23 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }, { passive: false })
   scroll.addEventListener('touchend', (e) => { pinch = e.touches.length === 2 ? spread(e) : 0 }, { passive: true })
   scroll.addEventListener('touchcancel', () => (pinch = 0), { passive: true })
+  /** Zoom so everything from 0 to the last clip / pad (main timeline only; source lanes have their own time) fits the visible width. */
+  let fitRaf = 0
+  function zoomFit(tries = 0) {
+    cancelAnimationFrame(fitRaf)
+    const view = scroll.clientWidth - HEADER
+    if (view < 100) { // not laid out yet
+      if (tries < 60) fitRaf = requestAnimationFrame(() => zoomFit(tries + 1))
+      return
+    }
+    const scapes = new Set(getTracks(doc).filter((t) => t.kind === 'soundscape').map((t) => t.id))
+    const end = Math.max(0,
+      ...getClips(doc).filter((c) => !scapes.has(c.trackId)).map((c) => c.start + clipLength(c, rate)),
+      ...getPads(doc).map((p) => p.start + p.length))
+    pps = fitPps(end / rate, view)
+    draw()
+    scroll.scrollLeft = 0
+  }
   /** The buttons zoom around the middle of what is visible (right of the track headers). */
   function zoomButton(factor: number) {
     const r = scroll.getBoundingClientRect()
@@ -1947,6 +1965,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (tag === 'SELECT' || (tag === 'INPUT' && (e.target as HTMLInputElement).type !== 'range')) return
     const mod = e.metaKey || e.ctrlKey
     if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void toggleRecord() : toggle() }
+    else if (!mod && !e.shiftKey && e.key.toLowerCase() === 'z') zoomFit()
     else if (e.key === 'Escape' && (editing || armed || padSel)) { editing = null; noteSel = null; armed = null; padSel = null; draw() }
     else if (pedalOn && tag !== 'TEXTAREA' && !mod && !e.repeat && /^[1-4]$/.test(e.key)) { e.preventDefault(); pedalPress(ACTIONS[Number(e.key) - 1], e.timeStamp) } // the pedal's four actions, without a pedal
     else if (readOnly) return
@@ -1999,6 +2018,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     pb.recorder.onlevel = drawLevel
     pb.oncpu = showCpu
     draw()
+    zoomFit() // (zoom is not remembered per project, so every open fits the song to the window)
     if (!readOnly) sweepUnusedTakes(takeCtx())
     if (!readOnly) recoverTakes(takeCtx()).then((n) => {
       if (n && !destroyed) say(`recovered ${n} unfinished take${n > 1 ? 's' : ''}`)
@@ -2010,6 +2030,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     el,
     destroy() {
       destroyed = true
+      cancelAnimationFrame(fitRaf)
       cancelAnimationFrame(raf)
       cancelAnimationFrame(previewRaf)
       removeEventListener('keydown', key)
