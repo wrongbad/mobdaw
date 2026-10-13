@@ -702,7 +702,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   /** The owner's name for a lane header: the device's, numbered when its chain has several of a kind. */
-  /** The presets drawer: a section like the automation one (same toggle and box), holding a wrapping grid of preset buttons. */
+  /** The presets drawer: a section like the automation one (same toggle and box), holding one column of plain-text buttons per group. */
   function makePresetsDrawer(id: string) {
     const toggle = h('button', { className: 'fx-toggle on', title: 'presets', onclick: () => { presetsShown.delete(id); draw() } }, 'presets')
     const grid = h('div', { className: 'preset-grid' })
@@ -712,11 +712,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function drawPresets(l: Lane, t: Track) {
     const list = presetsShown.has(t.id) ? presetsFor(doc, t.id) : []
     l.presets.el.hidden = !list.length
-    l.presets.grid.replaceChildren(...list.map((p) => h('button', { className: 'preset' + (t.preset === p.id ? ' on' : ''), disabled: readOnly || locks.has(t.id), onclick: () => {
-      undo.stopCapturing()
-      applyPreset(doc, t.id, p.id)
-      undo.stopCapturing()
-    } }, p.name)))
+    const groups = new Map<string, typeof list>()
+    for (const p of list) groups.set(p.group, [...(groups.get(p.group) ?? []), p])
+    l.presets.grid.replaceChildren(...[...groups].map(([name, items]) => h('div', { className: 'preset-col', role: 'group', 'aria-label': name },
+      h('h4', {}, name),
+      ...items.map((p) => h('button', { className: 'preset' + (t.preset === p.id ? ' on' : ''), disabled: readOnly || locks.has(t.id), 'aria-pressed': String(t.preset === p.id), onclick: () => {
+        undo.stopCapturing()
+        applyPreset(doc, t.id, p.id)
+        undo.stopCapturing()
+      } }, p.name)))))
   }
 
   function ownerLabel(l: AutoLane, base: string, devices: Device[]) {

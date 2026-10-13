@@ -208,12 +208,18 @@ const PRESET_FX: Record<string, string> = {
   'soft-keys': 'small-room', 'electric-piano': 'wide-tremolo', 'warm-pad': 'big-room', 'flute-lead': 'tape-echo', tape: 'glue',
 }
 
-export type TrackPreset = { id: string; name: string }
+/** `group` is the drawer's column heading: an instrument category, "drums" for kits, "effects" for chains. */
+export type TrackPreset = { id: string; name: string; group: string }
 
 /** What a track's Presets drawer offers: effect chains on audio tracks, instruments (synths, then kits) on MIDI tracks, nothing elsewhere. */
 export function presetsFor(doc: Y.Doc, trackId: string): TrackPreset[] {
   const kind = getTracks(doc).find((t) => t.id === trackId)?.kind
-  return kind === 'audio' ? EFFECT_PRESETS : kind === 'midi' ? [...INSTRUMENT_PRESETS, ...DRUM_KITS] : []
+  if (kind === 'audio') return EFFECT_PRESETS.map((p) => ({ id: p.id, name: p.name, group: 'effects' }))
+  if (kind !== 'midi') return []
+  return [
+    ...INSTRUMENT_PRESETS.map((p) => ({ id: p.id, name: p.name, group: p.category })),
+    ...DRUM_KITS.map((k) => ({ id: k.id, name: k.name, group: 'drums' })),
+  ]
 }
 
 /**
