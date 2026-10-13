@@ -1,6 +1,6 @@
 // Glue for one open project: the wasm engine host + the doc bridge + transport.
 import type * as Y from 'yjs'
-import { Bridge, type Drag, type LiveClip, type PreviewMode, type PreviewTransport } from './bridge'
+import { Bridge, type Drag, type LiveClip, type Meters, type PreviewMode, type PreviewTransport } from './bridge'
 import { getCtx, holdPlayback } from './context'
 import { EngineHost } from './engine-host'
 import { heardPosition, type PosReport } from './pedal'
@@ -13,6 +13,8 @@ export type Playback = ReturnType<typeof openPlayback>
 export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: number | null) {
   const ctx = getCtx(rate)
   let oncpu: ((m: { load: number; peak: number }) => void) | null = null
+  let onmeters: ((m: Meters) => void) | null = null
+  let analyser: AnalyserNode | null = null
   let lastPos: (PosReport & { playing: boolean }) | null = null // the engine's latest position report, to place pedal presses
   const hostP = EngineHost.create(ctx).then((h) => {
     h.oncpu = (m) => oncpu?.(m)
@@ -20,6 +22,7 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     h.onpos = (m) => ((lastPos = m), bridge.onPos(m))
     h.onpreview = (m) => bridge.onPreviewPos(m)
     h.onloopers = (m) => bridge.onLooperHeads(m)
+    h.onmeters = (m) => onmeters?.(bridge.meters(m))
     return h
   })
   hostP.catch((e) => console.error('engine failed to start:', e))
@@ -40,7 +43,8 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     undefined,
     me,
   )
-  const recorder = new Recorder(ctx, hostP, rate)
+  // The transport cycle is off while a take is recorded (docs/engine-api.md, engine_set_loop).
+  const recorder = new Recorder(ctx, hostP, rate, (on) => bridge.setRecording(on))
 
   // The iOS audio session is 'playback' (so the silent switch doesn't mute us) only while something sounds; the rest
   // of the time it is released so the page doesn't sit in the notification center as a now-playing tile.
@@ -69,6 +73,21 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     recorder,
     /** Engine DSP load reports (twice a second). */
     set oncpu(fn: ((m: { load: number; peak: number }) => void) | null) { oncpu = fn },
+    /**
+     * Level meters, about 30 times a second while anything sounds (stopped too: live notes, monitoring), then one
+     * all-zero report when it falls silent: post-fader peaks (linear, 1 = full scale) since the last report, master and
+     * per track by doc id. Decay and peak hold are the UI's.
+     */
+    set onmeters(fn: ((m: Meters) => void) | null) { onmeters = fn },
+    /** The master output for a scope or spectrum (fftSize 2048), fed in parallel from the engine; made on first use. */
+    get analyser(): AnalyserNode {
+      if (!analyser) {
+        const a = (analyser = ctx.createAnalyser())
+        a.fftSize = 2048
+        void hostP.then((h) => h.node.connect(a), () => {})
+      }
+      return analyser
+    },
     get playing() { return bridge.isPlaying },
     position: () => bridge.position(),
     play(from?: number) {
@@ -142,6 +161,7 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
       releasePlayback?.()
       releasePlayback = null
       recorder.disarm(true)
+      analyser?.disconnect()
       bridge.stop()
       bridge.destroy()
       void hostP.then((h) => h.dispose(), () => {})

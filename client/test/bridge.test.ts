@@ -669,3 +669,60 @@ describe('metronome, looping clips and note ranges', () => {
     })
   })
 })
+
+describe('bridge: transport cycle and meters', () => {
+  it('sends meta.loop to the engine when it changes, and suspends it while recording', async () => {
+    const { setLoop } = await import('@mobdaw/shared')
+    const { doc, bridge, calls, take } = setup()
+    expect(names(calls)).not.toContain('engine_set_loop') // no loop: nothing to send
+    setLoop(doc, { start: 1000, end: 5000, on: true })
+    expect(take()).toEqual([['engine_set_loop', 1000, 5000, 1]])
+    setLoop(doc, { start: 1000, end: 5000, on: true })
+    expect(take()).toEqual([]) // unchanged
+    bridge.setRecording(true)
+    expect(take()).toEqual([['engine_set_loop', 0, 0, 0]])
+    setLoop(doc, { start: 2000, end: 6000, on: true })
+    expect(take()).toEqual([]) // still recording
+    bridge.setRecording(false)
+    expect(take()).toEqual([['engine_set_loop', 2000, 6000, 1]])
+    setLoop(doc, { start: 2000, end: 6000, on: false })
+    expect(take()).toEqual([['engine_set_loop', 0, 0, 0]])
+    setLoop(doc, null)
+    expect(take()).toEqual([])
+  })
+
+  it('a project opened with the cycle on sends it at once', async () => {
+    const { setLoop } = await import('@mobdaw/shared')
+    const { calls } = setup((doc) => setLoop(doc, { start: 10, end: 20, on: true }))
+    expect(calls.filter((c) => c[0] === 'engine_set_loop')).toEqual([['engine_set_loop', 10, 20, 1]])
+  })
+
+  it('the extrapolated position wraps at the cycle end like the engine', async () => {
+    const { setLoop } = await import('@mobdaw/shared')
+    let now = 0
+    const doc = new Y.Doc()
+    const bridge = new Bridge(doc, { call: () => {}, source: () => {} }, async () => null, 48000, () => now)
+    setLoop(doc, { start: 48000, end: 96000, on: true })
+    bridge.play(90000)
+    now = 250 // +12000 samples: 102000 wraps to 48000 + 6000
+    expect(bridge.position()).toBe(54000)
+    bridge.onPos({ pos: 54000, playing: true })
+    now = 500
+    expect(bridge.position()).toBe(66000)
+    bridge.play(100000) // past the end: plays on
+    now = 750
+    expect(bridge.position()).toBe(112000)
+  })
+
+  it('maps meter handles to doc track ids and drops unknown or removed ones', () => {
+    const { doc, bridge, take } = setup()
+    const a = addTrack(doc, 'a')
+    const b = addTrack(doc, 'b')
+    const h = new Map(take().filter((c) => c[0] === 'engine_track_upsert').map((c, i) => [[a, b][i], c[1]]))
+    const m = bridge.meters({ master: [0.5, 0.25], tracks: [h.get(a)!, 0.1, 0.2, h.get(b)!, 0.3, 0.4, 999, 1, 1] })
+    expect(m.master).toEqual([0.5, 0.25])
+    expect([...m.tracks]).toEqual([[a, [0.1, 0.2]], [b, [0.3, 0.4]]])
+    deleteTrack(doc, a)
+    expect([...bridge.meters({ master: [0, 0], tracks: [h.get(a)!, 1, 1, h.get(b)!, 0, 0] }).tracks]).toEqual([[b, [0, 0]]])
+  })
+})

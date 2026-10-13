@@ -4,9 +4,10 @@
 import * as Y from 'yjs'
 import {
   KEY_MAX, KEY_MIN, LFO_DEFAULTS, foreverSamples, foreverTicks, isForever, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
-  looperParamDef, loopersMap, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, tracksMap,
+  getLoop, looperParamDef, loopersMap, metaMap, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, tracksMap,
   type AudioClip, type Clip, type Device, type Lane, type Looper, type MidiClip, type Pad, type Note, type ParamTarget, type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
+import type { MetersMessage } from './meters'
 
 export interface EngineSink {
   call(fn: string, ...args: number[]): void
@@ -40,6 +41,19 @@ const LIVE_DEFAULTS = { sourceOffset: 0, gain: 1, fadeIn: 0, fadeOut: 0, fadeSha
 export type SourceLoader = (hash: string, meta: SampleMeta) => Promise<Float32Array[] | null>
 export type Drag = { deviceId: string; paramId: number; value: number }
 
+/** Peak levels for the UI: linear (0..1, above 1 is clipping), keyed by doc track id. */
+export type Meters = { master: [number, number]; tracks: Map<string, [number, number]> }
+
+/** Map a meters message's engine track handles to doc track ids (`idOf`); handles it doesn't know are dropped. */
+export function mapMeters(m: MetersMessage, idOf: (h: number) => string | undefined): Meters {
+  const tracks = new Map<string, [number, number]>()
+  for (let i = 0; i + 2 < m.tracks.length; i += 3) {
+    const id = idOf(m.tracks[i])
+    if (id != null) tracks.set(id, [m.tracks[i + 1], m.tracks[i + 2]])
+  }
+  return { master: [m.master[0], m.master[1]], tracks }
+}
+
 /**
  * A transport's position, as the main thread knows it: the engine reports now and then, and in
  * between the position is extrapolated from the clock. The timeline and every preview use one.
@@ -48,6 +62,8 @@ export class Clock {
   private pos = 0
   private playing = false
   private posAt = 0
+  /** The transport cycle the engine applies (`Engine::set_loop`), so the extrapolated position wraps like the engine's. */
+  loop: { start: number; end: number } | null = null
   constructor(private rate: number, private now: () => number) {}
   /** Start at `from` (default: where it stopped); returns the start position. */
   play(from = this.pos) {
@@ -74,7 +90,11 @@ export class Clock {
     return this.playing
   }
   position() {
-    return this.playing ? this.pos + ((this.now() - this.posAt) / 1000) * this.rate : this.pos
+    if (!this.playing) return this.pos
+    const x = this.pos + ((this.now() - this.posAt) / 1000) * this.rate
+    const l = this.loop
+    // Only reaching the end from before it wraps (a playhead already past it plays on), as in the engine.
+    return l && this.pos < l.end && x >= l.end ? l.start + ((x - l.end) % (l.end - l.start)) : x
   }
 }
 
@@ -116,6 +136,12 @@ export class Bridge {
   private headsAt = -Infinity
   /** Engine-only clips by engine handle (see liveClip), until a doc clip adopts them. */
   private ephemeral = new Map<number, { track: number; c: Required<LiveClip> }>()
+  /** Doc track id by engine handle, for the meters. */
+  private trackIds = new Map<number, string>()
+  /** A take is being recorded: the cycle is off meanwhile (a take is one continuous stretch of the timeline). */
+  private recording = false
+  /** The `engine_set_loop` arguments last sent, to send only changes. */
+  private sentLoop = '0,0,0'
 
   constructor(
     private doc: Y.Doc,
@@ -140,8 +166,40 @@ export class Bridge {
     watch(lanesMap(doc), dirtyIds('lane'))
     watch(pointsMap(doc), dirtyIds('point'))
     watch(samplesMap(doc), () => [...this.wanted].forEach((h) => this.wantSource(h)))
+    const onMeta = (ev: Y.YMapEvent<unknown>) => ev.keysChanged.has('loop') && this.syncLoop()
+    metaMap(doc).observe(onMeta)
+    this.unobserve.push(() => metaMap(doc).unobserve(onMeta))
     this.clock = new Clock(rate, now)
     this.syncAll()
+    this.syncLoop()
+  }
+
+  // --- transport cycle (meta.loop)
+  /**
+   * Send the doc's loop region to the engine (`engine_set_loop`) when it changes. While a take is recorded the cycle is
+   * sent off, and it comes back when recording ends (looped recording is not supported: a take is one continuous
+   * stretch of the timeline, and the worklet ends capture at any jump).
+   */
+  private syncLoop() {
+    const l = getLoop(this.doc)
+    const on = !!l?.on && !this.recording
+    this.clock.loop = on ? { start: l!.start, end: l!.end } : null
+    const args = on ? [l!.start, l!.end, 1] : [0, 0, 0]
+    const key = args.join(',')
+    if (key === this.sentLoop) return
+    this.sentLoop = key
+    this.sink.call('engine_set_loop', ...args)
+  }
+
+  /** A take started (true) or ended: the cycle is suspended meanwhile. */
+  setRecording(on: boolean) {
+    this.recording = on
+    this.syncLoop()
+  }
+
+  /** Engine -> main: a {type:'meters'} message, with the track handles mapped to doc track ids. */
+  meters(m: MetersMessage): Meters {
+    return mapMeters(m, (h) => this.trackIds.get(h))
   }
 
   destroy() {
@@ -313,7 +371,10 @@ export class Bridge {
 
   private handle(kind: Kind | 'source', id: string) {
     let h = this.handles[kind].get(id)
-    if (h == null) this.handles[kind].set(id, (h = this.next++))
+    if (h == null) {
+      this.handles[kind].set(id, (h = this.next++))
+      if (kind === 'track') this.trackIds.set(h, id)
+    }
     return h
   }
 
@@ -321,7 +382,7 @@ export class Bridge {
     const h = this.handles[kind].get(id)
     if (h == null) return
     this.handles[kind].delete(id)
-    if (kind === 'track') this.dropPreviews(id)
+    if (kind === 'track') this.dropPreviews(id), this.trackIds.delete(h)
     const fn = {
       track: 'engine_track_remove', clip: 'engine_clip_remove', note: 'engine_note_remove', device: 'engine_device_remove', looper: 'engine_looper_remove',
       pad: 'engine_pad_remove', lane: 'engine_lane_remove', point: 'engine_point_remove',

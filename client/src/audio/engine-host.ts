@@ -54,6 +54,7 @@ export class EngineHost {
       else if (ev.data?.type === 'rec') host.onrec?.(ev.data)
       else if (ev.data?.type === 'level') host.onlevel?.(ev.data)
       else if (ev.data?.type === 'cpu') host.oncpu?.(ev.data)
+      else if (ev.data?.type === 'meters') host.onmeters?.(ev.data)
     }
     return host
   }
@@ -85,6 +86,12 @@ export class EngineHost {
 
   /** Input level: `peaks` are max |x| per 64 frames (BUCKET); `rec` when those frames went into the take. */
   onlevel: ((m: { peaks: Float32Array; rec: boolean }) => void) | null = null
+
+  /**
+   * Level meters, about 30 times a second while anything sounds (once more with zeros when it falls silent, then nothing
+   * until it sounds again): post-fader peaks (linear |x|) since the last message. `tracks` is `[handle, l, r, ...]`.
+   */
+  onmeters: ((m: { master: [number, number]; tracks: number[] }) => void) | null = null
 
   /** DSP load, twice a second: `load` is the mean fraction of the audio deadline used, `peak` the worst single call's. */
   oncpu: ((m: { load: number; peak: number }) => void) | null = null

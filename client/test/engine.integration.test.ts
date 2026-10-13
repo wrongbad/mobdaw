@@ -6,6 +6,8 @@ import * as Y from 'yjs'
 import { addAudioClip, addClickTrack, addDevice, addDrum, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, getClips, setLaneState, setParam, updateClip, updateDevice, updateLaneLfo, updateTrack, type SampleMeta } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 import { CallQueue } from '../src/audio/schedule'
+import { readMeters } from '../src/audio/meters'
+import { setLoop } from '@mobdaw/shared'
 
 const SR = 48000
 const wasm = readFileSync(new URL('../src/audio/wasm/engine.wasm', import.meta.url))
@@ -269,5 +271,59 @@ describe('bridge + real engine.wasm', () => {
     const b = samples(1024)
     expect(b.subarray(100, 400)).toEqual(a.subarray(100, 400)) // the doc clip adopted the live one: one clip, not two
     bridge.destroy()
+  })
+
+  it('the cycle from meta.loop repeats a click every end - start samples, and recording suspends it', async () => {
+    const doc = new Y.Doc()
+    const t = addTrack(doc, 'audio')
+    const click = new Float32Array(SR)
+    click[1000] = 1
+    addSample(doc, { hash: 'click', name: 'click', duration: 1, size: SR * 4, mime: 'audio/wav' })
+    addAudioClip(doc, { trackId: t, sourceHash: 'click', start: 0, length: SR })
+    const { sink, samples, x, e } = host()
+    const bridge = new Bridge(doc, sink, async () => [click], SR)
+    await tick()
+    updateTrack(doc, t, { pan: -1 })
+    setLoop(doc, { start: 1000, end: 1777, on: true })
+    bridge.play(900)
+    const l = samples(4000)
+    const at = [...l.keys()].filter((i) => l[i] !== 0)
+    expect(at).toEqual([100, 877, 1654, 2431, 3208, 3985])
+    expect(x.engine_position(e)).toBeGreaterThanOrEqual(1000)
+    expect(x.engine_position(e)).toBeLessThan(1777)
+    bridge.setRecording(true) // a take plays straight through
+    bridge.seek(900)
+    const s2 = samples(4000)
+    expect([...s2.keys()].filter((i) => s2[i] !== 0)).toEqual([100])
+  })
+
+  it('meters: the worklet read gives post-fader peaks per doc track and the master', async () => {
+    const doc = new Y.Doc()
+    const a = addTrack(doc, 'a')
+    const b = addTrack(doc, 'b')
+    const dc = new Float32Array(SR).fill(0.5)
+    addSample(doc, { hash: 'dc', name: 'dc', duration: 1, size: SR * 4, mime: 'audio/wav' })
+    addAudioClip(doc, { trackId: a, sourceHash: 'dc', start: 0, length: SR })
+    addAudioClip(doc, { trackId: b, sourceHash: 'dc', start: 0, length: SR })
+    const { sink, samples, x, e } = host()
+    const bridge = new Bridge(doc, sink, async () => [dc], SR)
+    await tick()
+    updateTrack(doc, a, { pan: -1, gain: 0.5 })
+    updateTrack(doc, b, { pan: 1, muted: true })
+    bridge.play(0)
+    samples(2048)
+    readMeters(x, e) // past the gain ramps
+    samples(1024)
+    const { m, silent } = readMeters(x, e)
+    expect(silent).toBe(false)
+    const got = bridge.meters(m)
+    expect(got.master[0]).toBeCloseTo(0.25, 6)
+    expect(got.master[1]).toBe(0)
+    expect(got.tracks.get(a)![0]).toBeCloseTo(0.25, 6)
+    expect(got.tracks.get(b)).toEqual([0, 0])
+    bridge.stop()
+    samples(4096)
+    readMeters(x, e)
+    expect(readMeters(x, e).silent).toBe(true)
   })
 })

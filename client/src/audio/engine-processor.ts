@@ -3,6 +3,7 @@
 // exports. Loaded via `?worker&url` by engine-host.ts.
 
 import { CallQueue } from './schedule'
+import { readMeters } from './meters'
 
 // The DOM lib doesn't declare the worklet globals, so declare the little we use.
 declare const sampleRate: number
@@ -31,6 +32,9 @@ type EngineExports = {
   engine_source_alloc(e: number, h: number, channels: number, frames: number): number
   engine_source_ready(e: number, h: number): void
   engine_source_live_append(e: number, h: number, frames: number): number
+  engine_set_loop(e: number, start: number, end: number, on: number): void
+  engine_meters_read(e: number): number
+  engine_meters_ptr(e: number): number
 } & Record<string, unknown>
 const REPORT = new Set(['engine_play', 'engine_stop', 'engine_seek'])
 
@@ -71,6 +75,11 @@ class EngineProcessor extends AudioWorkletProcessor {
   /** Frames of the current `process()` call already rendered, so a position report can say which context frame it belongs to. */
   private done = 0
   private transport = { position: () => this.x.engine_position(this.e), playing: () => this.x.engine_is_playing(this.e) === 1 }
+  /** The transport cycle as last set (`engine_set_loop`), so blocks are cut at its end and capture can suspend it. */
+  private cycle: { start: number; end: number } | null = null
+  /** Level meters: frames since the last post, and whether the last post had any signal (silence is posted once, then skipped). */
+  private sinceMeters = 0
+  private metersLive = true
 
   constructor(options: { processorOptions: { wasmBytes: ArrayBuffer } }) {
     super()
@@ -121,6 +130,11 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (!this.warned.has(fn)) console.warn(`engine.wasm has no export ${fn}`), this.warned.add(fn)
       return
     }
+    if (fn === 'engine_set_loop') {
+      // Kept here too: blocks are cut at the cycle's end (so scheduled calls see the wrap), and a take suspends it.
+      this.cycle = args[2] && args[1] > args[0] ? { start: args[0], end: args[1] } : null
+      if (this.rec) return // applied when the take ends
+    }
     f(this.e, ...args)
     if (fn === 'engine_looper_upsert') this.loopers.add(args[0])
     else if (fn === 'engine_looper_remove') this.loopers.delete(args[0])
@@ -164,6 +178,11 @@ class EngineProcessor extends AudioWorkletProcessor {
 
   /** `live`: the handle of a live source (engine_source_live_alloc) to write every captured block into too, or 0 for none. */
   private record(on: boolean, channels = 1, live = 0) {
+    // No cycle while a take is armed or recorded: a take is one continuous stretch of the timeline (the bridge suspends
+    // it as well; this holds even when its message arrives after the record one).
+    if (this.cycle && typeof this.x.engine_set_loop === 'function') {
+      this.x.engine_set_loop(this.e, this.cycle.start, this.cycle.end, on ? 0 : 1)
+    }
     if (on) {
       this.rec = { channels, buf: [], fill: 0, started: false, next: 0, ended: false, live }
       this.rec.buf = this.fresh(this.rec)
@@ -226,6 +245,15 @@ class EngineProcessor extends AudioWorkletProcessor {
     if (r.fill >= r.buf[0].length) this.flush()
   }
 
+  /** Post the meters (post-fader peaks since the last read). Silence is posted once (zeros), then skipped. */
+  private reportMeters() {
+    if (typeof this.x.engine_meters_read !== 'function') return
+    const { m, silent } = readMeters(this.x, this.e)
+    if (silent && !this.metersLive) return
+    this.metersLive = !silent
+    this.port.postMessage({ type: 'meters', ...m })
+  }
+
   private report() {
     if (typeof this.x.engine_position !== 'function') return
     this.sinceReport = 0
@@ -256,6 +284,12 @@ class EngineProcessor extends AudioWorkletProcessor {
       this.done = at
       // Scheduled calls run when the position reaches their sample: cut the block there.
       if (this.sched.size) n = this.sched.step(n, this.transport, (c) => this.call(c.fn, c.args))
+      // The cycle wraps inside engine_process; ending the piece at the wrap lets the queue (and the report) see it.
+      let wrapped = false
+      if (this.cycle && !this.rec && this.transport.playing()) {
+        const p = this.transport.position()
+        if (p < this.cycle.end && p + n >= this.cycle.end) (n = this.cycle.end - p), (wrapped = true)
+      }
       if (this.monitoring) this.feed(inputs[0], at, n)
       this.x.engine_process(this.e, n)
       // memory.grow detaches the old ArrayBuffer; re-wrap when it changes.
@@ -265,6 +299,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       out[0].set(this.view.subarray(0, n), at)
       if (out[1]) out[1].set(this.view.subarray(BLOCK, BLOCK + n), at)
       at += n
+      if (wrapped) (this.done = at), this.report() // the playhead jumps back: tell the main thread now
     }
     this.done = total
     // ~30 position reports a second while playing (the timeline, and each playing preview)
@@ -274,6 +309,12 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (typeof this.x.engine_is_playing === 'function' && this.x.engine_is_playing(this.e)) this.report()
       for (const h of this.previews) this.reportPreview(h)
       this.reportLoopers()
+    }
+    // ~30 meter posts a second, stopped or not (live notes and monitoring sound with the transport stopped)
+    this.sinceMeters += total
+    if (this.sinceMeters >= sampleRate / 30) {
+      this.sinceMeters = 0
+      this.reportMeters()
     }
     // AudioWorkletGlobalScope has no `performance` in some browsers; Date.now()'s 1 ms steps still average out over a window.
     const took = (now() - t0) / 1000
