@@ -70,8 +70,8 @@ export function cloudSection(me: Me): HTMLElement {
     return tile([h('details', { className: 'members' }, h('summary', {}, `${d.members.filter((m) => m.role !== 'owner').length} shared`), ...rows)])
   }
 
-  const section = h('section', { className: 'section' },
-    h('h2', {}, 'cloud'),
+  const section = h('section', { className: 'home-sec' },
+    h('div', { className: 'sec-head' }, h('h2', {}, 'Cloud')),
     err, list)
   render().catch((e) => (err.textContent = describeError(e)))
   return section

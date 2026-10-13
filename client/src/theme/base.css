@@ -65,6 +65,8 @@ body {
 .btn:hover:not(:disabled) { background: var(--line); border-color: var(--dim); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, white); border-color: transparent; }
+.btn.danger-fill { background: var(--rec); border-color: var(--rec); color: var(--on-rec); }
+.btn.danger-fill:hover:not(:disabled) { background: color-mix(in srgb, var(--rec) 88%, white); border-color: transparent; }
 .btn.danger { color: var(--rec); }
 .btn.danger:hover:not(:disabled) { border-color: var(--rec); background: var(--rec-soft); }
 
@@ -183,6 +185,7 @@ dialog.modal::backdrop, dialog.invite-dialog::backdrop { background: var(--scrim
 .modal-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px 0 20px; }
 .modal-head h2 { flex: 1; font-size: var(--fs-h3); font-weight: 600; }
 .modal-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; }
+.modal-text { color: var(--dim); line-height: 1.5; max-width: 60ch; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--line); }
 dialog.invite-dialog { padding: 20px; }
 dialog.invite-dialog input { width: 100%; margin-bottom: 10px; }

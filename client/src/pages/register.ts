@@ -21,7 +21,7 @@ export function registerPage(invite: string, done: () => void) {
           if (password.value !== again.value) return void (err.textContent = 'passwords do not match.')
           api.register({ username: username.value, password: password.value, invite: code.value }).then(done, (x) => (err.textContent = authMessage(x)))
         },
-      }, code, username, password, again, h('button', {}, 'register')),
+      }, code, username, password, again, h('button', { className: 'btn primary' }, 'register')),
       err,
       h('p', { className: 'dim' }, 'already have an account? ', h('a', { href: '#/login' }, 'log in')),
       h('p', { className: 'dim' }, h('a', homeLink, 'continue without an account'), ' to work locally.'))))

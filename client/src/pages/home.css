@@ -1,0 +1,121 @@
+/* Home: the studio launcher. */
+.home { flex: 1 0 auto; display: flex; }
+.home-main { flex: 1; min-width: 0; width: 100%; max-width: 1180px; margin: 0 auto; padding: 56px 40px 96px; display: flex; flex-direction: column; gap: 52px; }
+.home.with-about > .home-main { align-self: flex-start; }
+
+/* wordmark and one line about what this is */
+.home-intro { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 32px; }
+h1.home-mark { margin: 0; font-size: 84px; line-height: .78; letter-spacing: .01em; color: var(--rec); user-select: none; }
+.home-lede { flex: 1 1 360px; max-width: 58ch; padding-bottom: 4px; font-size: var(--fs-h3); line-height: 1.45; text-wrap: pretty; }
+.home-lede > span:first-child { font-weight: 500; }
+
+/* sections */
+.home-sec { display: flex; flex-direction: column; gap: 16px; }
+.sec-head { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.sec-head h2 { font-size: var(--fs-h2); }
+.sec-count { min-width: 20px; padding: 0 6px; font-size: var(--fs-xs); line-height: 18px; text-align: center; color: var(--dim); border: 1px solid var(--line); border-radius: 9px; }
+.sec-count:empty { display: none; }
+.home-sec .status:empty, .home-sec .error:empty { display: none; }
+
+/* ---------- the arrangement picture (ui/tile.ts picture()) ---------- */
+.pic {
+  --lane-h: 9px; --lane-gap: 3px;
+  position: relative; display: flex; flex-direction: column; justify-content: center; gap: var(--lane-gap);
+  height: 84px; padding: 12px; overflow: hidden;
+  background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.pic-lane { position: relative; flex: 0 1 var(--lane-h); max-height: var(--lane-h); min-height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--c) 12%, transparent); }
+/* a lane with nothing on it yet (a track ready to record): outlined in its colour, so the picture still shows it */
+.pic-lane:empty { background: color-mix(in srgb, var(--c) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 42%, transparent); }
+.start-card:hover .pic-lane:empty { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 70%, transparent); }
+.pic-lane i { position: absolute; top: 0; bottom: 0; border-radius: 2px; border-right: 1px solid var(--bg); background: color-mix(in srgb, var(--c) 82%, var(--raise)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14); }
+.pic.empty::after { content: 'empty'; align-self: center; font-size: var(--fs-xs); color: var(--muted); }
+.pic.lg { --lane-h: 26px; --lane-gap: 6px; flex: 1; height: auto; min-height: 200px; padding: 22px 20px; }
+/* bar lines behind the large picture: a quiet hint of the grid */
+.pic.lg::before {
+  content: ''; position: absolute; inset: 0 20px; pointer-events: none;
+  background: repeating-linear-gradient(to right, var(--grid-bar) 0 1px, transparent 1px 12.5%);
+}
+
+/* ---------- start something ---------- */
+.start-grid { display: grid; grid-template-columns: 1.3fr 1fr 1fr; grid-auto-rows: auto; gap: 14px; }
+.start-card {
+  display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 0;
+  padding: 0; text-align: left; white-space: normal; line-height: 1.35; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
+  transition: border-color var(--t) linear, background-color var(--t) linear;
+}
+.start-card:hover:not(:disabled) { background: var(--panel); border-color: var(--line-strong); }
+.start-card:active:not(:disabled) { background: var(--panel); }
+.start-card:hover .pic-lane i { background: var(--c); }
+.start-card .pic-lane i { transition: background-color var(--t) linear; }
+.start-card.demo { grid-row: span 2; }
+.start-text { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px 10px; }
+.start-name { display: flex; align-items: center; gap: 8px; font-size: var(--fs-h3); font-weight: 600; }
+.start-card.demo .start-name { font-size: var(--fs-h2); }
+.start-tag { padding: 0 6px; font-size: var(--fs-xs); font-weight: 500; line-height: 16px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: var(--r-sm); }
+.start-blurb { font-size: var(--fs-sm); color: var(--dim); text-wrap: pretty; }
+.start-facts { display: flex; gap: 12px; margin-top: 2px; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.start-go { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin: auto 14px 14px; padding: 4px 8px 4px 6px; border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 500; color: var(--fg); background: var(--raise); transition: background-color var(--t-fast) linear, color var(--t-fast) linear; }
+.start-card:hover .start-go { color: var(--fg); background: var(--line-strong); }
+.start-card.demo .start-go, .start-card.demo:hover .start-go { color: var(--on-accent); background: var(--accent); padding: 6px 12px 6px 10px; font-size: var(--fs); }
+.start-card.demo:hover .start-go { background: color-mix(in srgb, var(--accent) 88%, white); }
+.start-card.demo .start-text { padding: 16px 20px 14px; }
+.start-card.demo .start-go { margin: auto 20px 20px; }
+.start-card.busy { pointer-events: none; }
+.start-card.busy .start-go { opacity: .7; }
+
+/* ---------- your projects ---------- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(224px, 1fr)); gap: 14px; }
+.tiles > li.dim { grid-column: 1 / -1; }
+.tile { position: relative; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; transition: border-color var(--t) linear; }
+.tile:hover, .tile:focus-within { border-color: var(--line-strong); }
+.tile-link { display: flex; flex-direction: column; color: var(--fg); border-radius: 0; }
+.tile-link:hover { text-decoration: none; }
+.tile-link:focus-visible { outline-offset: -2px; border-radius: var(--r-md); }
+.tile-meta { display: flex; flex-direction: column; gap: 2px; padding: 10px 44px 12px 12px; min-width: 0; }
+.tile-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs); font-weight: 600; }
+.tile-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); color: var(--dim); }
+input.tile-rename { width: 100%; min-height: 0; padding: 1px 4px; margin: -2px -5px; font-weight: 600; }
+.tile-more { position: absolute; right: 8px; bottom: 12px; }
+.tile-extra { padding: 0 12px 12px; font-size: var(--fs-sm); }
+.tile-new { border-style: dashed; background: none; }
+.tile-new button { flex-direction: column; gap: 6px; width: 100%; height: 100%; min-height: 136px; color: var(--dim); font-size: var(--fs-sm); }
+.tile-new button:hover:not(:disabled) { color: var(--fg); background: none; }
+
+.tiles-empty { display: flex; flex-direction: column; gap: 6px; padding: 28px 24px; border: 1px dashed var(--line-strong); border-radius: var(--r-md); }
+.tiles-empty p:first-child { font-size: var(--fs-h3); }
+.tiles-empty .dim { font-size: var(--fs-sm); }
+
+/* nav (cloud builds) */
+.site-nav { display: flex; gap: 16px; align-items: center; padding: 12px 24px; }
+.site-nav .logo { font-size: 26px; }
+.nav-user { color: var(--dim); }
+.nav-user:hover:not(:disabled) { color: var(--fg); }
+
+@media (max-width: 900px) {
+  .start-grid { grid-template-columns: 1fr 1fr; }
+  .start-card.demo { grid-column: 1 / -1; grid-row: auto; }
+  .pic.lg { min-height: 150px; }
+}
+@media (max-width: 640px) {
+  .home-main { padding: 28px 16px 64px; gap: 36px; }
+  h1.home-mark { font-size: 60px; }
+  .home-intro { gap: 14px; }
+  .home-lede { flex-basis: 100%; font-size: var(--fs); }
+  .start-grid { gap: 10px; }
+  .start-text { padding: 10px 12px 8px; }
+  .start-go { margin: auto 12px 12px; }
+  .start-facts { gap: 8px; }
+  .pic { height: 64px; padding: 10px; }
+  .pic.lg { min-height: 132px; padding: 16px 14px; }
+  .pic.lg::before { inset: 0 14px; }
+  .start-card.demo .start-text { padding: 14px 14px 12px; }
+  .start-card.demo .start-go { margin: auto 14px 14px; }
+  .tiles { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .sec-head .import .btn span { display: none; }
+  .sec-head .import .btn { padding: 6px 8px; }
+}
+.site-nav .nav-link { color: var(--dim); }
+.site-nav .nav-link:hover:not(:disabled) { color: var(--fg); }
+.card form { gap: 10px; }

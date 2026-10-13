@@ -28,7 +28,7 @@ export function loginPage(done: () => void) {
           err.textContent = ''
           api.login({ username: username.value, password: password.value }).then(done, (x) => (err.textContent = authMessage(x)))
         },
-      }, username, password, h('button', {}, 'log in')),
+      }, username, password, h('button', { className: 'btn primary' }, 'log in')),
       err,
       h('p', { className: 'dim' }, 'invite only for now. have a code? ', h('a', { href: '#/register' }, 'register')),
       h('p', { className: 'dim' }, h('a', homeLink, 'continue without an account'), ' to work locally.'))))

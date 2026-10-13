@@ -21,11 +21,8 @@ input, textarea, .chat-log, [contenteditable] { -webkit-user-select: text; user-
   .scroll::-webkit-scrollbar-track { background: var(--panel); }
   .scroll::-webkit-scrollbar-thumb { border-width: 3px; }
 }
-nav { display: flex; gap: 20px; align-items: center; padding: 14px 24px; }
 main { width: 100%; max-width: 640px; margin: 0 auto; padding: 24px; }
 main.wide { max-width: 860px; }
-.home { flex: 1 0 auto; display: flex; } /* grows with its tallest column (the page scrolls), so the about column's tint runs the full height */
-.home > main { flex: 1; min-width: 0; align-self: flex-start; }
 .about { flex: none; width: 320px; padding: 24px; border-right: 1px solid var(--line); background: var(--panel); line-height: 1.5; }
 .about[hidden] { display: none; }
 .about h2 { margin: 0 0 8px; }
@@ -60,19 +57,6 @@ main.center { margin: auto; text-align: center; }
 .up-menu > summary { padding: 4px 10px; list-style: none; background: color-mix(in srgb, var(--bg) 70%, transparent); }
 .up-menu > summary::-webkit-details-marker { display: none; }
 .up-menu > div { top: 100%; margin-top: 0; }
-.tiles { list-style: none; padding: 0; margin: 12px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
-.tiles > li.dim { grid-column: 1 / -1; }
-.tile { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
-.tile:hover { border-color: var(--dim); }
-.tile-link { display: flex; flex-direction: column; gap: 4px; padding: 10px; color: var(--fg); }
-.tile-link .picture { height: 64px; margin-bottom: 6px; background: var(--bg); display: flex; align-items: center; justify-content: center; }
-.tile-link .picture svg { width: 100%; height: 100%; padding: 6px; }
-.tile-link strong { padding-right: 28px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tile-menu { position: absolute; right: 6px; bottom: 8px; }
-.tile-menu > summary { padding: 0 8px; list-style: none; }
-.tile-menu > summary::-webkit-details-marker { display: none; }
-.tile-menu > div { right: 0; bottom: 100%; top: auto; margin: 0 0 6px; z-index: 5; min-width: 180px; }
-.tile:has(details[open]) { z-index: 5; }
 .members { flex-basis: 100%; font-size: 13px; }
 .members .row { padding-top: 6px; }
 .hint { padding: 48px 12px; text-align: center; font-size: 13px; }
@@ -372,7 +356,6 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 /* pages: banner, small text, danger buttons */
 .top { flex: none; }
 button.danger:hover { color: var(--danger); }
-nav a.on { color: var(--fg); }
 
 /* recording */
 .rec { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--danger); }
@@ -398,11 +381,6 @@ nav a.on { color: var(--fg); }
 .lane.locked .fx { opacity: 0.6; }
 /* a muted track is dimmed through its children (dimming the lane itself would fade its background tile too) */
 .lane.muted > * { opacity: .45; }
-.tile-new { background: none; border-style: dashed; }
-.tile-new button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%; height: 100%; min-height: 128px; border: 0; background: none; color: var(--dim); font-size: 44px; line-height: 1; }
-.tile-new button:hover:not(:disabled) { color: var(--fg); }
-.tile-new button:disabled { opacity: .5; cursor: default; }
-.tile-new .small { font-size: 12px; }
 .project-name { display: block; width: 100%; height: 100%; text-align: left; font-weight: bold; font-size: 12px; border: 0; background: none; padding: 0 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .corner { display: flex; align-items: center; min-width: 0; }
 .where { flex: none; display: inline-flex; align-items: center; padding-left: 8px; }

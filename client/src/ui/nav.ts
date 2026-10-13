@@ -3,24 +3,15 @@ import { api } from '../api'
 import { h } from '../dom'
 import { homeLink } from '../router'
 import { dateOf, daysLeft } from '../format'
-import { describeError } from '../errors'
-import { PROJECT_FILE_EXT } from '../projectFile'
-import { importProjectFile } from '../transfer'
+import { icon } from '../theme/icons'
+import { popover } from './popover'
 
 /** Top bar for every page except the editor. `me` is null when working locally without an account. */
 export function nav(me: Me | null): HTMLElement {
-  const bar = h('nav', {},
-    h('a', { ...homeLink, className: 'logo' }, 'mobdaw'),
+  const bar = h('nav', { className: 'site-nav' },
+    h('a', { ...homeLink, className: 'logo', 'aria-label': 'mobdaw home' }, 'mobdaw'),
     h('span', { className: 'grow' }),
-    importButton(),
-    me ? h('details', { className: 'menu' },
-      h('summary', { className: 'dim' }, me.username),
-      h('div', {},
-        h('a', { href: '#/account' }, 'account'),
-        h('a', { href: '#/uploads' }, 'uploads'),
-        me.isAdmin ? h('a', { href: '#/admin' }, 'invites') : null,
-        h('a', { href: '#/login', onclick: () => api.logout() }, 'log out')))
-      : h('a', { href: '#/login' }, 'sign in'),
+    accountMenu(me),
   )
   const banner = !me ? null
     : me.planStatus === 'read_only' && me.retentionEndsAt ? retentionBanner(me.retentionEndsAt)
@@ -30,27 +21,18 @@ export function nav(me: Me | null): HTMLElement {
   return h('div', { className: 'top' }, bar, banner)
 }
 
-/** Opens a project file and lands in the imported local project. */
-function importButton(): HTMLElement {
-  const picker = h('input', { type: 'file', accept: `${PROJECT_FILE_EXT},application/x-mobdaw-project`, hidden: true })
-  const link = h('a', {
-    href: '#', title: 'import a project file',
-    onclick: (e: Event) => (e.preventDefault(), picker.click()),
-  }, 'import')
-  picker.onchange = async () => {
-    const file = picker.files?.[0]
-    picker.value = ''
-    if (!file) return
-    link.textContent = 'importing…'
-    try {
-      location.hash = `#/local/${(await importProjectFile(file)).id}`
-    } catch (e) {
-      alert(describeError(e))
-    } finally {
-      link.textContent = 'import'
-    }
-  }
-  return h('span', {}, link, picker)
+/** Signed in: the account's menu. Signed out: a sign-in link. */
+function accountMenu(me: Me | null): HTMLElement {
+  if (!me) return h('a', { href: '#/login', className: 'nav-link' }, 'sign in')
+  const btn = h('button', { className: 'nav-user', 'aria-haspopup': 'menu' }, icon('users'), me.username, icon('chevron-down'))
+  btn.onclick = () => popover(btn, [
+    { label: 'account', run: () => (location.hash = '#/account'), icon: 'settings' },
+    { label: 'uploads', run: () => (location.hash = '#/uploads'), icon: 'wave' },
+    ...(me.isAdmin ? [{ label: 'invites', run: () => (location.hash = '#/admin'), icon: 'users' as const }] : []),
+    'sep',
+    { label: 'log out', run: () => void api.logout().finally(() => (location.hash = '#/login')) },
+  ])
+  return btn
 }
 
 /** Shown on every page while an account is in its 30-day retention window. */
