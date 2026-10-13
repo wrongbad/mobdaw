@@ -5,14 +5,14 @@ import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
   DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, SCHEMA_VERSION, addTrack, clipsMap, devicesMap, getClips, getDevices,
-  getLanes, getNotes, getPoints, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, sweepOrphans,
+  getLanes, getNotes, getPoints, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, sweepOrphans, undoScope,
   tracksMap, metaMap, type Device,
 } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 import { CallQueue } from '../src/audio/schedule'
 import { encodeWavPlanar } from '../src/audio/wav'
 import { contentEnd } from '../src/audio/range'
-import { DRUM_KITS, EFFECT_PRESETS, INSTRUMENT_PRESETS, addDrumKit, addEffectPreset, addInstrument, applyInstrumentPreset, replaceDrumKit } from '../src/content/presets'
+import { DRUM_KITS, EFFECT_PRESETS, INSTRUMENT_PRESETS, addDrumKit, effectPreset, instrumentPreset, addEffectPreset, addInstrument, applyPreset, presetsFor } from '../src/content/presets'
 import { TEMPLATES } from '../src/content/templates'
 import { DEMO_BARS, DEMO_BPM, buildDemo } from '../src/content/demo'
 
@@ -59,16 +59,9 @@ describe('presets', () => {
     }
   })
 
-  it('helpers put presets on tracks; a kit added twice reuses its keys, replace swaps the whole kit', () => {
+  it('a kit added twice reuses its keys; effect chains go on any track', () => {
     const doc = new Y.Doc()
     const t = addTrack(doc, 'm', 'midi')
-    const inst = addInstrument(doc, t, INSTRUMENT_PRESETS[0])
-    const dev = () => devicesMap(doc).get(inst)!.toJSON() as Device
-    expect(dev().params).toEqual(INSTRUMENT_PRESETS[0].params)
-    applyInstrumentPreset(doc, inst, INSTRUMENT_PRESETS[3])
-    expect(dev().params).toEqual(INSTRUMENT_PRESETS[3].params)
-    expect(dev().name).toBe(INSTRUMENT_PRESETS[3].name)
-
     const drums = () => getDevices(doc).filter((d) => d.trackId === t && isDrum(d))
     const first = addDrumKit(doc, t, DRUM_KITS[0])
     expect(drums()).toHaveLength(DRUM_KITS[0].drums.length)
@@ -78,13 +71,65 @@ describe('presets', () => {
       if (j >= 0) expect(again[i]).toBe(first[j]) // same key: the existing drum takes the new sound
     })
     expect(drums()).toHaveLength(new Set([...DRUM_KITS[0].drums, ...DRUM_KITS[1].drums].map((d) => d.key)).size)
-    expect(drums().find((d) => d.keyLo === 36)!.params).toEqual(DRUM_KITS[1].drums.find((d) => d.key === 36)!.params)
-    replaceDrumKit(doc, t, DRUM_KITS[3])
-    expect(drums().map((d) => d.keyLo).sort()).toEqual(DRUM_KITS[3].drums.map((d) => d.key).sort())
-    expect(getDevices(doc).some((d) => d.id === inst)).toBe(true) // the synth stays
-
     const fx = addEffectPreset(doc, MASTER_TRACK, EFFECT_PRESETS.find((p) => p.devices.length > 1)!)
     expect(getDevices(doc).filter((d) => d.trackId === MASTER_TRACK).map((d) => d.id)).toEqual(fx)
+  })
+})
+
+describe('track presets', () => {
+  const ids = (doc: Y.Doc, t: string) => presetsFor(doc, t).map((p) => p.id)
+  const mine = (doc: Y.Doc, t: string) => getDevices(doc).filter((d) => d.trackId === t)
+
+  it('offers fx-only on audio tracks, synths on instrument tracks, kits on kit tracks, nothing elsewhere', () => {
+    const doc = new Y.Doc()
+    const audio = addTrack(doc, 'a', 'audio')
+    expect(ids(doc, audio)).toEqual(EFFECT_PRESETS.map((p) => p.id))
+    const synth = addTrack(doc, 's', 'midi')
+    addInstrument(doc, synth, INSTRUMENT_PRESETS[0])
+    expect(ids(doc, synth)).toEqual(INSTRUMENT_PRESETS.map((p) => p.id))
+    const kit = addTrack(doc, 'k', 'midi')
+    addDrumKit(doc, kit, DRUM_KITS[0])
+    expect(ids(doc, kit)).toEqual(DRUM_KITS.map((p) => p.id))
+    expect(ids(doc, addTrack(doc, 'e', 'midi'))).toEqual([...INSTRUMENT_PRESETS, ...DRUM_KITS].map((p) => p.id)) // no instrument yet
+    expect(ids(doc, addTrack(doc, 'x', 'soundscape'))).toEqual([])
+    const before = mine(doc, audio).length
+    applyPreset(doc, audio, INSTRUMENT_PRESETS[0].id) // the wrong kind of preset is ignored
+    applyPreset(doc, synth, EFFECT_PRESETS[0].id)
+    expect(mine(doc, audio)).toHaveLength(before)
+    expect(mine(doc, synth).every((d) => DEVICES[d.type].instrument)).toBe(true)
+  })
+
+  it('replaces the instrument and the whole chain in one undo step, and marks the track', () => {
+    const doc = new Y.Doc()
+    const t = addTrack(doc, 's', 'midi')
+    addInstrument(doc, t, instrumentPreset('organ')!)
+    addEffectPreset(doc, t, EFFECT_PRESETS[0])
+    addEffectPreset(doc, t, EFFECT_PRESETS[1])
+    const was = mine(doc, t).map((d) => d.id)
+    const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 0 })
+    applyPreset(doc, t, 'warm-pad')
+    const now = mine(doc, t)
+    expect(now.some((d) => was.includes(d.id))).toBe(false)
+    expect(now.filter((d) => DEVICES[d.type].instrument).map((d) => d.name)).toEqual(['Warm pad'])
+    expect(now.filter((d) => !DEVICES[d.type].instrument).map((d) => d.type)).toEqual(effectPreset('big-room')!.devices.map((d) => d.type))
+    expect(getTracks(doc)[0].preset).toBe('warm-pad')
+    undo.undo() // one step puts everything back
+    expect(mine(doc, t).map((d) => d.id).sort()).toEqual([...was].sort())
+    expect(getTracks(doc)[0].preset).toBeUndefined()
+    applyPreset(doc, t, 'organ') // a synth without a paired chain leaves it empty
+    expect(mine(doc, t).filter((d) => !DEVICES[d.type].instrument)).toHaveLength(0)
+  })
+
+  it('swaps a kit for a synth only through a kit track, and an audio chain wholesale', () => {
+    const doc = new Y.Doc()
+    const k = addTrack(doc, 'k', 'midi')
+    addDrumKit(doc, k, DRUM_KITS[0])
+    applyPreset(doc, k, DRUM_KITS[1].id)
+    expect(mine(doc, k).filter((d) => isDrum(d)).map((d) => d.keyLo).sort()).toEqual(DRUM_KITS[1].drums.map((d) => d.key).sort())
+    const a = addTrack(doc, 'a', 'audio')
+    addEffectPreset(doc, a, EFFECT_PRESETS[4])
+    applyPreset(doc, a, 'big-room')
+    expect(mine(doc, a).map((d) => d.type)).toEqual(effectPreset('big-room')!.devices.map((d) => d.type))
   })
 })
 

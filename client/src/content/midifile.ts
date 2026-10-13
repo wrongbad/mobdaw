@@ -15,15 +15,7 @@ import {
   DEFAULT_MIDI_BPM, DEVICES, isDrum, patternTicks, tracksMap, type Device, type MidiClip, type Note,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
-import { DRUM_KITS, GM, addDrumKit, addInstrument, instrumentPreset } from './presets'
-
-/** Whether MIDI track `trackId` is drums, from its devices and clips. */
-function isDrumTrack(trackId: string, devices: Pick<Device, 'trackId' | 'type' | 'keyLo' | 'keyHi'>[], clips: { trackId: string; kind: string; view?: string }[]): boolean {
-  const inst = devices.filter((d) => d.trackId === trackId && DEVICES[d.type]?.instrument)
-  if (inst.length && inst.every(isDrum)) return true
-  const cs = clips.filter((c) => c.trackId === trackId)
-  return cs.length > 0 && cs.every((c) => c.kind === 'midi' && c.view === 'drums')
-}
+import { DRUM_KITS, GM, addDrumKit, addInstrument, instrumentPreset, isDrumTrack } from './presets'
 
 const clampBpm = (bpm: number) => Math.min(300, Math.max(20, Math.round(bpm * 100) / 100))
 
@@ -262,7 +254,7 @@ export function playedNotes(c: Pick<MidiClip, 'lengthTicks' | 'loopTicks'>, note
 }
 
 const fileVelocity = (v: number) => clamp(Math.round(v * 127), 1, 127)
-const drumChannel = (doc: Y.Doc, trackId: string) => (isDrumTrack(trackId, getDevices(doc), getClips(doc)) ? 9 : 0)
+const drumChannel = (doc: Y.Doc, trackId: string) => (isDrumTrack(doc, trackId) ? 9 : 0)
 
 const trackName = (doc: Y.Doc, id: string) => (tracksMap(doc).get(id)?.get('name') as string | undefined) ?? 'track'
 /** The name a clip goes by: its track's. */
@@ -408,7 +400,7 @@ export function importSmf(doc: Y.Doc, smf: Smf, o: { at: number; trackId?: strin
     if (target) {
       res.into = target
       const notes = parts.flatMap((p) => p.notes).sort((a, b) => a.tick - b.tick || a.pitch - b.pitch)
-      const drums = isDrumTrack(target, getDevices(doc), getClips(doc))
+      const drums = isDrumTrack(doc, target)
       clip(target, { name: o.base, lengthTicks: Math.max(...parts.map((p) => p.lengthTicks)), notes }, drums && parts.every((p) => p.drums))
       return
     }

@@ -28,6 +28,7 @@ import type { Session } from '../project/session'
 import { chatPanel } from './chat'
 import { NO_AUTO, autoRow, automateMenu, type AutoInfo } from './automation'
 import { deviceCard } from './devices'
+import { applyPreset, presetsFor } from '../content/presets'
 import type { FilterChange, FilterMember } from './filterCurve'
 import { LOOP_COLORS, looperCard } from './loopers'
 import { drumGrid } from './drumGrid'
@@ -62,6 +63,7 @@ type Lane = {
   loopCards: Map<string, ReturnType<typeof looperCard>>; boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
   pads: Map<string, HTMLElement>
   auto: AutoSec
+  presets: { el: HTMLElement; toggle: HTMLButtonElement; grid: HTMLElement }
   loopTc: TransportControls // loops preview transport
   /** Soundscape tracks only: the source lane, which has its own time axis, scroll and zoom. */
   src: Src | null
@@ -102,6 +104,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const loopShown = new Set<string>() // looper tracks with the loopers row expanded (collapsed by default)
   const synthShown = new Set<string>() // MIDI tracks with the synth row expanded (collapsed by default)
   const autoShown = new Set<string>() // scopes (track ids, or MASTER_TRACK) with the automation section expanded (collapsed by default)
+  const presetsShown = new Set<string>() // tracks with the presets drawer expanded
   let autoLanes: AutoLane[] = [] // as of the last draw
   let autoPoints = new Map<string, Point[]>() // lane id -> its points, sorted
   let autoInfos = new Map<string, Map<string, AutoInfo>>() // owner id -> param -> what drives it
@@ -210,7 +213,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const clickBtn = h('button', { className: 'metro', disabled: readOnly, title: 'metronome: add a click track, then mute / unmute it', onclick: () => {
     const t = getTracks(doc).find((x) => x.role === 'click')
     if (t && !t.muted) { // switching it off tucks it away: every expandable lane and the editor shut
-      for (const set of [expanded, synthShown, loopShown, srcShown, autoShown]) set.delete(t.id)
+      for (const set of [expanded, synthShown, loopShown, srcShown, autoShown, presetsShown]) set.delete(t.id)
       if (editing && clipsMap(doc).get(editing)?.get('trackId') === t.id) editing = null
     }
     if (t) updateTrack(doc, t.id, { muted: !t.muted })
@@ -699,6 +702,23 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   /** The owner's name for a lane header: the device's, numbered when its chain has several of a kind. */
+  /** The presets drawer: a section like the automation one (same toggle and box), holding a wrapping grid of preset buttons. */
+  function makePresetsDrawer(id: string) {
+    const toggle = h('button', { className: 'fx-toggle on', title: 'presets', onclick: () => { presetsShown.delete(id); draw() } }, 'presets')
+    const grid = h('div', { className: 'preset-grid' })
+    return { el: h('div', { className: 'auto-section', hidden: true }, h('div', { className: 'fx-row' }, toggle, grid)), toggle, grid }
+  }
+
+  function drawPresets(l: Lane, t: Track) {
+    const list = presetsShown.has(t.id) ? presetsFor(doc, t.id) : []
+    l.presets.el.hidden = !list.length
+    l.presets.grid.replaceChildren(...list.map((p) => h('button', { className: 'preset' + (t.preset === p.id ? ' on' : ''), disabled: readOnly || locks.has(t.id), onclick: () => {
+      undo.stopCapturing()
+      applyPreset(doc, t.id, p.id)
+      undo.stopCapturing()
+    } }, p.name)))
+  }
+
   function ownerLabel(l: AutoLane, base: string, devices: Device[]) {
     if (l.kind === 'looper') return base
     const same = devices.filter((d) => d.trackId === l.scope && DEVICES[d.type]?.name === base)
@@ -804,7 +824,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     head.addEventListener('pointerdown', (e) => (menuClosed = closedBy(e)), true)
     const trackMenu = (e: MouseEvent) => {
       if (readOnly || locks.has(t.id)) return
-      popover(head, [['rename', () => rename(t.id)], ['delete track', () => void delTrack()]], [e.clientX, e.clientY])
+      popover(head, [
+        ['rename', () => rename(t.id)],
+        ...(presetsFor(doc, t.id).length ? [['presets', () => { presetsShown.add(t.id); draw() }] as [string, () => void]] : []),
+        ['delete track', () => void delTrack()],
+      ], [e.clientX, e.clientY])
     }
     head.addEventListener('click', (e) => {
       if (!menuClosed && !(e.target as HTMLElement).closest('button, input')) trackMenu(e)
@@ -873,10 +897,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const loopRow = h('div', { className: 'fx-row', hidden: true }, h('div', { className: 'fx-head' }, loopMore, loopTc.el), loops)
     const row = h('div', { className: 'lane-row' }, head, body)
     const auto = makeAutoSection(t.id)
+    const presets = makePresetsDrawer(t.id)
     l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el), row, body, name, mute, solo, record, listen, meter, gain, more,
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, name, mute, solo, record, listen, meter, gain, more,
       fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
-      pads: new Map(), auto, loopTc, src,
+      pads: new Map(), auto, presets, loopTc, src,
     }
     lanes.set(t.id, l)
     return l
@@ -1354,6 +1379,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       l.solo.classList.toggle('on', t.soloed)
       if (!inUse(l.gain)) l.gain.value = String(gainToPos(t.gain))
       drawFx(l, t, devices)
+      drawPresets(l, t)
       drawLoopers(l, t, loopers)
       drawPads(l, t, pads)
       if (l.src) {
