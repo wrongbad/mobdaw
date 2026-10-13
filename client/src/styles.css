@@ -13,7 +13,6 @@ input, textarea, .chat-log, [contenteditable] { -webkit-user-select: text; user-
 :root {
   --danger: var(--rec); --divider: var(--line-strong); --switch: var(--accent); --switch-track: color-mix(in srgb, var(--accent) 28%, var(--bg));
   --clip: color-mix(in srgb, var(--accent) 22%, var(--raise)); --clip-sel: color-mix(in srgb, var(--accent) 36%, var(--raise));
-  --clip-midi: color-mix(in srgb, var(--tc-1) 22%, var(--raise)); --clip-midi-sel: color-mix(in srgb, var(--tc-1) 36%, var(--raise));
 }
 /* the timeline's horizontal scrollbar stays visible and roomy (a plain mouse has no sideways wheel); the vertical one stays hidden */
 @supports selector(::-webkit-scrollbar) {
@@ -164,8 +163,12 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 
 .clip {
   position: absolute; top: 0; bottom: 0; padding: 2px 6px; overflow: hidden; white-space: nowrap; font-size: 12px;
-  background: var(--clip); cursor: grab; user-select: none;
+  /* a name strip in the track colour over a body tinted with it (--tc is set on the lane; the accent when there is none) */
+  --clip: color-mix(in srgb, var(--tc, var(--accent)) 22%, var(--raise)); --clip-sel: color-mix(in srgb, var(--tc, var(--accent)) 32%, var(--raise));
+  --clip-head: color-mix(in srgb, var(--tc, var(--accent)) 50%, var(--raise));
+  background: linear-gradient(var(--clip-head), var(--clip-head)) top / 100% 15px no-repeat, var(--clip); cursor: grab; user-select: none;
 }
+.clip:hover { --clip: color-mix(in srgb, var(--tc, var(--accent)) 27%, var(--raise)); }
 .clip::before, .clip::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; z-index: 1; cursor: inherit; }
 .clip::after { right: 0; }
 .clip::before { left: 0; }
@@ -179,14 +182,12 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .clip:hover[data-zone=loop]::after { background-position: right top; background-size: 2px 50%; }
 .clip.looping:hover[data-zone=loop]::after, .clip.editing:hover[data-zone=loop]::after { background-size: 2px 100%; }
 /* a dim loop glyph in the top-right corner while hovered says the upper right edge loops */
-.clip.loopable:not(.editing):not(.looping):not(.forever):hover { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M8.5 5a3.5 3.5 0 1 1-1.3-2.7M8 .8v2H6' fill='none' stroke='%238f8b84' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px top 3px; }
-.clip.sel { background: var(--clip-sel); box-shadow: inset 0 0 0 1px var(--accent); }
+.clip.loopable:not(.editing):not(.looping):not(.forever):hover { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M8.5 5a3.5 3.5 0 1 1-1.3-2.7M8 .8v2H6' fill='none' stroke='%23ebe6dc' stroke-opacity='.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"), linear-gradient(var(--clip-head), var(--clip-head)); background-repeat: no-repeat; background-position: right 10px top 3px, top; background-size: auto, 100% 15px; }
+.clip.sel { --clip: var(--clip-sel); --clip-head: color-mix(in srgb, var(--tc, var(--accent)) 66%, var(--raise)); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .clip.unplayable { opacity: 0.55; }
-.clip .wave { position: absolute; top: 0; height: 100%; color: var(--accent); opacity: .75; pointer-events: none; }
+.clip .wave { position: absolute; top: 0; height: 100%; color: var(--tc, var(--accent)); opacity: .92; pointer-events: none; }
 .clip .label { position: relative; }
-.clip.midi { background: var(--clip-midi); }
-.clip.midi.sel { background: var(--clip-midi-sel); box-shadow: inset 0 0 0 1px var(--tc-1); }
-.clip .mark { position: absolute; min-width: 2px; height: 2px; background: var(--tc-1); pointer-events: none; }
+.clip .mark { position: absolute; min-width: 2px; height: 2px; background: var(--tc, var(--tc-1)); pointer-events: none; }
 .clip .mark.rep { opacity: .35; }
 .clip .seams { position: absolute; top: 0; bottom: 0; color: var(--accent); opacity: .3; pointer-events: none; background-image: linear-gradient(to right, currentColor 1px, transparent 1px); background-repeat: repeat-x; }
 /* the first seam's lower half lights up when it is the pass handle under the pointer */
@@ -318,8 +319,7 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 
 /* soundscape: pad stripes on the main lane, and a source lane in its own time world below it */
 /* soundscape: the main lane is an ordinary blank lane; regions are clip-styled blocks, and the source lane below has its own time world */
-.clip.region { background: color-mix(in srgb, var(--accent) 20%, var(--bg)); color: var(--dim); }
-.clip.region.sel { background: color-mix(in srgb, var(--accent) 36%, var(--bg)); }
+.clip.region { color: var(--fg); }
 /* The source lane is opaque and above the playhead overlay: the timeline's playhead means nothing in source time. */
 .src-row { position: relative; z-index: 2; background: var(--lane); border-top: 1px solid var(--line); }
 .src-head { padding: 0; gap: 0; justify-content: flex-start; align-items: stretch; }
@@ -436,7 +436,7 @@ button.danger:hover { color: var(--danger); }
 .pedal-st { font-size: 11px; color: var(--faint); cursor: default; white-space: nowrap; }
 .pedal-st.rec { color: var(--danger); }
 .pedal-row { margin-bottom: 6px; }
-.clip.live-loop { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); pointer-events: none; z-index: 1; }
+.clip.live-loop { --clip: color-mix(in srgb, var(--tc, var(--accent)) 16%, var(--bg)); --clip-head: color-mix(in srgb, var(--tc, var(--accent)) 40%, var(--bg)); pointer-events: none; z-index: 1; }
 .clip.live-loop.forever { background-image: linear-gradient(to right, transparent calc(100% - 24px), var(--bg)); }
 /* presets drawer: a column per group (heading over plain-text buttons), side by side, scrolling sideways when narrow */
 .preset-grid { display: flex; flex: 1; gap: 24px; padding: 6px 8px; align-items: flex-start; overflow-x: auto; min-width: 0; }
