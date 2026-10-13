@@ -206,8 +206,31 @@ fast random reads into multi-GB files. Downloads from S3 are streamed into OPFS.
   be slow. Recursive state (filters, compressor, DC blockers, reverb and delay buffers) is flushed
   with `flush_denormal` (`if x.abs() < 1e-20 { 0.0 }`): once per block for filter and detector states
   (every 16 samples inside the per-sample `Svf::process`), and on write for values stored in delay lines.
-- **Summing** happens in f32. The master bus has no limiter by default; it shows a clip
-  indicator and peak/RMS meters, sent to the UI at 30 Hz.
+- **Summing** happens in f32. The master bus has no limiter by default.
+- **Meters:** post-fader peaks (linear `max |x|` per channel) for every track and the master, accumulated in the
+  render loop and read (and reset) by the worklet about 30 times a second (`engine_meters_read`, docs/engine-api.md).
+  - Where: a track's peak is taken in its gain/pan loop, on the very values it adds to the master sum, so it costs no
+    extra pass; the master's after the global fx chain. A sleeping track does no work and reads 0.
+  - How: the max runs over the bits of `|x|` as `u32` (non-negative floats order like their bit patterns), because an
+    integer max reduction vectorizes in wasm and a float one does not without fast-math (dsp.md §2). Measured in wasm:
+    about 0.4 ns per stereo frame per sounding track (0.002 % of a core at 48 kHz), nothing for sleeping ones.
+  - Peaks only, no RMS: the UI does decay and hold. RMS would need a per-sample square and sum per track.
+  - The worklet stops posting while everything reads 0 (one all-zero message first), so a silent project costs one
+    wasm call per ~1600 frames.
+- **Transport cycle** (`engine_set_loop`, the doc's `meta.loop`): the engine wraps from `end` to `start` inside
+  `engine_process`, splitting the block at the exact sample, rather than the host seeking between blocks.
+  - Why in the engine: the host can only act between blocks, so a host-side seek would land up to 127 samples late
+    and jitter every pass. An offline bounce of a cycle, and the tests, get the same wrap for free.
+  - The wrap is a seek for the stateless parts (clips, lanes, pads), and releases clip notes, whose note-offs are
+    scheduled in absolute timeline samples and would never come after the clock jumps back. Live keys and effect tails
+    carry on: a reverb rings across the wrap as it would across a seek, so a pass is not bit-identical to the first one
+    while tails from the previous pass are still sounding.
+  - The worklet cuts its blocks at the cycle end as well, so scheduled calls (`callAt`) and the position report see the
+    wrap; the bridge's clock wraps its extrapolated position the same way, so the playhead wraps without waiting for a
+    report.
+  - Not while recording: a take is one continuous stretch of the timeline (§9.1), so the bridge turns the cycle off for
+    the take (the Recorder reports start and end) and the worklet holds it off while capture is armed. Looped
+    (take-per-pass) recording is out of scope.
 
 ### 6.3 State and real-time safety
 - The engine stores tracks, clips, devices and other entities in **arenas indexed by `u32`
@@ -293,7 +316,8 @@ the take only when the person who recorded it chooses to.
 - **● (next to play, or shift+space) records.** Playback and capture start together from the
   playhead; pressed while playing, capture starts there (punch in). Plain play never records.
 - **Stop ends the take.** It becomes an audio clip on the armed track, as one undo step.
-- **A take is one continuous stretch of the timeline.** Seeking is ignored while recording,
+- **A take is one continuous stretch of the timeline.** The transport cycle is suspended while recording (§6.2),
+  seeking is ignored while recording,
   and the worklet ends capture if the engine position ever jumps (or the transport stops), so
   audio can't land in the wrong place.
 - **Length limit:** a take stops itself just under the playback limit (`PLAYBACK_MAX_BYTES`,

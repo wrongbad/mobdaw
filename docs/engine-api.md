@@ -1,4 +1,4 @@
-# Engine API contract (milestone 2 + slices of 4 and 6)
+# Engine API contract (milestone 2 + slices of 4 and 6, plus meters and the cycle)
 
 This is the exact interface between `engine.wasm` (Rust) and the TS host and bridge.
 Both sides implement against this file. Any change to it must be made here first.
@@ -32,9 +32,36 @@ engine_stop(e)                          // stop; voices release; position stays
 engine_seek(e, pos: f64)                // works while playing or stopped
 engine_position(e) -> f64               // current transport sample position
 engine_is_playing(e) -> u32
+engine_set_loop(e, start: f64, end: f64, on: u32)   // transport cycle; on = 0 turns it off
 ```
+- **Cycle (`engine_set_loop`).** While playing with `on` = 1 and `end > start`, when the position reaches `end` the
+  transport continues from `start` on exactly that sample: `engine_process` renders the block in pieces, up to `end` and
+  then on from `start` (as often as the block crosses `end`, so a cycle shorter than a block works). The position never
+  reads `end` or beyond while the cycle runs. Only *reaching* `end` wraps: a playhead already at or past `end` when the
+  cycle is set (or after a play or seek there) plays on. `end <= start` is off.
+- **The wrap is a seek for stateless content.** Clips, automation, LFO lanes, pads (loopers restart, as at any jump) and
+  MIDI notes (those at `start` fire on its first sample) render as if playback had started at `start`. Sounding clip
+  notes are released at the wrap (their scheduled note-offs lie in the old timeline); held live keys (`engine_note_live`)
+  and drum tails keep sounding, and effect tails ring on across it.
+- Recording a take with the cycle on is not supported: the bridge sends the cycle off while a take records and back
+  when it ends, and the worklet holds it off while capture is armed (see `record` below).
 - The M1 test-voice functions (`engine_set_param`) may stay for `#/engine-test`.
 - The test voice is only mixed in while its gate is on.
+
+## Meters
+```
+engine_meters_read(e) -> u32        // fills the meter buffer, resets the peaks, returns the number of tracks
+engine_meters_ptr(e) -> *const f32  // the meter buffer: 2 + 3 * tracks f32
+```
+- **What is measured:** the post-fader peak, `max |x|` (linear, 1.0 = full scale, may exceed 1) per channel since the last
+  read: for each track its output after its device chain, gain, pan, mute and solo (exactly what it adds to the master
+  sum), and for the master the final output (after the global fx chain). A muted, silenced or sleeping track reads 0.
+- **Layout** after a read: `[master L, master R, h0, L0, R0, h1, L1, R1, ...]`, one triple per track in handle order.
+  `h` is the track handle stored as the bits of a `u32` (read it through a `Uint32Array` view on the same address).
+- Reading resets every peak to 0. `engine_process` never allocates for meters; the buffer is resized only by
+  structural track calls, so re-read the pointer after each `engine_meters_read` (and re-wrap after `memory.grow`).
+  The shared reader is `readMeters` in `client/src/audio/meters.ts`.
+- Decay, peak hold and dB scaling are the UI's.
 
 ## Live notes
 ```
@@ -467,6 +494,11 @@ decay envelope → gain. A one-shot.
 - Allocation: the message handler allocates (the queue entry); the render path only reads the head of the queue.
 - The queue logic is `client/src/audio/schedule.ts` (`CallQueue`), shared with the tests. `EngineHost.callAt(at, fn, args)`.
 
+- **With the cycle on**, the processor also cuts a block at the cycle's end (it watches `engine_set_loop` calls), so
+  after the wrap the queue sees the position at `start`: a call due early in the next pass runs on its exact sample.
+  Positions are timeline samples, not passes: a call whose `at` lies behind the playhead runs at once (it does not wait
+  for the next pass), and one beyond `end` waits until a seek or the cycle being turned off lets the position reach it.
+
 `{ type: 'callAtClear' }`
 - Drops the scheduled calls that have not run yet (`EngineHost.clearScheduled()`).
 
@@ -476,14 +508,22 @@ decay envelope → gain. A one-shot.
   engine, before the block is rendered. Capture, and the live writes, end at a transport jump or stop, as always. The live
   source is not finalized by the worklet (the bridge does that when the take is bound to its sample). `live` of 0 or absent
   is the old behaviour.
+- While capture is armed (from `on: true` until `on: false`) the processor keeps the engine's cycle off, whatever
+  `engine_set_loop` calls arrive meanwhile, and restores the last one afterwards.
 
 ## Processor → main
 `{ type: 'pos', pos: number, frame: number, playing: boolean }`, sent about 30 times a second while
-playing, and once after stop or seek. `frame` is the context frame (`currentFrame` clock) at which the engine stood at
+playing, once after stop or seek, and at every cycle wrap (with `pos` = the cycle start). `frame` is the context frame (`currentFrame` clock) at which the engine stood at
 `pos`, so a time on the audio clock (e.g. `AudioContext.getOutputTimestamp()`) can be placed on the timeline.
 
 `{ type: 'recstart', pos: number }`: capture began; `pos` is the timeline sample of the first captured frame (the live source's
 frame 0). `{ type: 'rec', channels, frames, final }`: a ~1 s chunk of the take, transferred.
+
+`{ type: 'meters', master: [l, r], tracks: number[] }`: the meters (`engine_meters_read`), `tracks` flat as
+`[handle, l, r, ...]`, about 30 times a second whether or not the transport plays (live notes and monitoring sound
+while stopped). When every peak is 0 one all-zero message is sent, then none until something sounds again.
+`EngineHost.onmeters`; `Playback.onmeters` maps the handles to doc track ids:
+`{ master: [l, r], tracks: Map<trackId, [l, r]> }`.
 
 `{ type: 'preview', h: number, pos: number, playing: boolean }`: the same for each preview, about 30
 times a second while it plays, and once after it is played, stopped or seeked.
