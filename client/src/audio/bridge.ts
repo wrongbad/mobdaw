@@ -4,7 +4,7 @@
 import * as Y from 'yjs'
 import {
   KEY_MAX, KEY_MIN, LFO_DEFAULTS, foreverSamples, foreverTicks, isForever, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
-  getLoop, looperParamDef, loopersMap, metaMap, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, tracksMap,
+  looperParamDef, loopersMap, metaMap, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, tracksMap,
   type AudioClip, type Clip, type Device, type Lane, type Looper, type MidiClip, type Pad, type Note, type ParamTarget, type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
 import type { MetersMessage } from './meters'
@@ -166,22 +166,23 @@ export class Bridge {
     watch(lanesMap(doc), dirtyIds('lane'))
     watch(pointsMap(doc), dirtyIds('point'))
     watch(samplesMap(doc), () => [...this.wanted].forEach((h) => this.wantSource(h)))
-    const onMeta = (ev: Y.YMapEvent<unknown>) => ev.keysChanged.has('loop') && this.syncLoop()
-    metaMap(doc).observe(onMeta)
-    this.unobserve.push(() => metaMap(doc).unobserve(onMeta))
     this.clock = new Clock(rate, now)
     this.syncAll()
+  }
+
+  // --- transport cycle
+  private loopRegion: { start: number; end: number; on: boolean } | null = null
+  /**
+   * Set the transport cycle (`engine_set_loop`). Not stored in the doc; nothing calls it yet. While a take is recorded the
+   * cycle is sent off and comes back when recording ends (a take is one continuous stretch of the timeline).
+   */
+  setCycle(start: number, end: number, on: boolean) {
+    this.loopRegion = { start, end, on }
     this.syncLoop()
   }
 
-  // --- transport cycle (meta.loop)
-  /**
-   * Send the doc's loop region to the engine (`engine_set_loop`) when it changes. While a take is recorded the cycle is
-   * sent off, and it comes back when recording ends (looped recording is not supported: a take is one continuous
-   * stretch of the timeline, and the worklet ends capture at any jump).
-   */
   private syncLoop() {
-    const l = getLoop(this.doc)
+    const l = this.loopRegion
     const on = !!l?.on && !this.recording
     this.clock.loop = on ? { start: l!.start, end: l!.end } : null
     const args = on ? [l!.start, l!.end, 1] : [0, 0, 0]

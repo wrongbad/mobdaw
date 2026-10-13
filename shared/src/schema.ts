@@ -35,7 +35,7 @@ export const LOOP_CUTOFF_MIN = 200
 export const LOOP_CUTOFF_MAX = 20000
 /** `role: 'click'` marks the metronome's track: it ignores other tracks' solo (still audible), and its own mute counts. */
 export type TrackRole = 'click'
-export type Track = { id: string; name: string; kind: TrackKind; order: number; gain: number; pan: number; muted: boolean; soloed: boolean; role?: TrackRole }
+export type Track = { id: string; name: string; kind: TrackKind; order: number; gain: number; pan: number; muted: boolean; soloed: boolean; role?: TrackRole; color?: number }
 /** 0 equal-power, 1 linear, 2 s-curve */
 export type FadeShape = 0 | 1 | 2
 /**

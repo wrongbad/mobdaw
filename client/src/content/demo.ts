@@ -8,7 +8,7 @@
 //   bars 29-32  outro   A's chords once more, resolving to Fmaj9; the drums thin out and the master reverb opens up
 // The loop region (off) covers A and A', bars 5-20. The piano's voicings move by step from chord to chord.
 import type * as Y from 'yjs'
-import { DELAY, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum, setLoop } from '@mobdaw/shared'
+import { DELAY, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum } from '@mobdaw/shared'
 import { MASTER_TRACK, automate, barPos, clip, initProject, rng, track, type ClipWriter, type Song } from './compose'
 import { GM, addDrumKit, addEffectPreset, addInstrument, drumKit, effectPreset, instrumentPreset } from './presets'
 
@@ -80,8 +80,6 @@ export function buildDemo(doc: Y.Doc) {
     writeKeys(s, keys, pad, human)
     writeLead(s, lead, human, nudge)
     writeDust(s, dust, r)
-
-    setLoop(doc, { start: barPos(s, 4), end: barPos(s, 20), on: false })
   })
 }
 

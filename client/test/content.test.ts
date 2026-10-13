@@ -4,8 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, SCHEMA_VERSION, TRACK_COLORS, addTrack, clipsMap, devicesMap, getClips, getDevices,
-  getLanes, getLoop, getNotes, getPoints, getTempo, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, samplesPerBar, sweepOrphans,
+  DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, SCHEMA_VERSION, addTrack, clipsMap, devicesMap, getClips, getDevices,
+  getLanes, getNotes, getPoints, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, sweepOrphans,
   tracksMap, metaMap, type Device,
 } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
@@ -106,18 +106,16 @@ describe('templates', () => {
       const meta = metaMap(doc)
       expect(meta.get('sampleRate')).toBe(SR)
       expect(meta.get('schemaVersion')).toBe(SCHEMA_VERSION)
-      expect(meta.get('bpm')).toBeTypeOf('number')
-      expect(meta.get('beatsPerBar')).toBe(4)
       const tracks = getTracks(doc)
       expect(tracks.length).toBeGreaterThan(0)
       for (const tr of tracks) {
         expect(tr.color).toBeTypeOf('number')
-        expect(tr.color! >= 0 && tr.color! < TRACK_COLORS.length).toBe(true)
+        expect(tr.color! >= 0 && tr.color! < 8).toBe(true)
       }
       for (const d of getDevices(doc)) inRange(d.type, d.params)
-      const bpm = getTempo(doc).bpm
       const clips = new Map(getClips(doc).map((c) => [c.id, c]))
-      for (const c of clips.values()) if (c.kind === 'midi') expect(c.bpm).toBe(bpm)
+      const bpms = new Set([...clips.values()].flatMap((c) => (c.kind === 'midi' ? [c.bpm] : [])))
+      expect(bpms.size).toBeLessThanOrEqual(1) // every MIDI clip carries the one tempo of the template
       for (const n of getNotes(doc)) {
         const c = clips.get(n.clipId)
         expect(c?.kind).toBe('midi')
@@ -134,15 +132,12 @@ describe('templates', () => {
     })
   }
 
-  it('the demo is ~32 bars with a loop region, automation and a master chain', () => {
+  it('the demo is ~32 bars with automation and a master chain', () => {
     const doc = new Y.Doc()
     buildDemo(doc)
-    expect(getTempo(doc)).toEqual({ bpm: DEMO_BPM, beatsPerBar: 4 })
-    const bar = samplesPerBar(getTempo(doc), SR)
+    const bar = (4 * 60 * SR) / DEMO_BPM
+    expect(getClips(doc).every((c) => c.kind !== 'midi' || c.bpm === DEMO_BPM || getTracks(doc).find((t) => t.id === c.trackId)?.role === 'click')).toBe(true)
     expect(Math.round(contentEnd(doc, SR) / bar)).toBe(DEMO_BARS)
-    const loop = getLoop(doc)!
-    expect(loop.on).toBe(false)
-    expect(loop.end).toBeGreaterThan(loop.start)
     expect(getLanes(doc).length).toBeGreaterThanOrEqual(1)
     expect(getDevices(doc).filter((d) => d.trackId === MASTER_TRACK).length).toBeGreaterThanOrEqual(2)
   })
@@ -221,7 +216,7 @@ describe('demo render', () => {
   it('renders a balanced, unclipped mix with no dropouts', async () => {
     const doc = new Y.Doc()
     buildDemo(doc)
-    const bar = samplesPerBar(getTempo(doc), SR)
+    const bar = (4 * 60 * SR) / DEMO_BPM
     const frames = Math.ceil(DEMO_BARS * bar + 3 * SR)
     const [L, R] = await render(doc, frames)
 

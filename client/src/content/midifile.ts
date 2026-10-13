@@ -11,12 +11,21 @@
 // has no clips yet); later tempo changes are dropped, which makes a file with tempo changes play at a steady tempo.
 // Time signatures are read as quarter-note beats per bar (6/8 → 3, 12/8 → 6; odd eighths round).
 import {
-  DEFAULT_PPQ, FINNWAVE, addDevice, addMidiClip, addNote, addTrack, clampBpm, getClips, getDevices, getNotes, getSampleRate, getTempo, getTracks,
-  patternTicks, samplesPerBar, setBeatsPerBar, setProjectTempo, tracksMap, type MidiClip, type Note,
+  DEFAULT_PPQ, FINNWAVE, addDevice, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getSampleRate, getTracks,
+  DEFAULT_MIDI_BPM, DEVICES, isDrum, patternTicks, tracksMap, type Device, type MidiClip, type Note,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
-import { isDrumTrack } from '../studio/arrange/kinds'
 import { DRUM_KITS, GM, addDrumKit, addInstrument, instrumentPreset } from './presets'
+
+/** Whether MIDI track `trackId` is drums, from its devices and clips. */
+function isDrumTrack(trackId: string, devices: Pick<Device, 'trackId' | 'type' | 'keyLo' | 'keyHi'>[], clips: { trackId: string; kind: string; view?: string }[]): boolean {
+  const inst = devices.filter((d) => d.trackId === trackId && DEVICES[d.type]?.instrument)
+  if (inst.length && inst.every(isDrum)) return true
+  const cs = clips.filter((c) => c.trackId === trackId)
+  return cs.length > 0 && cs.every((c) => c.kind === 'midi' && c.view === 'drums')
+}
+
+const clampBpm = (bpm: number) => Math.min(300, Math.max(20, Math.round(bpm * 100) / 100))
 
 /** A note in file ticks; velocity 1..127; channel 0..15 (9 is GM drums). */
 export type SmfNote = { tick: number; dur: number; pitch: number; velocity: number; channel: number }
@@ -256,8 +265,8 @@ const fileVelocity = (v: number) => clamp(Math.round(v * 127), 1, 127)
 const drumChannel = (doc: Y.Doc, trackId: string) => (isDrumTrack(trackId, getDevices(doc), getClips(doc)) ? 9 : 0)
 
 const trackName = (doc: Y.Doc, id: string) => (tracksMap(doc).get(id)?.get('name') as string | undefined) ?? 'track'
-/** The name a clip goes by: its own, else its track's. */
-export const clipName = (doc: Y.Doc, c: MidiClip) => c.name?.trim() || trackName(doc, c.trackId)
+/** The name a clip goes by: its track's. */
+export const clipName = (doc: Y.Doc, c: MidiClip) => trackName(doc, c.trackId)
 
 /** One MIDI clip as a song: the clip's ppq and bpm, the project's meter, one track. */
 export function clipToSong(doc: Y.Doc, clipId: string): SmfSong | null {
@@ -266,7 +275,7 @@ export function clipToSong(doc: Y.Doc, clipId: string): SmfSong | null {
   const notes = playedNotes(c, getNotes(doc).filter((n) => n.clipId === c.id))
   const name = clipName(doc, c)
   return {
-    ppq: c.ppq, bpm: c.bpm, beatsPerBar: getTempo(doc).beatsPerBar, name,
+    ppq: c.ppq, bpm: c.bpm, beatsPerBar: 4, name,
     tracks: [{ name, channel: drumChannel(doc, c.trackId), notes: notes.map((n) => ({ tick: n.tick, dur: n.durTicks, pitch: n.pitch, velocity: fileVelocity(n.velocity) })) }],
   }
 }
@@ -277,10 +286,12 @@ export function clipToSong(doc: Y.Doc, clipId: string): SmfSong | null {
  */
 export function projectToSong(doc: Y.Doc, name: string): SmfSong {
   const rate = getSampleRate(doc)
-  const { bpm, beatsPerBar } = getTempo(doc)
+  const beatsPerBar = 4
   const ppq = DEFAULT_PPQ
   const clips = getClips(doc)
   const notes = getNotes(doc)
+  // the song tempo is the first MIDI clip's (the file has one tempo; clips at other tempos are scaled onto it)
+  const bpm = clampBpm(clips.filter((c) => c.kind === 'midi' && tracksMap(doc).get(c.trackId)?.get('role') !== 'click').sort((a, b) => a.start - b.start).map((c) => (c as MidiClip).bpm)[0] ?? DEFAULT_MIDI_BPM)
   const tracks: SmfSong['tracks'] = []
   for (const t of getTracks(doc).sort((a, b) => a.order - b.order)) {
     if (t.kind !== 'midi' || t.role === 'click') continue
@@ -369,23 +380,28 @@ export function importSmf(doc: Y.Doc, smf: Smf, o: { at: number; trackId?: strin
   const res: ImportResult = { tracks: [], clips: [], adopted: false, into: null }
   const click = new Set(getTracks(doc).filter((t) => t.role === 'click').map((t) => t.id))
   const target = o.trackId && tracksMap(doc).get(o.trackId)?.get('kind') === 'midi' && !click.has(o.trackId) ? o.trackId : null
+  const tempo = { bpm: DEFAULT_MIDI_BPM, beatsPerBar: 4 }
+  let adopted = false
   doc.transact(() => {
     if (!getClips(doc).some((c) => !click.has(c.trackId))) {
       const t0 = smf.tempos.find((t) => t.tick === 0) ?? smf.tempos[0]
       const m0 = smf.meters.find((m) => m.tick === 0) ?? smf.meters[0]
-      if (t0) setProjectTempo(doc, clampBpm(t0.bpm))
-      if (m0) setBeatsPerBar(doc, beatsPerBarOf(m0))
-      res.adopted = !!(t0 || m0)
+      if (t0) tempo.bpm = clampBpm(t0.bpm)
+      if (m0) tempo.beatsPerBar = beatsPerBarOf(m0)
+      adopted = !!(t0 || m0)
+    } else {
+      // the music already there sets the tempo: the first MIDI clip's (the file's own tempo is not used)
+      const first = (getClips(doc).filter((c) => c.kind === 'midi' && !click.has(c.trackId)) as MidiClip[]).sort((a, b) => a.start - b.start)[0]
+      if (first) tempo.bpm = first.bpm
     }
-    const tempo = getTempo(doc)
     const rate = getSampleRate(doc)
-    const bar = samplesPerBar(tempo, rate)
+    const bar = (tempo.beatsPerBar * 60 * rate) / tempo.bpm
     const start = Math.max(0, Math.round(Math.round(o.at / bar) * bar))
     const ppq = DEFAULT_PPQ
     const parts = planImport(smf, { ppq, beatsPerBar: tempo.beatsPerBar })
     if (!parts.length) return
     const clip = (trackId: string, p: Pick<ImportPart, 'name' | 'lengthTicks' | 'notes'>, drums: boolean) => {
-      const id = addMidiClip(doc, { trackId, start, bpm: tempo.bpm, ppq, lengthTicks: p.lengthTicks, name: p.name, ...(drums ? { view: 'drums' as const } : {}) })
+      const id = addMidiClip(doc, { trackId, start, bpm: tempo.bpm, ppq, lengthTicks: p.lengthTicks, ...(drums ? { view: 'drums' as const } : {}) })
       for (const n of p.notes) addNote(doc, { clipId: id, ...n })
       res.clips.push(id)
     }
@@ -409,6 +425,7 @@ export function importSmf(doc: Y.Doc, smf: Smf, o: { at: number; trackId?: strin
       clip(id, { ...p, name }, p.drums)
     })
   })
+  res.adopted = adopted
   return res
 }
 

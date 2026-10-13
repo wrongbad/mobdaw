@@ -7,7 +7,6 @@ import { addAudioClip, addClickTrack, addDevice, addDrum, addLane, addMidiClip, 
 import { Bridge } from '../src/audio/bridge'
 import { CallQueue } from '../src/audio/schedule'
 import { readMeters } from '../src/audio/meters'
-import { setLoop } from '@mobdaw/shared'
 
 const SR = 48000
 const wasm = readFileSync(new URL('../src/audio/wasm/engine.wasm', import.meta.url))
@@ -284,7 +283,7 @@ describe('bridge + real engine.wasm', () => {
     const bridge = new Bridge(doc, sink, async () => [click], SR)
     await tick()
     updateTrack(doc, t, { pan: -1 })
-    setLoop(doc, { start: 1000, end: 1777, on: true })
+    bridge.setCycle(1000, 1777, true)
     bridge.play(900)
     const l = samples(4000)
     const at = [...l.keys()].filter((i) => l[i] !== 0)

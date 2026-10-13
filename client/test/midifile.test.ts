@@ -1,5 +1,5 @@
 import {
-  FINNWAVE, LOFI_DRUM, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getTempo, getTracks, metaMap, samplesPerBar, type MidiClip,
+  FINNWAVE, LOFI_DRUM, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getTracks, metaMap, type MidiClip,
 } from '@mobdaw/shared'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
@@ -8,10 +8,9 @@ import {
 } from '../src/content/midifile'
 
 const RATE = 48000
-function blank(bpm = 120) {
+function blank() {
   const doc = new Y.Doc()
   metaMap(doc).set('sampleRate', RATE)
-  metaMap(doc).set('bpm', bpm)
   return doc
 }
 
@@ -93,20 +92,20 @@ describe('clips to files', () => {
     expect(notes.map((n) => [n.tick, n.durTicks])).toEqual([[0, 960], [960, 960], [1920, 960], [2880, 960]])
   })
   it('exports a clip and the project (click track and audio left out)', () => {
-    const doc = blank(100)
+    const doc = blank()
     const piano = addTrack(doc, 'piano', 'midi')
     const click = addTrack(doc, 'click', 'midi', undefined, 'click')
     addTrack(doc, 'vox', 'audio')
-    const c1 = addMidiClip(doc, { trackId: piano, start: 0, bpm: 100, ppq: 480, lengthTicks: 1920, name: 'intro' })
+    const c1 = addMidiClip(doc, { trackId: piano, start: 0, bpm: 100, ppq: 480, lengthTicks: 1920 })
     addNote(doc, { clipId: c1, tick: 0, durTicks: 480, pitch: 60, velocity: 0.5 })
-    const c2 = addMidiClip(doc, { trackId: piano, start: Math.round(samplesPerBar(getTempo(doc), RATE)), bpm: 100, ppq: 960, lengthTicks: 3840 })
+    const c2 = addMidiClip(doc, { trackId: piano, start: Math.round((4 * 60 * RATE) / 100), bpm: 100, ppq: 960, lengthTicks: 3840 })
     addNote(doc, { clipId: c2, tick: 960, durTicks: 960, pitch: 67, velocity: 1 })
     const ck = addMidiClip(doc, { trackId: click, start: 0, bpm: 100, ppq: 960, lengthTicks: 3840 })
     addNote(doc, { clipId: ck, tick: 0, durTicks: 100, pitch: 76, velocity: 1 })
 
     const clip = parseSmf(writeSmf(clipToSong(doc, c1)!))
     expect(clip.ppq).toBe(480)
-    expect(clip.title).toBe('intro')
+    expect(clip.title).toBe('piano')
     expect(clip.parts[0].notes).toEqual([{ tick: 0, dur: 480, pitch: 60, velocity: 64, channel: 0 }])
 
     const all = parseSmf(writeSmf(projectToSong(doc, 'p')))
@@ -133,7 +132,7 @@ describe('files to clips', () => {
     expect(beatsPerBarOf({ num: 7, den: 4 })).toBe(7)
   })
   it('makes a track per part on an empty project, adopting the file tempo and meter', () => {
-    const doc = blank(120)
+    const doc = blank()
     const f = parseSmf(writeSmf({
       ppq: 480, bpm: 90, beatsPerBar: 3, tracks: [
         { name: 'Strings', channel: 0, notes: [{ tick: 480, dur: 480, pitch: 60, velocity: 127 }] },
@@ -142,7 +141,6 @@ describe('files to clips', () => {
     }))
     const r = importSmf(doc, f, { at: 1000, base: 'song' })
     expect(r.adopted).toBe(true)
-    expect(getTempo(doc)).toEqual({ bpm: 90, beatsPerBar: 3 })
     expect(getTracks(doc).map((t) => t.name)).toEqual(['Strings', 'Drums'])
     expect(r.tracks).toHaveLength(2)
     const devs = getDevices(doc)
@@ -155,19 +153,18 @@ describe('files to clips', () => {
     expect(notes.find((n) => n.clipId === clips[1].id)?.pitch).toBe(46) // a crash onto the open hat
   })
   it('drops onto a MIDI track as one clip at the nearest bar, keeping the project tempo', () => {
-    const doc = blank(120)
+    const doc = blank()
     const keys = addTrack(doc, 'keys', 'midi')
     addMidiClip(doc, { trackId: keys, start: 0, bpm: 120, ppq: 960, lengthTicks: 3840 })
     const f = parseSmf(writeSmf({ ppq: 960, bpm: 70, beatsPerBar: 4, tracks: [
       { name: 'a', channel: 0, notes: [{ tick: 0, dur: 960, pitch: 60, velocity: 64 }] },
       { name: 'b', channel: 1, notes: [{ tick: 4 * 960, dur: 960, pitch: 48, velocity: 64 }] },
     ] }))
-    const bar = samplesPerBar(getTempo(doc), RATE)
+    const bar = (4 * 60 * RATE) / 120
     const r = importSmf(doc, f, { at: 1.6 * bar, trackId: keys, base: 'riff' })
     expect(r).toMatchObject({ adopted: false, into: keys, tracks: [] })
-    expect(getTempo(doc).bpm).toBe(120)
     const c = getClips(doc).find((x) => x.id === r.clips[0]) as MidiClip
-    expect([c.trackId, c.start, c.lengthTicks, c.name]).toEqual([keys, 2 * bar, 8 * 960, 'riff'])
+    expect([c.trackId, c.start, c.lengthTicks, c.bpm]).toEqual([keys, 2 * bar, 8 * 960, 120])
     expect(getNotes(doc).filter((n) => n.clipId === c.id).map((n) => [n.tick, n.pitch])).toEqual([[0, 60], [3840, 48]])
   })
 })
