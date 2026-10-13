@@ -15,7 +15,7 @@ import {
   DEFAULT_MIDI_BPM, DEVICES, isDrum, patternTicks, tracksMap, type Device, type MidiClip, type Note,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
-import { DRUM_KITS, GM, addDrumKit, addInstrument, instrumentPreset, isDrumTrack } from './presets'
+import { DRUM_KITS, GM, addDrumKit, addInstrument, instrumentPreset } from './presets'
 
 const clampBpm = (bpm: number) => Math.min(300, Math.max(20, Math.round(bpm * 100) / 100))
 
@@ -254,7 +254,7 @@ export function playedNotes(c: Pick<MidiClip, 'lengthTicks' | 'loopTicks'>, note
 }
 
 const fileVelocity = (v: number) => clamp(Math.round(v * 127), 1, 127)
-const drumChannel = (doc: Y.Doc, trackId: string) => (isDrumTrack(doc, trackId) ? 9 : 0)
+const drumChannel = (c: MidiClip) => (c.view === 'drums' ? 9 : 0) // GM drums are channel 10 (index 9)
 
 const trackName = (doc: Y.Doc, id: string) => (tracksMap(doc).get(id)?.get('name') as string | undefined) ?? 'track'
 /** The name a clip goes by: its track's. */
@@ -268,7 +268,7 @@ export function clipToSong(doc: Y.Doc, clipId: string): SmfSong | null {
   const name = clipName(doc, c)
   return {
     ppq: c.ppq, bpm: c.bpm, beatsPerBar: 4, name,
-    tracks: [{ name, channel: drumChannel(doc, c.trackId), notes: notes.map((n) => ({ tick: n.tick, dur: n.durTicks, pitch: n.pitch, velocity: fileVelocity(n.velocity) })) }],
+    tracks: [{ name, channel: drumChannel(c), notes: notes.map((n) => ({ tick: n.tick, dur: n.durTicks, pitch: n.pitch, velocity: fileVelocity(n.velocity) })) }],
   }
 }
 
@@ -287,16 +287,16 @@ export function projectToSong(doc: Y.Doc, name: string): SmfSong {
   const tracks: SmfSong['tracks'] = []
   for (const t of getTracks(doc).sort((a, b) => a.order - b.order)) {
     if (t.kind !== 'midi' || t.role === 'click') continue
-    const out: SmfSong['tracks'][number]['notes'] = []
+    const out: SmfSong['tracks'][number]['notes'][] = [[], []] // per channel: melodic, drum grids
     for (const c of clips) {
       if (c.trackId !== t.id || c.kind !== 'midi') continue
       const k = (ppq / c.ppq) * (bpm / c.bpm) // clip ticks → song ticks
       const at = (c.start / rate) * (bpm / 60) * ppq
       for (const n of playedNotes(c, notes.filter((x) => x.clipId === c.id))) {
-        out.push({ tick: Math.round(at + n.tick * k), dur: Math.max(1, Math.round(n.durTicks * k)), pitch: n.pitch, velocity: fileVelocity(n.velocity) })
+        out[c.view === 'drums' ? 1 : 0].push({ tick: Math.round(at + n.tick * k), dur: Math.max(1, Math.round(n.durTicks * k)), pitch: n.pitch, velocity: fileVelocity(n.velocity) })
       }
     }
-    if (out.length) tracks.push({ name: t.name, channel: drumChannel(doc, t.id), notes: out.sort((a, b) => a.tick - b.tick) })
+    out.forEach((o, i) => o.length && tracks.push({ name: t.name, channel: i ? 9 : 0, notes: o.sort((a, b) => a.tick - b.tick) }))
   }
   return { ppq, bpm, beatsPerBar, name, tracks }
 }
@@ -400,8 +400,7 @@ export function importSmf(doc: Y.Doc, smf: Smf, o: { at: number; trackId?: strin
     if (target) {
       res.into = target
       const notes = parts.flatMap((p) => p.notes).sort((a, b) => a.tick - b.tick || a.pitch - b.pitch)
-      const drums = isDrumTrack(doc, target)
-      clip(target, { name: o.base, lengthTicks: Math.max(...parts.map((p) => p.lengthTicks)), notes }, drums && parts.every((p) => p.drums))
+      clip(target, { name: o.base, lengthTicks: Math.max(...parts.map((p) => p.lengthTicks)), notes }, parts.every((p) => p.drums))
       return
     }
     parts.forEach((p, i) => {

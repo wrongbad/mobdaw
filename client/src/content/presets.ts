@@ -12,7 +12,7 @@
 import type * as Y from 'yjs'
 import {
   COMPRESSOR, DELAY, DEVICES, EQ, FINNWAVE, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO,
-  addDevice, addDrum, deleteDevice, devicesMap, getClips, getDevices, getTracks, isDrum, setParam, updateDevice, updateTrack,
+  addDevice, addDrum, deleteDevice, devicesMap, getDevices, getTracks, isDrum, setParam, updateDevice, updateTrack,
 } from '@mobdaw/shared'
 
 export type InstrumentCategory = 'keys' | 'bass' | 'lead' | 'pad' | 'pluck' | 'fx'
@@ -203,14 +203,6 @@ export const instrumentPreset = (id: string) => INSTRUMENT_PRESETS.find((p) => p
 export const drumKit = (id: string) => DRUM_KITS.find((k) => k.id === id)
 export const effectPreset = (id: string) => EFFECT_PRESETS.find((p) => p.id === id)
 
-/** Whether a MIDI track is a drum/kit track: every instrument on it is a drum, or (no instruments) every clip is a drum grid. */
-export function isDrumTrack(doc: Y.Doc, trackId: string): boolean {
-  const insts = getDevices(doc).filter((d) => d.trackId === trackId && DEVICES[d.type]?.instrument)
-  if (insts.length) return insts.every(isDrum)
-  const clips = getClips(doc).filter((c) => c.trackId === trackId)
-  return clips.length > 0 && clips.every((c) => c.kind === 'midi' && c.view === 'drums')
-}
-
 /** The effect chain each instrument or kit preset comes with (an id in EFFECT_PRESETS); the rest have an empty chain. */
 const PRESET_FX: Record<string, string> = {
   'soft-keys': 'small-room', 'electric-piano': 'wide-tremolo', 'warm-pad': 'big-room', 'flute-lead': 'tape-echo', tape: 'glue',
@@ -218,14 +210,10 @@ const PRESET_FX: Record<string, string> = {
 
 export type TrackPreset = { id: string; name: string }
 
-/** What a track's Presets drawer offers: effect chains on audio tracks; on MIDI tracks synths (kits on a kit track; both while it has no instrument). Else nothing. */
+/** What a track's Presets drawer offers: effect chains on audio tracks, instruments (synths, then kits) on MIDI tracks, nothing elsewhere. */
 export function presetsFor(doc: Y.Doc, trackId: string): TrackPreset[] {
   const kind = getTracks(doc).find((t) => t.id === trackId)?.kind
-  if (kind === 'audio') return EFFECT_PRESETS
-  if (kind !== 'midi') return []
-  const kit = isDrumTrack(doc, trackId)
-  const empty = !getDevices(doc).some((d) => d.trackId === trackId && DEVICES[d.type]?.instrument)
-  return [...(kit && !empty ? [] : INSTRUMENT_PRESETS), ...(kit || empty ? DRUM_KITS : [])]
+  return kind === 'audio' ? EFFECT_PRESETS : kind === 'midi' ? [...INSTRUMENT_PRESETS, ...DRUM_KITS] : []
 }
 
 /**

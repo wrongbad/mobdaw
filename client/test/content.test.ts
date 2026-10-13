@@ -80,17 +80,16 @@ describe('track presets', () => {
   const ids = (doc: Y.Doc, t: string) => presetsFor(doc, t).map((p) => p.id)
   const mine = (doc: Y.Doc, t: string) => getDevices(doc).filter((d) => d.trackId === t)
 
-  it('offers fx-only on audio tracks, synths on instrument tracks, kits on kit tracks, nothing elsewhere', () => {
+  it('offers fx-only on audio tracks, every instrument (synths then kits) on any MIDI track, nothing elsewhere', () => {
     const doc = new Y.Doc()
     const audio = addTrack(doc, 'a', 'audio')
     expect(ids(doc, audio)).toEqual(EFFECT_PRESETS.map((p) => p.id))
+    const all = [...INSTRUMENT_PRESETS, ...DRUM_KITS].map((p) => p.id)
     const synth = addTrack(doc, 's', 'midi')
     addInstrument(doc, synth, INSTRUMENT_PRESETS[0])
-    expect(ids(doc, synth)).toEqual(INSTRUMENT_PRESETS.map((p) => p.id))
     const kit = addTrack(doc, 'k', 'midi')
     addDrumKit(doc, kit, DRUM_KITS[0])
-    expect(ids(doc, kit)).toEqual(DRUM_KITS.map((p) => p.id))
-    expect(ids(doc, addTrack(doc, 'e', 'midi'))).toEqual([...INSTRUMENT_PRESETS, ...DRUM_KITS].map((p) => p.id)) // no instrument yet
+    for (const t of [synth, kit, addTrack(doc, 'e', 'midi')]) expect(ids(doc, t)).toEqual(all)
     expect(ids(doc, addTrack(doc, 'x', 'soundscape'))).toEqual([])
     const before = mine(doc, audio).length
     applyPreset(doc, audio, INSTRUMENT_PRESETS[0].id) // the wrong kind of preset is ignored
@@ -120,12 +119,17 @@ describe('track presets', () => {
     expect(mine(doc, t).filter((d) => !DEVICES[d.type].instrument)).toHaveLength(0)
   })
 
-  it('swaps a kit for a synth only through a kit track, and an audio chain wholesale', () => {
+  it('swaps synth and kit both ways on the same track, and an audio chain wholesale', () => {
     const doc = new Y.Doc()
     const k = addTrack(doc, 'k', 'midi')
     addDrumKit(doc, k, DRUM_KITS[0])
     applyPreset(doc, k, DRUM_KITS[1].id)
     expect(mine(doc, k).filter((d) => isDrum(d)).map((d) => d.keyLo).sort()).toEqual(DRUM_KITS[1].drums.map((d) => d.key).sort())
+    applyPreset(doc, k, 'organ') // kit -> synth
+    expect(mine(doc, k).map((d) => [d.type, d.name])).toEqual([[FINNWAVE, 'Organ']])
+    applyPreset(doc, k, DRUM_KITS[2].id) // synth -> kit
+    expect(mine(doc, k).every((d) => isDrum(d))).toBe(true)
+    expect(mine(doc, k)).toHaveLength(DRUM_KITS[2].drums.length)
     const a = addTrack(doc, 'a', 'audio')
     addEffectPreset(doc, a, EFFECT_PRESETS[4])
     applyPreset(doc, a, 'big-room')
