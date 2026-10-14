@@ -418,3 +418,91 @@ impl Bore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SR: f32 = 48_000.0;
+
+    fn render(raw: &Raw, setup: &NoteSetup, secs: f32) -> Vec<f32> {
+        let mut b = Bore::new(SR);
+        b.start(setup);
+        let n = (secs * SR) as usize;
+        let mut out = vec![0.0f32; n];
+        for chunk in out.chunks_mut(SUB_BLOCK) {
+            b.render_add(raw, chunk, None);
+        }
+        out
+    }
+
+    fn tail_rms(x: &[f32]) -> f32 {
+        let t = &x[x.len() / 2..];
+        (t.iter().map(|v| v * v).sum::<f32>() / t.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn silent_when_undriven() {
+        for c in [0.0, 0.5, 1.0] {
+            let raw = Raw { character: c, drive: 0.0, ..Raw::default() };
+            let out = render(&raw, &NoteSetup::default(), 0.3);
+            assert!(out.iter().all(|v| *v == 0.0), "character {c}");
+        }
+    }
+
+    #[test]
+    fn finite_and_bounded_everywhere() {
+        for &c in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+            for &open in &[true, false] {
+                for &drive in &[0.1, 1.0, 4.0] {
+                    for &ap in &[0.2, 0.7, 1.2] {
+                        let raw = Raw { character: c, aperture: ap, drive, noise: 1.0, vibrato_depth: 1.0, ..Raw::default() };
+                        let setup = NoteSetup { open, freq_hz: 110.0, ..NoteSetup::default() };
+                        let out = render(&raw, &setup, 0.25);
+                        assert!(out.iter().all(|v| v.is_finite() && v.abs() < 50.0), "c {c} open {open} drive {drive} ap {ap}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn each_anchor_oscillates_at_some_raw_setting() {
+        for &c in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+            for &open in &[true, false] {
+                let mut best = 0.0f32;
+                for &drive in &[0.1, 0.2, 0.4, 0.7, 1.0, 1.5, 2.5] {
+                    for &ap in &[0.2, 0.4, 0.6, 0.8, 1.0] {
+                        let raw = Raw { character: c, aperture: ap, drive, ..Raw::default() };
+                        let setup = NoteSetup { open, freq_hz: 220.0, position: if open { 0.2 } else { 0.8 }, ..NoteSetup::default() };
+                        best = best.max(tail_rms(&render(&raw, &setup, 0.4)));
+                    }
+                }
+                assert!(best > 0.01, "anchor {c} open {open} never speaks (best rms {best})");
+            }
+        }
+    }
+
+    #[test]
+    fn released_note_finishes() {
+        let raw = Raw { character: 1.0, aperture: 0.6, drive: 0.5, ..Raw::default() };
+        let mut b = Bore::new(SR);
+        b.start(&NoteSetup { release_ms: 20.0, ..NoteSetup::default() });
+        let mut buf = [0.0f32; SUB_BLOCK];
+        for _ in 0..200 {
+            b.render_add(&raw, &mut buf, None);
+        }
+        b.release();
+        for _ in 0..4000 {
+            buf.fill(0.0);
+            b.render_add(&raw, &mut buf, None);
+        }
+        assert!(b.is_finished());
+    }
+
+    #[test]
+    fn note_fits_limit() {
+        assert!(Bore::fits(SR, 110.0, true, 0.5));
+        assert!(!Bore::fits(SR, 10.0, true, 0.5));
+    }
+}
