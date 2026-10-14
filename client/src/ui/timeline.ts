@@ -110,6 +110,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let offMidi = () => {} // stops listening to the MIDI input
   let loopLive: { source: number; clip?: number } | null = null // the live source (and engine-only clip) of the loop being recorded
   let loopTimer = 0 // while a loop records: ends its take when it has what it needs
+  let closingTake: Promise<unknown> = Promise.resolve() // a loop take being stopped by the recorder
   let loopArming = false // asking for the microphone
   const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
   const recRegions = new Map<string, HTMLElement>()
@@ -334,6 +335,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     clearLoopTimer()
     drawLoopStatus()
     const captured = t ? pb?.recorder.stop() : undefined // (asks the worklet to end the take before the engine stops)
+    // the loop commands' microphone is let go once every take has ended (never cut short); a track armed for recording keeps it
+    void Promise.all([captured, closingTake]).then(() => !armedTrack && !take && !pb?.playing && !loops?.recording && pb?.recorder.disarm())
     if (live) void Promise.resolve(captured).then(() => (live.clip != null && pb?.removeLiveClip(live.clip), pb?.dropLiveSource(live.source)))
     pb?.stop()
     transport.setPlaying(false)
@@ -490,7 +493,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     clearLoopTimer()
     s.setLocal({ recording: null })
     if (!tk || !live || !pb) return
-    void saveLoopTake(tk, pb.recorder.stop(), t, live)
+    const stopped = pb.recorder.stop()
+    closingTake = stopped
+    void saveLoopTake(tk, stopped, t, live)
     draw()
   }
   function cancelLoopTake() {
@@ -499,6 +504,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     clearLoopTimer()
     s.setLocal({ recording: null })
     const stopped = pb?.recorder.stop()
+    if (stopped) closingTake = stopped
     loopLive = null
     void stopped?.then(() => live && pb?.dropLiveSource(live.source))
     tk?.journal.discard()

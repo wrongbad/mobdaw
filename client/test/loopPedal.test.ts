@@ -175,12 +175,15 @@ describe('mute', () => {
     r.p.press('mute', 1234)
     const lane = getLanes(r.doc)[0]
     expect(lane.param).toBe('0')
-    expect(getPoints(r.doc).map((p) => [p.pos, p.value, p.curve]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[0, 0.5, 'hold'], [1234, 0, 'hold']]) // seeded at unity (0.5 of 0..2)
+    expect(getPoints(r.doc).map((p) => [p.pos, p.value, p.curve]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[0, 0.5, 'hold'], [1234, 0.5, 'linear'], [1239, 0, 'hold']]) // seeded at unity (0.5 of 0..2), then a 5 ms ramp
     r.p.press('mute', 4321)
     expect(volumeAt(r.doc, r.ids[0], 1233)).toBe(1)
-    expect(volumeAt(r.doc, r.ids[0], 1234)).toBe(0)
+    expect(volumeAt(r.doc, r.ids[0], 1234)).toBe(1)
+    expect(volumeAt(r.doc, r.ids[0], 1236.5)).toBeCloseTo(0.5, 6) // mid-ramp
+    expect(volumeAt(r.doc, r.ids[0], 1239)).toBe(0)
     expect(volumeAt(r.doc, r.ids[0], 4320)).toBe(0)
-    expect(volumeAt(r.doc, r.ids[0], 4321)).toBe(1)
+    expect(volumeAt(r.doc, r.ids[0], 4321)).toBe(0)
+    expect(volumeAt(r.doc, r.ids[0], 4326)).toBe(1)
   })
 
   it('many toggles at fractional loop offsets replay exactly, each one undo step', () => {
@@ -191,18 +194,18 @@ describe('mute', () => {
     times.forEach((t, i) => {
       const muted = i % 2 === 0
       expect(volumeAt(r.doc, r.ids[0], t - 1)).toBe(muted ? 1 : 0)
-      expect(volumeAt(r.doc, r.ids[0], t)).toBe(muted ? 0 : 1)
+      expect(volumeAt(r.doc, r.ids[0], t + 5)).toBe(muted ? 0 : 1)
     })
     r.undo.undo()
-    expect(volumeAt(r.doc, r.ids[0], 12345)).toBe(0) // the last unmute is gone
+    expect(volumeAt(r.doc, r.ids[0], 12350)).toBe(0) // the last unmute is gone
   })
 
   it('restores the volume the track had, and only overrides after the press', () => {
     const r = rig(1)
     r.p.current = r.ids[0]
-    toggleMute(r.doc, r.ids[0], 500) // (lane seeded at unity)
-    toggleMute(r.doc, r.ids[0], 600)
-    toggleMute(r.doc, r.ids[0], 900)
+    toggleMute(r.doc, r.ids[0], 500, RATE) // (lane seeded at unity)
+    toggleMute(r.doc, r.ids[0], 600, RATE)
+    toggleMute(r.doc, r.ids[0], 900, RATE)
     expect([100, 550, 650, 950].map((t) => volumeAt(r.doc, r.ids[0], t))).toEqual([1, 0, 1, 0])
   })
 
@@ -241,7 +244,7 @@ describe('replay', () => {
     expect(first).toMatchObject({ start: 5000, length: 9600, forever: false })
     expect(second).toMatchObject({ start: 14600, forever: true })
     expect(third).toMatchObject({ start: 30600, forever: true })
-    expect([9000, 9100, 11110, 11111].map((t) => volumeAt(copy, r.ids[0], t))).toEqual([1, 0, 0, 1])
-    expect(volumeAt(copy, r.ids[1], 41234)).toBe(0)
+    expect([9000, 9105, 11110, 11116].map((t) => volumeAt(copy, r.ids[0], t))).toEqual([1, 0, 0, 1])
+    expect(volumeAt(copy, r.ids[1], 41240)).toBe(0)
   })
 })

@@ -317,15 +317,17 @@ describe('bridge + real engine.wasm', () => {
     bridge.play(0)
     const before = samples(2000)
     expect(Math.abs(before[1500])).toBeGreaterThan(0.1)
-    toggleMute(doc, t, 2500) // (the engine is at 2000: ahead of the playhead, like a press heard slightly late/early)
-    toggleMute(doc, t, 3777) // unmute at a fractional-looking offset
+    toggleMute(doc, t, 2500, SR) // (the engine is at 2000: ahead of the playhead, like a press heard slightly late/early)
+    toggleMute(doc, t, 3777, SR) // unmute at a fractional-looking offset
     await tick()
     const a = samples(2400) // timeline 2000..4400
-    expect(Math.abs(a[499])).toBeGreaterThan(0.1) // sample 2499: still audible
-    expect(a[500]).toBe(0) // 2500: silent from its sample
-    expect(a[1776]).toBe(0)
-    expect(Math.abs(a[1777])).toBeGreaterThan(0.1) // 3777: back at the volume it had
-    expect(a[1777] / before[1500]).toBeCloseTo(1, 3)
+    const ramp = Math.round(0.005 * SR)
+    expect(Math.abs(a[499])).toBeGreaterThan(0.1) // 2499: untouched
+    expect(Math.abs(a[500 + ramp / 2])).toBeLessThan(Math.abs(a[499])) // mid-ramp: on the way down
+    expect(Math.abs(a[500 + ramp / 2])).toBeGreaterThan(0)
+    expect(Math.abs(a[500 + ramp + 5])).toBeLessThan(1e-4) // near-silent by t + 5 ms
+    expect(Math.abs(a[1776])).toBeLessThan(1e-4)
+    expect(a[1777 + ramp + 5] / before[1500]).toBeCloseTo(1, 2) // back to full by t2 + 5 ms
     bridge.destroy()
   })
 

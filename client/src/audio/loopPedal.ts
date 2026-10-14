@@ -70,15 +70,18 @@ export function commitLoop(doc: Y.Doc, t: LoopTake, trackId: string, sourceHash:
 // --- mute: volume automation
 const volumeTarget = (doc: Y.Doc, trackId: string): ParamTarget => ({ scope: trackId, kind: 'effect', owner: ensureMixDevice(doc, trackId), param: String(MIX_GAIN) })
 const sorted = (doc: Y.Doc, laneId: string) => getPoints(doc).filter((p) => p.laneId === laneId).sort((a, b) => a.pos - b.pos)
+/** The mute's ramp (seconds): a linear fade over the step, so it does not click. */
+export const RAMP_S = 0.005
 /** Normalised values at or below this are silence. */
 const SILENT = 1e-6
 
 /**
- * Toggle the track's mute at timeline sample `pos`, as a step in the volume automation (one transaction): a mute writes 0 at
- * `pos`, an unmute writes the volume that was there before. The lane is made on the first use, flat at the track's volume. Not
+ * Toggle the track's mute at timeline sample `pos`, as a step in the volume automation (one transaction): a mute ramps to 0 over 5 ms
+ * from `pos`, an unmute ramps back to the volume that was there before. The lane is made on the first use, flat at the track's volume. Not
  * quantized. Returns what the track is now.
  */
-export function toggleMute(doc: Y.Doc, trackId: string, pos: number): 'muted' | 'unmuted' {
+export function toggleMute(doc: Y.Doc, trackId: string, pos: number, rate: number): 'muted' | 'unmuted' {
+  const ramp = Math.max(1, Math.round(RAMP_S * rate))
   let result: 'muted' | 'unmuted' = 'muted'
   doc.transact(() => {
     const target = volumeTarget(doc, trackId)
@@ -99,9 +102,14 @@ export function toggleMute(doc: Y.Doc, trackId: string, pos: number): 'muted' | 
     // a linear segment into the step would ramp towards it: pin the value just before, so the curve up to `at` is unchanged
     const prev = before.at(-1)
     if (prev && prev.curve === 'linear' && at >= 1 && !pts.some((p) => p.pos === at - 1)) addPoint(doc, lane, at - 1, now, 'hold')
-    const same = pts.find((p) => p.pos === at)
-    if (same) updatePoint(doc, same.id, { value, curve: 'hold' })
-    else addPoint(doc, lane, at, value, 'hold')
+    // from the current value at `at`, linearly to the target one ramp later, where it holds
+    const put = (pos: number, v: number, curve: 'linear' | 'hold') => {
+      const same = pts.find((p) => p.pos === pos)
+      if (same) updatePoint(doc, same.id, { value: v, curve })
+      else addPoint(doc, lane, pos, v, curve)
+    }
+    put(at, now, 'linear')
+    put(at + ramp, value, 'hold')
     result = muted ? 'unmuted' : 'muted'
   })
   return result
@@ -184,7 +192,7 @@ export class LoopPedal {
     const id = this.current
     if (!id) return this.d.io.say('mute: there is no track')
     this.stopGroup()
-    if (this.d.io.playing()) toggleMute(doc, id, pos)
+    if (this.d.io.playing()) toggleMute(doc, id, pos, this.d.rate)
     else updateTrack(doc, id, { muted: !getTracks(doc).find((t) => t.id === id)?.muted }) // stopped: nothing to record, the plain mute
     this.stopGroup()
   }

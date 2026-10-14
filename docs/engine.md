@@ -498,7 +498,7 @@ wires it to the recorder and the engine.
   - **Undo.** Ending the earlier clip and writing the new one are one undo step (`joinUndo`); a recording cancelled before it began
     gives the earlier clip back. A transport stop mid-loop saves the take as an ordinary take and the loop is dropped.
 - **Mute (toggle, current track).** Volume automation on the track's mix device, not quantized: the lane is made on first use
-  (seeded at the track's volume), a mute writes a `hold` point at 0 at the press, an unmute a `hold` point at the prior volume. A linear
+  (seeded at the track's volume), a mute writes a linear point at the press ramping to a `hold` point at 0 five milliseconds later (no click); an unmute ramps back to the prior volume the same way. A linear
   segment before the step is pinned one sample earlier so the curve up to the press is unchanged. The engine evaluates lanes statelessly
   by position, so a point written during playback is heard at its sample. One undo step per toggle. With the transport stopped it is the
   track's plain mute. The press time is the heard position, so there is no further latency compensation.
