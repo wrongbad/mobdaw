@@ -6,3 +6,11 @@ dist/
 engine/target/
 client/src/audio/wasm/
 .claude/
+
+# Raw tool-run output stays on disk but out of git; only the small summaries are tracked.
+docs/*/runs/*/*
+!docs/*/runs/*/*.md
+!docs/*/runs/*/verify.txt
+!docs/*/runs/*/config.yaml
+!docs/*/runs/*/best.json
+!docs/*/runs/*/run.sh

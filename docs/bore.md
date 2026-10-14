@@ -2,6 +2,7 @@
 
 Status: **draft playable; calibration rough.** Phases 1-4 have landed: DSP core (`bore.rs`), calibration (`bore_cal.rs`, linear fits, 5 character anchors), engine device kind 10 (`boresynth.rs`), and ten presets (winds / strings groups). Calibration quality: about 70% of (anchor, bore, position, note, breath 0/.5/1) test points speak with the first linear fit (`bore_calibrate verify`, docs/bore/runs/2026-10-14-draft/verify.txt); the drive band edges and loudness are only roughly modelled, so levels vary between notes and the extremes of `breath` can fall silent or squeal. Next: refine the calibration (see "Calibration log").
 This doc is the plan of record across sessions; update it as phases land.
+The automatic patch-matching optimizer that consumes this calibration is planned in `docs/matching.md` (Python orchestrates, a Rust worker runs the hot loops). Calibration is its prerequisite.
 
 ### Deviations from the plan
 - `bore` is a two-way selector (closed / open), not a continuous 0..1; the calibration is per bore.
@@ -10,7 +11,7 @@ This doc is the plan of record across sessions; update it as phases land.
 - The fit is per character anchor (reed, reed/jet, jet, jet/bow, bow) with linear interpolation in `character`, features `note, fold, open, stiffness, damping, ln loss(decay)`.
 
 ### Calibration log
-- 2026-10-14-draft: first sweep with the current tool (1000 cells, 920 live) and linear fit emitted into `bore_cal.rs`. Run files: docs/bore/runs/2026-10-14-draft/. The earlier runs in docs/bore/runs/2026-10-14-first used an older CSV format.
+- 2026-10-14-draft: first sweep with the current tool (1000 cells, 920 live) and linear fit emitted into `bore_cal.rs`. Summaries: docs/bore/runs/2026-10-14-draft/ (`fit.md`, `verify.txt`; raw CSV/SVG are on disk only, git-ignored). The earlier runs in docs/bore/runs/2026-10-14-first used an older CSV format.
 
 Sources: wade `wip/simple_bow.h` and `wip/simple_flute.h` (our own code, free to reuse), and STK `Saxofony.cpp` (MIT-style). The implementation is new Rust in `engine/crates/dsp`, using these as reference.
 
@@ -96,6 +97,19 @@ Open questions for the calibration phase:
 - Whether vibrato and noise at preset levels push cells out of the sounding region; if so, calibrate with them on.
 - Which inputs each fitted quantity actually depends on; drop the terms that don't matter.
 
+## Priors and incremental recalibration
+
+Goal: the fitted curves (`bore_cal.rs`) and the presets are the only durable artifacts; raw sweep data is disposable (git-ignored, see CLAUDE.md). A prior makes a re-run an incremental build:
+
+- **Key.** Each fit records what it was derived from: a hash of the DSP source it depends on (`bore.rs`, the device), the grid, and the fit error. Emit this into a small tracked data file read by the sweep tool as well as the code.
+- **Verify first.** On a key mismatch run a sparse `verify` (a few hundred cells). If the speak rate and residuals are within tolerance, re-stamp the key and stop. Otherwise sweep a narrow band around the prior's predicted edges and refit.
+- **Guard.** Always add ~10% of cells spread over the full grid. A large miss there means the prior is invalid (a regime change, as for the open bore below MIDI 33) and triggers a full sweep.
+- **Limits.** The prior guides *where to sample*; it is not a warm start for the coefficients if the model form changes.
+- **Presets.** Hand-tuned presets sit on top of the knob mapping, so a recalibration can change how they sound. See `docs/matching.md`, "Matched vs hand-tuned presets", for how they are separated and flagged.
+
+### Run provenance
+Calibration runs record provenance in their `fit.md`/`verify.txt`: commit hash and dirty flag, DSP source hash, tool arguments, grid, date and machine (details in `docs/matching.md`, "Provenance and local-only data"). Run data (CSV, SVG, logs) is a local cache that can be regenerated; only the summaries are tracked. Existing runs predate this: `2026-10-14-pinned` and `-draft` correspond to commit `1a69c36`'s tool, `-factors` to `439be4f`, `-first` is obsolete.
+
 ## Phases
 
 1. **DSP core** (`engine/crates/dsp`): fractional delay loop with a movable junction, the morphable g(Δ), termination and damping, DC block, drive (gate slew, noise, vibrato, velocity burst). Unit tests: no NaN, bounded output, silence when not driven, each anchor oscillating at some raw setting.
@@ -122,5 +136,5 @@ Open questions for the calibration phase:
 ## Where we left off (2026-10-14)
 
 - Playable draft landed: engine device (kind 10), ten presets, SLOW regression, and fitted calibration from the pinned sweep (1a69c36).
-- Started a factor sweep (`docs/bore/runs/2026-10-14-factors/`) varying stiffness and damping one at a time with the others pinned, to model them as separate correction terms. Results saved but not analysed or fitted; decay wasn't swept yet.
+- Started a factor sweep (`docs/bore/runs/2026-10-14-factors/`) varying stiffness and damping one at a time with the others pinned, to model them as separate correction terms. Its CSVs are local-only and git-ignored (a cache, regenerable with `run.sh` at the commit it was run from, about `439be4f`); they were saved but not analysed or fitted.
 - Next: analyse the factor runs, add stiffness/damping correction terms if they move the band, re-emit, and verify by render. Then the user tunes the presets by ear.
