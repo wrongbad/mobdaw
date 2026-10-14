@@ -138,7 +138,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .lane-row { display: flex; height: 72px; }
 .lane.editing .lane-row { height: 320px; }
 /* the drum grid: header, a row per drum, the "add drum" button */
-.lane.editing.drums .lane-row { height: calc(20px + var(--dg-rows, 0) * 18px + 32px + 2px); }
+.lane.editing.drums .lane-row { height: calc(28px + var(--dg-rows, 0) * 18px + 32px); }
 .head { background: var(--lane); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); display: flex; flex-direction: column; justify-content: flex-start; gap: 3px; padding: 4px 8px 0 12px; border-right: 1px solid var(--line); }
 .head > * { flex: none; }
 .head-top { height: 16px; display: flex; align-items: center; gap: 4px; min-width: 0; }
@@ -308,13 +308,13 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .ne-field { display: flex; align-items: center; gap: 5px; margin: 0; }
 .ne-lbl { font-size: 9px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
 .ne-sep { flex: none; width: 1px; height: 14px; background: var(--line); }
-.ne-head input { width: 48px; height: 20px; padding: 0 4px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 3px; background: var(--raise); color: var(--fg); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+.ne-head input { width: 48px; height: 20px; min-height: 0; margin: 0; line-height: 18px; padding: 0 4px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 3px; background: var(--raise); color: var(--fg); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
 .ne-head input:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; }
-.ne-head button { height: 20px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 3px; padding: 0 8px; font-size: 11px; line-height: 18px; color: var(--fg); background: var(--raise); }
+.ne-head button { height: 20px; min-height: 0; box-sizing: border-box; border: 1px solid var(--line); border-radius: 3px; padding: 0 8px; font-size: 11px; line-height: 18px; color: var(--fg); background: var(--raise); }
 .ne-head button:hover:not(:disabled) { background: var(--line); }
 .seg { position: relative; display: grid; grid-template-columns: repeat(var(--n), 1fr); height: 20px; box-sizing: border-box; padding: 1px; border: 1px solid var(--line); border-radius: 10px; background: var(--raise); }
 .seg-thumb { position: absolute; top: 1px; bottom: 1px; left: 1px; width: calc((100% - 2px) / var(--n)); border-radius: 9px; background: var(--tc, var(--accent)); transform: translateX(calc(var(--i) * 100%)); transition: transform .15s ease; pointer-events: none; }
-.ne-head .seg button { position: relative; height: auto; min-width: 26px; padding: 0 5px; border: 0; border-radius: 9px; background: none; color: var(--dim); font-size: 10px; line-height: 16px; white-space: nowrap; }
+.ne-head .seg button { position: relative; height: auto; min-height: 0; min-width: 26px; padding: 0 5px; border: 0; border-radius: 9px; background: none; color: var(--dim); font-size: 10px; line-height: 16px; white-space: nowrap; }
 .ne-head .seg button:hover:not(:disabled) { background: none; color: var(--fg); }
 .ne-head .seg button.on { color: var(--on-accent); }
 .seg button:focus-visible { outline: 1px solid var(--fg); outline-offset: 1px; }

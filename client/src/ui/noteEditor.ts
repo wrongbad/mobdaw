@@ -52,12 +52,13 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     else if (clip.forever) updateClip(doc, clip.id, { loopTicks: ticks, lengthTicks: ticks * 2 }) // (keeps looping)
     else updateClip(doc, clip.id, { lengthTicks: ticks, loopTicks: 0 }) // the pattern fills the clip: no repeats left
   }
-  const view = h('button', { title: 'show this clip as a drum grid', disabled: readOnly, onclick: () => clip && setMidiView(doc, clip.id, 'drums') }, 'piano roll ▾')
+  const view = segmented([{ value: 'piano', label: 'piano roll' }, { value: 'drums', label: 'drums' }], 'piano',
+    (v) => (readOnly ? view.set(v === 'drums' ? 'piano' : 'drums') : clip && setMidiView(doc, clip.id, v === 'drums' ? 'drums' : 'piano')), 'show this clip as a piano roll or a drum grid')
   const gridPick = segmented(GRIDS.map(([g, label]) => ({ value: String(g), label })), String(gridSel),
     (v) => { gridSel = v === 'bar' ? 'bar' : Number(v); layoutLines() }, 'grid and snap (hold alt or ctrl while dragging to place freely)')
   const field = (label: string, ...kids: (Node | string)[]) => h('label', { className: 'ne-field' }, h('span', { className: 'ne-lbl' }, label), ...kids)
   const head = h('div', { className: 'ne-head' },
-    view, h('span', { className: 'ne-sep' }), field('bpm', bpm), field('bars', barsIn), h('span', { className: 'ne-sep' }), field('grid', gridPick.el))
+    view.el, h('span', { className: 'ne-sep' }), field('bpm', bpm), field('bars', barsIn), h('span', { className: 'ne-sep' }), field('grid', gridPick.el))
   // inputs must not start a clip drag / zoom-out click on the clip underneath
   head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button, select, .seg') && e.stopPropagation()
   const grid = h('div', { className: 'ne-grid' })

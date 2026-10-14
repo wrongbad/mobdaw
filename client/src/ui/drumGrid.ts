@@ -4,6 +4,7 @@ import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, isDrum, isLooping, patt
 import type * as Y from 'yjs'
 import { h } from '../dom'
 import { drumColor } from './drumColor'
+import { segmented } from './segmented'
 import { clampVelocity, gmDrum, hitOpacity, nextVelocity } from './noteOps'
 
 const STEPS = 4 // steps per beat (a 1/16 note)
@@ -18,7 +19,9 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
 
   const bpm = h('input', { type: 'number', min: 20, max: 400, step: 1, title: 'clip bpm', disabled: readOnly })
   const beats = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in beats (3 for 3/4)', disabled: readOnly })
-  const view = h('button', { title: 'show this clip as a piano roll', disabled: readOnly, onclick: () => clip && setMidiView(doc, clip.id, 'piano') }, 'drum grid ▾')
+  const view = segmented([{ value: 'piano', label: 'piano roll' }, { value: 'drums', label: 'drums' }], 'drums',
+    (v) => (readOnly ? view.set(v === 'drums' ? 'piano' : 'drums') : clip && setMidiView(doc, clip.id, v === 'drums' ? 'drums' : 'piano')), 'show this clip as a piano roll or a drum grid')
+  const field = (label: string, ...kids: (Node | string)[]) => h('label', { className: 'ne-field' }, h('span', { className: 'ne-lbl' }, label), ...kids)
   bpm.onchange = () => clip && Number(bpm.value) > 0 && updateClip(doc, clip.id, { bpm: Number(bpm.value) })
   // The pattern is the loop when the clip loops, else the whole clip.
   beats.onchange = () => {
@@ -26,9 +29,9 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
     if (!clip || !(n >= 1)) return
     updateClip(doc, clip.id, isLooping(clip) ? { loopTicks: n * clip.ppq } : { lengthTicks: n * clip.ppq })
   }
-  const head = h('div', { className: 'ne-head' }, view, h('label', {}, 'bpm ', bpm), h('label', {}, 'beats ', beats))
+  const head = h('div', { className: 'ne-head' }, view.el, h('span', { className: 'ne-sep' }), field('bpm', bpm), field('beats', beats))
   // inputs must not start a clip drag / zoom-out click on the clip underneath
-  head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button') && e.stopPropagation()
+  head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button, .seg') && e.stopPropagation()
   const grid = h('div', { className: 'dg' })
   const scroll = h('div', { className: 'ne-scroll' }, grid)
   scroll.onpointerdown = (e) => e.stopPropagation() // scrollbar drags must not reach the clip
