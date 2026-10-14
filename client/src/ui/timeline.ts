@@ -724,11 +724,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     },
     bypass: (d: string, b: boolean) => updateDevice(doc, d, { bypass: b }),
     remove: (d: string) => deleteDevice(doc, d),
-    keys: (d: string, lo: number, hi: number) => {
-      undo.stopCapturing()
-      updateDevice(doc, d, { keyLo: lo, keyHi: hi })
-      undo.stopCapturing()
-    },
     rename: (d: string) => {
       const dev = getDevices(doc).find((x) => x.id === d)
       const name = dev && prompt('name', dev.name ?? DEVICES[dev.type]?.name ?? '')?.trim()
