@@ -2,6 +2,7 @@
 import { DEVICES, KEY_MAX, KEY_MIN, SIMPLE_FILTER, filterHasGain, paramToPos, paramToValue, type Device, type ParamDef, type ParamTarget } from '@mobdaw/shared'
 import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
+import { deviceDrumColor } from './drumColor'
 import { CARD_W, FILTER_COLORS, filterCurve, type FilterChange, type FilterLocks, type FilterMember } from './filterCurve'
 import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
 import { noteName, parseNote } from './noteName'
@@ -182,6 +183,10 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     lastRemote = remote
     setSwitch(bypass, el, !d.bypass)
     title.textContent = d.name ?? def?.name ?? `device ${d.type}`
+    const dc = deviceDrumColor(d) // a drum wears its grid row's colour
+    el.classList.toggle('drum', !!dc)
+    if (dc) el.style.setProperty('--rc', dc)
+    else el.style.removeProperty('--rc')
     showKeys(d.keyLo ?? KEY_MIN, d.keyHi ?? KEY_MAX)
     for (const { p, input, out, label } of rows) {
       const a = auto.get(String(p.id))
