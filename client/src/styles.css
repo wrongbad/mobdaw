@@ -194,7 +194,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {
-  position: absolute; top: 0; bottom: 0; padding: 2px 6px; overflow: hidden; white-space: nowrap; font-size: 12px;
+  position: absolute; top: 0; bottom: 0; padding: 2px 6px; box-sizing: border-box; border-radius: 3px; border: solid transparent; border-width: 0 1px; border-color: color-mix(in srgb, var(--tc, var(--accent)) 60%, black); background-origin: border-box; overflow: hidden; white-space: nowrap; font-size: 12px;
   /* a name strip in the track colour over a body tinted with it (--tc is set on the lane; the accent when there is none) */
   --clip: color-mix(in srgb, var(--tc, var(--accent)) 22%, var(--raise)); --clip-sel: color-mix(in srgb, var(--tc, var(--accent)) 32%, var(--raise));
   --clip-head: color-mix(in srgb, var(--tc, var(--accent)) 50%, var(--raise));
@@ -473,7 +473,7 @@ button.danger:hover { color: var(--danger); }
 .pedal-st.rec { color: var(--danger); }
 .pedal-row { margin-bottom: 6px; }
 .clip.live-loop { --clip: color-mix(in srgb, var(--tc, var(--accent)) 16%, var(--bg)); --clip-head: color-mix(in srgb, var(--tc, var(--accent)) 40%, var(--bg)); pointer-events: none; z-index: 1; }
-.clip.live-loop.forever { background-image: linear-gradient(to right, transparent calc(100% - 24px), var(--bg)); }
+.clip.live-loop.forever { background-image: linear-gradient(to right, transparent calc(100% - 24px), var(--bg)), linear-gradient(var(--clip-head), var(--clip-head)); background-size: 100% 100%, 100% 15px; background-position: 0 0, top; background-repeat: no-repeat; }
 /* presets drawer: a column per group (heading over plain-text buttons), side by side, scrolling sideways when narrow */
 .preset-grid { display: flex; flex: 1; gap: 24px; padding: 6px 8px; align-items: flex-start; overflow-x: auto; min-width: 0; }
 .preset-col { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; flex: none; }
