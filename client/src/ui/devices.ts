@@ -10,7 +10,7 @@ import { inUse } from './held'
 import { dragToReorder } from './reorder'
 import { knob } from './knob'
 import { segmented, type Seg } from './segmented'
-import { SEG_MAX, columns, sections, span } from './deviceLayout'
+import { SEG_MAX, rows as rows_, span } from './deviceLayout'
 import { formatParam, isBipolar } from './knobMath'
 
 export type CardDeps = {
@@ -44,9 +44,6 @@ export type CardDeps = {
 }
 
 type Row = { p: ParamDef; input: HTMLSelectElement | null; seg: Seg | null; knob: ReturnType<typeof knob> | null; cell: HTMLElement; label: HTMLElement }
-
-/** Sections stack in two rows once a card has more than two (so it is closer to square than a long strip). */
-const rowsFor = (type: number, d?: { params: ParamDef[] }) => (type === SIMPLE_FILTER ? 1 : sections({ type, name: '', instrument: false, params: d?.params ?? [] }).length > 2 ? 2 : 1)
 
 export function deviceCard(dev: Device, deps: CardDeps) {
   const def = DEVICES[dev.type]
@@ -181,12 +178,9 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   const el = h('div', { className: 'dev', 'data-device': id },
     head,
     slot,
-    h('div', { className: 'kgrps', style: `--rows:${rowsFor(dev.type, def)}` }, ...((secs) => secs.map((sec) => {
-      const cells = sec.params.map((p) => rows.find((r) => r.p === p)!.cell)
-      const units = sec.params.reduce((n, p) => n + span(p), 0)
-      return h('div', { className: 'kgrp' }, sec.title && secs.length > 1 ? h('div', { className: 'ktitle' }, sec.title) : null,
-        h('div', { className: 'kcells', style: `--cols:${dev.type === SIMPLE_FILTER ? 3 : columns(units, Math.max(...sec.params.map(span)))}` }, ...cells))
-    }))(sections(def ?? { type: dev.type, name: '', instrument: false, params: [] }))),
+    h('div', { className: 'krows' }, ...rows_(def ?? { type: dev.type, name: '', instrument: false, params: [] }).map((row) =>
+      h('div', { className: 'krow' }, row.title ? h('div', { className: 'ktitle' }, row.title) : null,
+        h('div', { className: 'kcells' }, ...row.params.map((p) => rows.find((r) => r.p === p)!.cell))))),
     range)
   if (slot) el.classList.add("filter")
   if (slot) el.style.width = `${CARD_W}px` // filters stay narrow: their run shares one curve view, a card wide per filter
