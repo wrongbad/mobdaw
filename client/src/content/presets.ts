@@ -11,11 +11,11 @@
 //   more gain.
 import type * as Y from 'yjs'
 import {
-  COMPRESSOR, DELAY, DEVICES, EQ, FINNWAVE, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO,
+  BORE, COMPRESSOR, DELAY, DEVICES, EQ, FINNWAVE, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO,
   addDevice, addDrum, deleteDevice, devicesMap, getDevices, getTracks, isDrum, setParam, updateDevice, updateTrack,
 } from '@mobdaw/shared'
 
-export type InstrumentCategory = 'keys' | 'bass' | 'lead' | 'pad' | 'pluck' | 'fx'
+export type InstrumentCategory = 'keys' | 'bass' | 'lead' | 'pad' | 'pluck' | 'winds' | 'strings' | 'fx'
 export type InstrumentPreset = { id: string; name: string; type: number; params: Record<string, number>; category: InstrumentCategory }
 export type Drum = { name: string; key: number; params: Record<string, number> }
 export type DrumKit = { id: string; name: string; drums: Drum[] }
@@ -51,6 +51,33 @@ export const INSTRUMENT_PRESETS: InstrumentPreset[] = [
   inst('buzz-riser', 'Buzz riser', 'fx', { rolloff: 0.02, env: 3, attack: 4000, decay: 0, sustain: 1, release: 3000, gain: 0.3 }),
   inst('drone', 'Dark drone', 'fx', { rolloff: 2.4, env: 0.4, attack: 2500, decay: 5000, sustain: 1, release: 6000, gain: 0.9 }),
 ]
+
+/** bore (waveguide) params by name; turned into the engine's ids by `bw`. `bore`: 0 closed, 1 open. */
+type Bw = {
+  character: number; stiffness?: number; aperture?: number; position: number; bore: 0 | 1; damping?: number; decay?: number; breath?: number; noise?: number
+  vibRate?: number; vibDepth?: number; attack: number; release: number; gain?: number
+}
+const bw = (p: Bw): Record<string, number> => ({
+  0: p.character, 1: p.stiffness ?? 0.5, 2: p.aperture ?? 0.5, 3: p.position, 4: p.bore, 5: p.damping ?? 0.3, 6: p.decay ?? 0.7, 7: p.breath ?? 0.5,
+  8: p.noise ?? 0, 9: p.vibRate ?? 5, 10: p.vibDepth ?? 0, 11: p.attack, 12: p.release, 13: p.gain ?? 1,
+})
+const bore = (id: string, name: string, category: InstrumentCategory, p: Bw): InstrumentPreset => ({ id, name, type: BORE, category, params: bw(p) })
+
+// The waveguide instruments (docs/bore.md). `aperture` and `breath` are calibrated, so 0.5 is a safe middle for both.
+INSTRUMENT_PRESETS.push(
+  // winds
+  bore('clarinet', 'Clarinet', 'winds', { character: 0, stiffness: 0.8, aperture: 0.5, position: 0.5, bore: 0, breath: 0.55, noise: 0.05, vibRate: 5, vibDepth: 0.1, attack: 40, release: 120 }),
+  bore('alto-sax', 'Alto sax', 'winds', { character: 0, stiffness: 0.35, aperture: 0.6, position: 0.2, bore: 1, breath: 0.6, noise: 0.2, vibRate: 5.7, vibDepth: 0.2, attack: 30, release: 140 }),
+  bore('breathy-flute', 'Breathy flute', 'winds', { character: 0.5, stiffness: 0.4, aperture: 0.5, position: 0.1, bore: 1, breath: 0.5, noise: 0.6, vibRate: 4.5, vibDepth: 0.12, attack: 140, release: 200 }),
+  bore('shakuhachi', 'Shakuhachi', 'winds', { character: 0.5, stiffness: 0.5, aperture: 0.5, position: 0.25, bore: 1, breath: 0.6, noise: 0.85, vibRate: 5.2, vibDepth: 0.55, attack: 90, release: 220 }),
+  bore('bottle', 'Bottle', 'winds', { character: 0.5, stiffness: 0.4, aperture: 0.5, position: 0.5, bore: 0, damping: 0.8, decay: 0.2, breath: 0.5, noise: 0.3, attack: 50, release: 100 }),
+  bore('reed-organ', 'Reed organ', 'winds', { character: 0.25, stiffness: 0.5, aperture: 0.5, position: 0.4, bore: 0, breath: 0.5, attack: 40, release: 90 }),
+  bore('growl-lead', 'Growl lead', 'winds', { character: 0, stiffness: 1, aperture: 0.7, position: 0.15, bore: 1, breath: 1, noise: 0.3, vibRate: 5.5, vibDepth: 0.15, attack: 20, release: 120 }),
+  // strings
+  bore('cello', 'Cello', 'strings', { character: 1, stiffness: 0.5, aperture: 0.5, position: 0.12, bore: 1, breath: 0.5, vibRate: 5, vibDepth: 0.25, attack: 250, release: 300 }),
+  bore('fiddle', 'Fiddle', 'strings', { character: 1, stiffness: 0.7, aperture: 0.75, position: 0.08, bore: 1, damping: 0.15, breath: 0.55, vibRate: 5.5, vibDepth: 0.12, attack: 15, release: 90 }),
+  bore('glass-harmonica', 'Glass harmonica', 'strings', { character: 0.75, stiffness: 0.5, aperture: 0.25, position: 0.3, bore: 1, decay: 1, breath: 0.45, attack: 300, release: 900 }),
+)
 
 /** lofi drum params by name. */
 type Ld = { cutoff: number; res: number; decay: number; gain: number }
@@ -206,6 +233,8 @@ export const effectPreset = (id: string) => EFFECT_PRESETS.find((p) => p.id === 
 /** The effect chain each instrument or kit preset comes with (an id in EFFECT_PRESETS); the rest have an empty chain. */
 const PRESET_FX: Record<string, string> = {
   'soft-keys': 'small-room', 'electric-piano': 'wide-tremolo', 'warm-pad': 'big-room', 'flute-lead': 'tape-echo', tape: 'glue',
+  clarinet: 'small-room', 'alto-sax': 'small-room', 'breathy-flute': 'big-room', shakuhachi: 'big-room', bottle: 'small-room', 'reed-organ': 'small-room',
+  'growl-lead': 'tape-echo', cello: 'small-room', fiddle: 'small-room', 'glass-harmonica': 'big-room',
 }
 
 /** `group` is the drawer's column heading: an instrument category, "drums" for kits, "effects" for chains. */

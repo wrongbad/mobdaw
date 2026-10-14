@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, MIX, SCHEMA_VERSION, addTrack, clipsMap, devicesMap, getClips, getDevices,
+  BORE, DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, MIX, SCHEMA_VERSION, addTrack, clipsMap, devicesMap, getClips, getDevices,
   getLanes, getNotes, getPoints, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, sweepOrphans, undoScope,
   tracksMap, metaMap, type Device,
 } from '@mobdaw/shared'
@@ -29,16 +29,16 @@ function inRange(type: number, params: Record<string, number>) {
 }
 
 describe('presets', () => {
-  it('instrument presets are distinct finnwave patches with params in range', () => {
+  it('instrument presets are distinct finnwave and bore patches with params in range', () => {
     expect(INSTRUMENT_PRESETS.length).toBeGreaterThanOrEqual(10)
     expect(new Set(INSTRUMENT_PRESETS.map((p) => p.id)).size).toBe(INSTRUMENT_PRESETS.length)
     expect(new Set(INSTRUMENT_PRESETS.map((p) => JSON.stringify(p.params))).size).toBe(INSTRUMENT_PRESETS.length)
     for (const p of INSTRUMENT_PRESETS) {
-      expect(p.type).toBe(FINNWAVE)
-      expect(Object.keys(p.params)).toHaveLength(DEVICES[FINNWAVE].params.length)
+      expect([FINNWAVE, BORE]).toContain(p.type)
+      expect(Object.keys(p.params)).toHaveLength(DEVICES[p.type].params.length)
       inRange(p.type, p.params)
     }
-    expect(new Set(INSTRUMENT_PRESETS.map((p) => p.category))).toEqual(new Set(['keys', 'bass', 'lead', 'pad', 'pluck', 'fx']))
+    expect(new Set(INSTRUMENT_PRESETS.map((p) => p.category))).toEqual(new Set(['keys', 'bass', 'lead', 'pad', 'pluck', 'winds', 'strings', 'fx']))
   })
 
   it('drum kits cover the GM keys with lofi drum params in range', () => {
