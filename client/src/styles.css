@@ -304,15 +304,25 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 
 /* note editor (lives inside the open clip; x scale follows timeline zoom via --beat) */
 .ne { display: flex; flex-direction: column; height: 100%; }
-.ne-head { display: flex; flex: none; gap: 12px; align-items: center; height: 20px; padding: 0 8px; font-size: 11px; background: var(--panel); border-bottom: 1px solid var(--line); cursor: pointer; }
-.ne-head input { width: 56px; height: 16px; padding: 0 4px; border: 0; background: var(--raise); }
-.ne-head button { border: 0; padding: 0 6px; font-size: 11px; line-height: 20px; color: inherit; }
-.ne-head button.on { color: var(--bg); background: var(--accent); }
+.ne-head { display: flex; flex: none; gap: 10px; align-items: center; height: 28px; padding: 0 8px; font-size: 11px; background: var(--bg); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .35); border-bottom: 1px solid var(--line); border-top: 2px solid var(--tc, var(--accent)); cursor: default; }
+.ne-field { display: flex; align-items: center; gap: 5px; margin: 0; }
+.ne-lbl { font-size: 9px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.ne-sep { flex: none; width: 1px; height: 14px; background: var(--line); }
+.ne-head input { width: 48px; height: 20px; padding: 0 4px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 3px; background: var(--raise); color: var(--fg); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+.ne-head input:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; }
+.ne-head button { height: 20px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 3px; padding: 0 8px; font-size: 11px; line-height: 18px; color: var(--fg); background: var(--raise); }
+.ne-head button:hover:not(:disabled) { background: var(--line); }
+.seg { position: relative; display: grid; grid-template-columns: repeat(var(--n), 1fr); height: 20px; box-sizing: border-box; padding: 1px; border: 1px solid var(--line); border-radius: 10px; background: var(--raise); }
+.seg-thumb { position: absolute; top: 1px; bottom: 1px; left: 1px; width: calc((100% - 2px) / var(--n)); border-radius: 9px; background: var(--tc, var(--accent)); transform: translateX(calc(var(--i) * 100%)); transition: transform .15s ease; pointer-events: none; }
+.ne-head .seg button { position: relative; height: auto; min-width: 26px; padding: 0 5px; border: 0; border-radius: 9px; background: none; color: var(--dim); font-size: 10px; line-height: 16px; white-space: nowrap; }
+.ne-head .seg button:hover:not(:disabled) { background: none; color: var(--fg); }
+.ne-head .seg button.on { color: var(--on-accent); }
+.seg button:focus-visible { outline: 1px solid var(--fg); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .seg-thumb { transition: none; } }
 .ne-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .ne-grid { position: relative; cursor: crosshair; background-color: var(--bg);
   background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to right, var(--grid-beat) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-beat) 1px, transparent 1px);
   background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, var(--sub, 100000px) 100%, 100% var(--row, 10px); }
-.ne-head select { height: 16px; padding: 0 2px; border: 0; font-size: 11px; color: inherit; background: var(--raise); }
 .ne-marq { position: absolute; z-index: 3; pointer-events: none; border: 1px solid var(--accent); background: rgba(255, 255, 255, .06); }
 .ne-vel { position: relative; flex: none; height: 44px; border-top: 1px solid var(--line-strong); background-color: var(--bg); cursor: ns-resize;
   background-image: linear-gradient(to right, var(--grid-bar) 1px, transparent 1px); background-size: var(--beat, 48px) 100%; }

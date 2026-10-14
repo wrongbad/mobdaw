@@ -6,6 +6,7 @@ import type * as Y from 'yjs'
 import { h } from '../dom'
 import { clamp, dragPointer } from './blocks'
 import { lift } from './lift'
+import { segmented } from './segmented'
 import { deleteMenu } from './popover'
 import { noteName } from './noteName'
 import {
@@ -53,13 +54,13 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     else updateClip(doc, clip.id, { lengthTicks: ticks, loopTicks: 0 }) // the pattern fills the clip: no repeats left
   }
   const view = h('button', { title: 'show this clip as a drum grid', disabled: readOnly, onclick: () => clip && setMidiView(doc, clip.id, 'drums') }, 'piano roll ▾')
-  const gridPick = h('select', { title: 'grid and snap (hold alt or ctrl while dragging to place freely)' },
-    ...GRIDS.map(([g, label]) => h('option', { value: String(g), selected: g === gridSel }, label)))
-  gridPick.onchange = () => { gridSel = gridPick.value === 'bar' ? 'bar' : Number(gridPick.value); layoutLines() }
+  const gridPick = segmented(GRIDS.map(([g, label]) => ({ value: String(g), label })), String(gridSel),
+    (v) => { gridSel = v === 'bar' ? 'bar' : Number(v); layoutLines() }, 'grid and snap (hold alt or ctrl while dragging to place freely)')
+  const field = (label: string, ...kids: (Node | string)[]) => h('label', { className: 'ne-field' }, h('span', { className: 'ne-lbl' }, label), ...kids)
   const head = h('div', { className: 'ne-head' },
-    view, h('label', {}, 'bpm ', bpm), h('label', {}, 'bars ', barsIn), h('label', {}, 'grid ', gridPick))
+    view, h('span', { className: 'ne-sep' }), field('bpm', bpm), field('bars', barsIn), h('span', { className: 'ne-sep' }), field('grid', gridPick.el))
   // inputs must not start a clip drag / zoom-out click on the clip underneath
-  head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button, select') && e.stopPropagation()
+  head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button, select, .seg') && e.stopPropagation()
   const grid = h('div', { className: 'ne-grid' })
   // the keyboard: a key per pitch, sticky at the left edge of what is visible; a click auditions the pitch
   const keys = h('div', { className: 'ne-keys' })
@@ -122,8 +123,8 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   grid.append(loopEnd, marq)
   const scroll = h('div', { className: 'ne-scroll' }, grid)
   scroll.onpointerdown = (e) => e.stopPropagation() // scrollbar drags must not reach the clip
-  scroll.addEventListener('wheel', (e) => { // pinch (a trackpad pinch arrives as ctrl + wheel): zoom the pitch axis, keeping the pitch under the pointer
-    if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return // (shift: the timeline's horizontal zoom)
+  scroll.addEventListener('wheel', (e) => { // ctrl/cmd + wheel (a trackpad pinch) zooms time: it is left to the timeline. With shift it zooms the pitch axis, keeping the pitch under the pointer
+    if (!(e.ctrlKey || e.metaKey) || !e.shiftKey) return
     e.preventDefault()
     e.stopPropagation()
     const y = e.clientY - scroll.getBoundingClientRect().top
@@ -167,17 +168,23 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   }
   const selected = () => [...sel].map((id) => notes.get(id)).filter((n): n is Note => !!n)
 
+  // A second pointer (a pinch starting) cancels the note / marquee gesture in progress, leaving nothing behind.
+  let active: { id: number; cancel(): void } | null = null
+  addEventListener('pointerdown', (e) => { if (active && e.pointerId !== active.id) active.cancel() }, true)
   grid.onpointerdown = (e) => {
     e.stopPropagation() // the clip underneath would otherwise start dragging
-    if (e.button !== 0 || !clip) return
+    if (e.button !== 0 || !clip || !e.isPrimary) return
     if (readOnly) { // read-only: selecting is still fine
       const id = (e.target as HTMLElement).closest<HTMLElement>('.note')?.dataset.id
       setSel(id ? [id] : [])
       return
     }
     // a finger long-presses to add or drag a note (until then it scrolls); a tap on a note just selects it
-    lift(e, () => gridDown(e), (why) => {
-      const id = why === 'tap' ? (e.target as HTMLElement).closest<HTMLElement>('.note')?.dataset.id : undefined
+    const token = { id: e.pointerId, dead: false, cancel() { this.dead = true; if (active === token) active = null } }
+    active = token // (covers the finger's long-press wait)
+    lift(e, () => { if (!token.dead) gridDown(e) }, (why) => {
+      if (active === token) active = null
+      const id = why === 'tap' && !token.dead ? (e.target as HTMLElement).closest<HTMLElement>('.note')?.dataset.id : undefined
       if (id) setSel([id])
     })
   }
@@ -192,6 +199,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     const id = noteEl.dataset.id!
     const n = notes.get(id)
     if (!n) return
+    const before = new Set(sel)
     const wasIn = sel.has(id)
     if (!wasIn) setSel(toggle ? [...sel, id] : [id])
     const resize = e.clientX > noteEl.getBoundingClientRect().right - EDGE
@@ -241,16 +249,29 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     const patch = (ps: { id: string; tick?: number; durTicks?: number; pitch?: number }[]) =>
       doc.transact(() => ps.forEach(({ id: pid, ...p }) => updateNote(doc, pid, p)))
     const move = (m: PointerEvent) => { last = m; if (!pending) pending = requestAnimationFrame(apply) }
+    const stop = () => {
+      active = null
+      removeEventListener('pointermove', move)
+      removeEventListener('pointerup', up)
+      removeEventListener('pointercancel', up)
+    }
+    active = { id: e.pointerId, cancel() { // a second finger: undo whatever the gesture did, without leaving an undo step
+      cancelAnimationFrame(pending)
+      last = null
+      stop()
+      release?.()
+      if (moved) { undo.undo(); undo.clear(false, true) }
+      undo.stopCapturing()
+      setSel(before)
+    } }
     const up = () => {
+      stop()
       cancelAnimationFrame(pending)
       apply()
       release?.()
       if (!moved && wasIn && toggle) setSel([...sel].filter((s) => s !== id)) // shift-click a selected note: deselect
       else if (!moved && wasIn && !toggle && sel.size > 1) setSel([id]) // a plain click inside a group narrows to that note
       undo.stopCapturing()
-      removeEventListener('pointermove', move)
-      removeEventListener('pointerup', up)
-      removeEventListener('pointercancel', up)
     }
     addEventListener('pointermove', move)
     addEventListener('pointerup', up)
@@ -275,11 +296,17 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
       const hit = inMarquee([...notes.values()], t0, t1, p0, p1).map((n) => n.id)
       setSel([...base, ...hit], false)
     }
-    const up = () => {
+    const stop = () => {
+      active = null
       removeEventListener('pointermove', move)
       removeEventListener('pointerup', up)
       removeEventListener('pointercancel', up)
       marq.hidden = true
+    }
+    const before = new Set(sel)
+    active = { id: e.pointerId, cancel() { stop(); if (boxed) setSel(before) } } // (a pinch: no note, the selection as it was)
+    const up = () => {
+      stop()
       if (boxed) return report()
       const st = snapOff(e) ? 0 : step()
       const tick = Math.max(0, st > 0 ? Math.floor(t0 / st) * st : Math.round(t0))
@@ -394,7 +421,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     vel.style.width = `${px(extent)}px`
     if (document.activeElement !== bpm) bpm.value = String(c.bpm)
     if (document.activeElement !== barsIn) barsIn.value = String(patternTicks(c) / (4 * c.ppq))
-    if (document.activeElement !== gridPick) gridPick.value = String(gridSel)
+    gridPick.set(String(gridSel))
     const looping = isLooping(c)
     loopEnd.hidden = !looping
     if (looping) {
