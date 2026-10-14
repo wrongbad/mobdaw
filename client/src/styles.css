@@ -310,13 +310,24 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .ne-head button.on { color: var(--bg); background: var(--accent); }
 .ne-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .ne-grid { position: relative; cursor: crosshair; background-color: var(--bg);
-  background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-beat) 1px, transparent 1px);
-  background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, 100% var(--row, 10px); }
+  background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to right, var(--grid-beat) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-beat) 1px, transparent 1px);
+  background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, var(--sub, 100000px) 100%, 100% var(--row, 10px); }
+.ne-head select { height: 16px; padding: 0 2px; border: 0; font-size: 11px; color: inherit; background: var(--raise); }
+.ne-marq { position: absolute; z-index: 3; pointer-events: none; border: 1px solid var(--accent); background: rgba(255, 255, 255, .06); }
+.ne-vel { position: relative; flex: none; height: 44px; border-top: 1px solid var(--line-strong); background-color: var(--bg); cursor: ns-resize;
+  background-image: linear-gradient(to right, var(--grid-bar) 1px, transparent 1px); background-size: var(--beat, 48px) 100%; }
+.ne-bar { position: absolute; bottom: 0; width: 3px; margin-left: -1px; border-radius: 1px 1px 0 0; background: var(--tc-1); pointer-events: none; }
+.ne-bar.sel { background: var(--accent); }
+.ne-bar.ignored { opacity: .35; }
 .ne-c { position: absolute; left: 6px; font-size: 9px; color: var(--dim); pointer-events: none; transform: translateY(-1px); }
 .ne-tint { position: absolute; inset: 0; pointer-events: none; }
-.ne-keys { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; z-index: 1; pointer-events: none; }
-.note { position: absolute; height: calc(var(--row, 10px) - 1px); border-radius: 2px; background: var(--tc-1); cursor: grab; }
-.note.sel { background: var(--accent); }
+.ne-keys { position: absolute; left: 0; top: 0; bottom: 0; width: 18px; z-index: 2; cursor: pointer; box-shadow: 1px 0 0 var(--line-strong); }
+.ne-key { position: relative; height: var(--row, 10px); box-sizing: border-box; border-bottom: 1px solid rgba(0, 0, 0, .35); color: #3a342c; line-height: calc(var(--row, 10px) - 1px); padding-left: 2px; overflow: hidden; user-select: none; }
+.ne-key.w { background: #e9e3d8; }
+.ne-key.b { background: #1a1612; }
+.ne-key.lit { background: var(--tc-1); color: #000; }
+.note { position: absolute; height: calc(var(--row, 10px) - 1px); border-radius: 2px; background: var(--tc-1); opacity: var(--vel, 1); cursor: grab; }
+.note.sel { background: var(--accent); opacity: 1; }
 .note.ignored { opacity: .35; }
 .ne-loop { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid var(--line-strong); pointer-events: none; }
 .ne-grip { position: absolute; top: 0; bottom: 0; left: -4px; width: 7px; cursor: ew-resize; pointer-events: auto; }
@@ -329,7 +340,6 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
   background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, calc(var(--beat) / 4) 100%; }
 .dg-label { position: absolute; left: 4px; top: 3px; font-size: 9px; color: var(--dim); pointer-events: none; white-space: nowrap; }
 .dg-hit { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--tc-1); pointer-events: none; }
-.dg-hit.rep { opacity: .35; }
 .dg-rep { position: absolute; top: 0; bottom: 0; right: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid var(--line-strong); pointer-events: none; }
 .dg-add { display: block; position: sticky; left: 0; margin: 6px 4px; height: 20px; padding: 0 10px; font-size: 11px; color: var(--dim); background: none; border: 1px dashed var(--line); }
 .dg-add:hover { color: var(--fg); border-color: var(--dim); background: none; }

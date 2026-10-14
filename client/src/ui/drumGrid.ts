@@ -1,9 +1,10 @@
 // Drum grid for one MIDI clip: the same notes as the piano roll, a row per drum (an instrument on a single note) and
 // a column per step (4 to a beat). Click a cell to toggle a hit. Notes on pitches with no drum row are kept, just not shown.
-import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, isDrum, isLooping, patternTicks, setMidiView, updateClip, type Device, type MidiClip, type Note } from '@mobdaw/shared'
+import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, isDrum, isLooping, patternTicks, setMidiView, updateClip, updateNote, type Device, type MidiClip, type Note } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'
 import { noteName } from './noteName'
+import { clampVelocity, gmDrum, hitOpacity, nextVelocity } from './noteOps'
 
 const STEPS = 4 // steps per beat (a 1/16 note)
 
@@ -46,9 +47,34 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
     if (tick + step() > pattern + 1e-6 || at >= extent) return
     const here = notes.filter((n) => n.pitch === pitch && n.tick >= tick && n.tick < tick + step())
     undo.stopCapturing()
-    if (here.length) doc.transact(() => here.forEach((n) => deleteNote(doc, n.id)))
-    else addNote(doc, { clipId: clip.id, tick, durTicks: step(), pitch, velocity: 1 })
-    undo.stopCapturing()
+    if (!here.length) {
+      addNote(doc, { clipId: clip.id, tick, durTicks: step(), pitch, velocity: 1 })
+      undo.stopCapturing()
+      return
+    }
+    // an existing hit: a click removes it, alt-click steps its velocity down (full, 3/4, 1/2, 1/4), a vertical drag sets it
+    const x0 = e.clientX, y0 = e.clientY
+    const v0 = here.map((n) => n.velocity)
+    let dragged = false
+    const move = (m: PointerEvent) => {
+      if (!dragged && Math.abs(m.clientY - y0) < 3) return
+      dragged = true
+      const d = (y0 - m.clientY) / 60
+      doc.transact(() => here.forEach((n, i) => updateNote(doc, n.id, { velocity: clampVelocity(v0[i] + d) })))
+    }
+    const up = () => {
+      removeEventListener('pointermove', move)
+      removeEventListener('pointerup', up)
+      removeEventListener('pointercancel', up)
+      if (!dragged) {
+        if (e.altKey) doc.transact(() => here.forEach((n) => updateNote(doc, n.id, { velocity: nextVelocity(n.velocity) })))
+        else doc.transact(() => here.forEach((n) => deleteNote(doc, n.id)))
+      }
+      undo.stopCapturing()
+    }
+    addEventListener('pointermove', move)
+    addEventListener('pointerup', up)
+    addEventListener('pointercancel', up)
   }
 
   function update(c: MidiClip, list: Note[], instruments: Device[], pps: number, ticks = c.lengthTicks) {
@@ -69,7 +95,7 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
       const row = h('div', { className: 'dg-row' })
       row.style.width = `${px(extent)}px`
       row.onpointerdown = (e) => toggle(e, row, key)
-      row.append(h('span', { className: 'dg-label' }, `${d.name ?? DEVICES[d.type]?.name ?? 'drum'} · ${noteName(key)}`))
+      row.append(h('span', { className: 'dg-label' }, `${d.name ?? gmDrum(key) ?? DEVICES[d.type]?.name ?? 'drum'} · ${noteName(key)}`))
       const passes = looping ? Math.ceil(extent / pattern) : 1
       for (const n of notes) {
         if (n.pitch !== key || n.tick < 0 || n.tick >= pattern) continue
@@ -78,6 +104,7 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
           if (tick >= extent) break
           const hit = h('i', { className: k ? 'dg-hit rep' : 'dg-hit' })
           hit.style.left = `${px(tick)}px`
+          hit.style.opacity = String(hitOpacity(n.velocity) * (k ? 0.35 : 1))
           hit.style.width = `${Math.max(2, px(Math.min(n.durTicks, step())) - 1)}px`
           row.append(hit)
         }

@@ -1,6 +1,7 @@
 // Plain absolutely-positioned DOM timeline. Isolated so it can be redesigned.
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import { MAX_PPS, MIN_PPS, fitPps } from './zoomFit'
+import { editZoomPps } from './autoZoom'
 import {
   DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, MIX, MIX_GAIN, MIX_PAN, getMixDevice, setMixParam, migrateToV3, FINNWAVE, SIMPLE_FILTER, addAudioClip, addClickTrack, addDevice, addDrum, isLooping, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
@@ -1387,10 +1388,36 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     })
   }
 
+  // Opening a MIDI clip while zoomed far out zooms in to it (editZoomPps); closing it puts the zoom back, unless the zoom was changed since.
+  let zoomedFor: string | null = null
+  let savedZoom: { pps: number; left: number; auto: number } | null = null
+  function syncEditZoom(clips: Clip[]) {
+    if (editing === zoomedFor) return
+    zoomedFor = editing
+    const c = editing ? clips.find((x) => x.id === editing) : undefined
+    if (!c) {
+      if (savedZoom && pps === savedZoom.auto) {
+        const { pps: back, left } = savedZoom
+        pps = back
+        requestAnimationFrame(() => (scroll.scrollLeft = left))
+      }
+      savedZoom = null
+      return
+    }
+    if (c.kind !== 'midi' || lanes.get(c.trackId)?.src) return
+    const next = editZoomPps(pps, clipLength(c, rate) / rate, 60 / c.bpm, scroll.clientWidth - HEADER)
+    if (next == null) return
+    savedZoom = savedZoom && savedZoom.auto === pps ? { ...savedZoom, auto: next } : { pps, left: scroll.scrollLeft, auto: next }
+    pps = next
+    const left = Math.max(0, (c.start / rate) * next - 8)
+    requestAnimationFrame(() => (scroll.scrollLeft = left))
+  }
+
   function draw() {
     if (destroyed) return
     const tracks = getTracks(doc)
     const clips = getClips(doc)
+    syncEditZoom(clips)
     const devices = getDevices(doc)
     const loopers = getLoopers(doc)
     const pads = getPads(doc)
@@ -2115,6 +2142,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       cancelAnimationFrame(meterRaf)
       cancelAnimationFrame(previewRaf)
       removeEventListener('keydown', key)
+      ne.destroy()
       removeEventListener('resize', schedule)
       offPedal()
       pedal?.abandon() // (its backup is recovered on the next open)
