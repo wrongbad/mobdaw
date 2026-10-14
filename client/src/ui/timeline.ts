@@ -41,6 +41,7 @@ import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
 import { inUse } from './held'
 import { valueTip } from './valueTip'
 import { trackKind } from './trackKind'
+import { knob } from './knob'
 import { follow, peakToFill } from './meter'
 import { icon, setIcon } from '../theme/icons'
 
@@ -61,7 +62,7 @@ type Card = ReturnType<typeof deviceCard>
 type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
   el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; kind: HTMLElement; mute: HTMLButtonElement; solo: HTMLButtonElement
-  record: HTMLButtonElement | null; listen: HTMLButtonElement | null; meter: HTMLElement | null; gain: HTMLInputElement; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
+  record: HTMLButtonElement | null; listen: HTMLButtonElement | null; meter: HTMLElement | null; gain: HTMLInputElement; pan: ReturnType<typeof knob>; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
   synthMore: HTMLButtonElement; synthRow: HTMLElement; synth: HTMLElement; cards: Map<string, Card>
   loopMore: HTMLButtonElement; loopRow: HTMLElement; loops: HTMLElement
   loopCards: Map<string, ReturnType<typeof looperCard>>; boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
@@ -855,12 +856,19 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     valueTip(gain, () => fmtDb(posToGain(gain.valueAsNumber)))
     gain.oninput = () => updateTrack(doc, t.id, { gain: posToGain(gain.valueAsNumber) })
     gain.onpointerdown = () => undo.stopCapturing()
+    const pan = knob({
+      min: -1, max: 1, value: t.pan, def: 0, disabled: readOnly,
+      title: (v) => (Math.abs(v) < 0.005 ? 'pan: centre (double-click to reset)' : `pan: ${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v) * 100)}`),
+      onStart: () => undo.stopCapturing(), // one undo step per gesture
+      onInput: (v) => updateTrack(doc, t.id, { pan: Math.abs(v) < 0.02 ? 0 : v }),
+      onChange: () => undo.stopCapturing(),
+    })
     const more = h('button', { className: 'fx-toggle', title: 'effects', onclick: () => {
       if (!expanded.delete(t.id)) expanded.add(t.id)
       draw()
     } }, 'fx')
     const delTrack = () => !locks.has(t.id) && confirm('delete this track and its clips?') && deleteTrack(doc, t.id)
-    const head = h('div', { className: 'head' }, h('div', { className: 'head-top' }, kind, name), h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter), h('div', { className: 'ctl' }, gain))
+    const head = h('div', { className: 'head' }, h('div', { className: 'head-top' }, kind, name), h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter), h('div', { className: 'ctl gain-row' }, gain, pan.el))
     // Click or right-click on the header (not on its controls) offers the track's menu.
     let menuClosed = false // this press just closed the menu: don't open it again
     head.addEventListener('pointerdown', (e) => (menuClosed = closedBy(e)), true)
@@ -873,7 +881,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       ], [e.clientX, e.clientY])
     }
     head.addEventListener('click', (e) => {
-      if (!menuClosed && !(e.target as HTMLElement).closest('button, input')) trackMenu(e)
+      if (!menuClosed && !(e.target as HTMLElement).closest('button, input, .knob')) trackMenu(e)
     })
     head.addEventListener('contextmenu', (e) => {
       e.preventDefault()
@@ -941,7 +949,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const auto = makeAutoSection(t.id)
     const presets = makePresetsDrawer(t.id)
     l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, name, kind, mute, solo, record, listen, meter, gain, more,
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, name, kind, mute, solo, record, listen, meter, gain, pan, more,
       fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
       pads: new Map(), auto, presets, loopTc, src,
     }
@@ -1427,6 +1435,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       l.el.classList.toggle('muted', t.muted)
       l.solo.classList.toggle('on', t.soloed)
       if (!inUse(l.gain)) l.gain.value = String(gainToPos(t.gain))
+      l.pan.set(t.pan)
       drawFx(l, t, devices)
       drawPresets(l, t)
       drawLoopers(l, t, loopers)

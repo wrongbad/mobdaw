@@ -171,6 +171,15 @@ input[type=range].gain {
 }
 input[type=range].gain::-webkit-slider-thumb { height: 18px; margin-top: 0; width: 3px; border-radius: 1px; box-shadow: 0 0 0 1px var(--raise); }
 input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radius: 1px; box-shadow: 0 0 0 1px var(--raise); }
+/* pan knob, beside the gain slider */
+.gain-row { gap: 6px; }
+.knob { flex: none; display: flex; cursor: ns-resize; touch-action: none; user-select: none; -webkit-user-select: none; border-radius: 50%; outline-offset: 1px; }
+.knob-track { fill: none; stroke: var(--line-strong); stroke-width: 3.5; stroke-linecap: round; }
+.knob-fill { fill: none; stroke: var(--tc, var(--accent)); stroke-width: 3.5; stroke-linecap: round; }
+.knob-cap { fill: var(--raise); stroke: var(--line-strong); }
+.knob-pointer { stroke: var(--fg); stroke-width: 3; stroke-linecap: round; }
+.knob:hover .knob-cap, .knob.active .knob-cap { stroke: var(--dim); }
+.knob.disabled { opacity: .5; cursor: default; }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {
