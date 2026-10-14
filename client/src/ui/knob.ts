@@ -1,7 +1,8 @@
 // A small rotary knob (after the redesign fork's theme/controls.ts): drag up / down (shift = fine), double-click or
 // double-tap to reset, wheel, arrow keys. `onInput` fires while it moves, `onChange` once when the gesture ends.
 const NS = 'http://www.w3.org/2000/svg'
-const ARC = 135 // degrees either side of 12 o'clock
+import { KNOB_ARC as ARC, posToAngle } from './knobMath'
+import { h } from '../dom'
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v))
 const polar = (r: number, deg: number) => [20 + r * Math.sin((deg * Math.PI) / 180), 20 - r * Math.cos((deg * Math.PI) / 180)]
 const arc = (r: number, a0: number, a1: number) => {
@@ -18,6 +19,12 @@ const svg = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string,
 export type KnobOpts = {
   min: number; max: number; value: number; def: number
   size?: number; title?: (v: number) => string; disabled?: boolean
+  /** Value <-> 0..1 knob position (log / cubic params); linear when omitted. */
+  toPos?(v: number): number; fromPos?(t: number): number
+  /** Draw the arc from the centre (the position of 0, or the default) rather than from the minimum. */
+  bipolar?: boolean
+  /** A value readout floating over the knob while hovered, dragged or focused (replaces the tooltip). */
+  format?(v: number): string
   onStart?(): void; onInput?(v: number): void; onChange?(v: number): void
 }
 
@@ -25,8 +32,21 @@ export function knob(o: KnobOpts) {
   let value = o.value
   let disabled = !!o.disabled
   let active = false
-  const pos = (v: number) => (v - o.min) / (o.max - o.min)
-  const mid = pos(o.def) * 2 * ARC - ARC
+  const pos = (v: number) => clamp(o.toPos ? o.toPos(v) : (v - o.min) / (o.max - o.min), 0, 1)
+  const val = (t: number) => clamp(o.fromPos ? o.fromPos(clamp(t, 0, 1)) : o.min + clamp(t, 0, 1) * (o.max - o.min), o.min, o.max)
+  const mid = o.bipolar ? posToAngle(pos(o.min < 0 && o.max > 0 ? 0 : o.def)) : -ARC
+  let hover = false
+  let tip: HTMLElement | null = null
+  const showTip = () => {
+    if (!o.format) return
+    const on = hover || active || document.activeElement === el
+    if (!on) { tip?.remove(); tip = null; return }
+    tip ??= document.body.appendChild(h('div', { className: 'value-tip' }))
+    const r = el.getBoundingClientRect()
+    tip.textContent = o.format(value)
+    tip.style.left = `${r.left + r.width / 2}px`
+    tip.style.top = `${r.top - 2}px`
+  }
   const fill = svg('path', { class: 'knob-fill' })
   const pointer = svg('line', { class: 'knob-pointer', x1: 20, y1: 20, x2: 20, y2: 9 })
   const s = svg('svg', { viewBox: '0 0 40 40', width: o.size ?? 22, height: o.size ?? 22, 'aria-hidden': 'true' })
@@ -37,10 +57,11 @@ export function knob(o: KnobOpts) {
   el.setAttribute('role', 'slider')
   el.append(s)
   const draw = () => {
-    const a = pos(value) * 2 * ARC - ARC
+    const a = posToAngle(pos(value))
     fill.setAttribute('d', arc(15, mid, a))
     pointer.setAttribute('transform', `rotate(${a.toFixed(1)} 20 20)`)
-    el.title = o.title?.(value) ?? String(value)
+    if (!o.format) el.title = o.title?.(value) ?? String(value)
+    showTip()
     el.classList.toggle('disabled', disabled)
     el.setAttribute('aria-valuenow', String(value))
   }
@@ -66,14 +87,16 @@ export function knob(o: KnobOpts) {
     active = true
     el.classList.add('active')
     o.onStart?.()
+    showTip()
     el.setPointerCapture(e.pointerId)
-    const onMove = (m: PointerEvent) => move(o.min + clamp(v0 + ((y0 - m.clientY) / (m.shiftKey ? 640 : 160)), 0, 1) * (o.max - o.min))
+    const onMove = (m: PointerEvent) => move(val(v0 + (y0 - m.clientY) / (m.shiftKey ? 640 : 160)))
     const end = () => {
       active = false
       el.classList.remove('active')
       el.removeEventListener('pointermove', onMove)
       el.removeEventListener('pointerup', end)
       el.removeEventListener('pointercancel', end)
+      showTip()
       if (value !== before) o.onChange?.(value)
     }
     el.addEventListener('pointermove', onMove)
@@ -84,7 +107,7 @@ export function knob(o: KnobOpts) {
     if (disabled) return
     e.preventDefault()
     o.onStart?.()
-    move(value - Math.sign(e.deltaY || -e.deltaX) * (e.shiftKey ? 0.004 : 0.02) * (o.max - o.min))
+    move(val(pos(value) - Math.sign(e.deltaY || -e.deltaX) * (e.shiftKey ? 0.004 : 0.02)))
   }, { passive: false })
   el.addEventListener('keydown', (e) => {
     const d = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? -1 : 0
@@ -92,12 +115,16 @@ export function knob(o: KnobOpts) {
     e.preventDefault()
     e.stopPropagation()
     o.onStart?.()
-    move(value + d * (e.shiftKey ? 0.1 : 0.01) * (o.max - o.min))
+    move(val(pos(value) + d * (e.shiftKey ? 0.1 : 0.01)))
   })
+  el.addEventListener('pointerenter', () => { hover = true; showTip() })
+  el.addEventListener('pointerleave', () => { hover = false; showTip() })
+  el.addEventListener('focus', showTip)
+  el.addEventListener('blur', showTip)
   draw()
   return {
     el,
-    set(v: number) { if (active) return void 0; value = clamp(v, o.min, o.max); draw() },
+    set(v: number) { if (active) return; value = clamp(v, o.min, o.max); draw() },
     setDisabled(d: boolean) { disabled = d; draw() },
   }
 }

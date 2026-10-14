@@ -751,7 +751,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     changed: (d: string) => { const host = runs.get(d)?.[0]; if (host && host !== d) cardOf(host)?.redrawCurve() },
     dragFilter: (d: string, change: FilterChange) => cardOf(d)?.dragMove(change),
     dragFilterEnd: (d: string) => cardOf(d)?.dragEnd(),
-    autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, () => t),
+    autoMenu: (label: HTMLElement, t: ParamTarget, clickToo?: boolean) => autoMenu(label, () => t, clickToo),
   }
 
   // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
@@ -780,7 +780,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     gain.oninput = () => setMixParam(doc, scope, 'gain', posToGain(gain.valueAsNumber))
     gain.onpointerdown = () => undo.stopCapturing()
     const pan = knob({
-      min: -1, max: 1, value: 0, def: 0, size: 20, disabled: readOnly,
+      min: -1, max: 1, value: 0, def: 0, bipolar: true, size: 20, disabled: readOnly,
       title: (v) => (Math.abs(v) < 0.005 ? 'pan: centre (double-click to reset)' : `pan: ${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v) * 100)}`),
       onStart: () => undo.stopCapturing(), // one undo step per gesture
       onInput: (v) => setMixParam(doc, scope, 'pan', Math.abs(v) < 0.02 ? 0 : v),
@@ -1361,7 +1361,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     setMuted: (id: string, muted: boolean) => updateLooper(doc, id, { muted }),
     setGain: (id: string, gain: number) => updateLooper(doc, id, { gain }),
     setTape: (id: string, patch: { sat?: number; cutoff?: number; warble?: number }) => updateLooper(doc, id, patch),
-    autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, () => t),
+    autoMenu: (label: HTMLElement, t: ParamTarget, clickToo?: boolean) => autoMenu(label, () => t, clickToo),
     toggleArm: (id: string) => { armed = armed === id ? null : id; draw() },
     clear: (id: string) => updateLooper(doc, id, { start: 0, length: 0 }),
     remove: (id: string) => { if (armed === id) armed = null; deleteLooper(doc, id) },

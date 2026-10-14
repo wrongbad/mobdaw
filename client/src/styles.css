@@ -259,7 +259,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .loop-box::before { left: 0; }
 .loop-box::after { right: 0; }
 .loop-box span { pointer-events: none; position: absolute; top: 0; left: 0; padding: 0 5px; font-size: 10px; line-height: 14px; color: var(--bg); background: var(--c); }
-.dev { position: relative; width: 280px; font-size: 12px; border-right: 1px solid var(--line); }
+.dev { position: relative; width: max-content; min-width: 120px; font-size: 12px; border-right: 1px solid var(--line); }
 .dev.bypassed { opacity: 0.55; }
 .dev-head { display: flex; gap: 6px; align-items: center; padding: 0 0 0 8px; height: 18px; padding-right: 8px; }
 .dev button { border: 0; padding: 0 6px; font-size: 11px; line-height: 18px; }
@@ -300,7 +300,20 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .automatable { cursor: pointer; }
 .automatable:hover { color: var(--fg); text-decoration: underline dotted; }
 .dev .prm .auto { color: var(--accent); }
-.dev .prm .driven + input { opacity: .6; }
+/* device knobs: titled sections side by side, each a grid of knob + name cells */
+.dev .kgrps { display: flex; align-items: stretch; padding: 2px 4px 4px; }
+.dev .kgrp { display: flex; flex-direction: column; padding: 0 6px; border-left: 1px solid var(--line); }
+.dev .kgrp:first-child { border-left: 0; }
+.dev .ktitle { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; line-height: 12px; padding-bottom: 1px; }
+.dev .kcells { display: grid; grid-template-columns: repeat(var(--cols, 4), 46px); gap: 2px 0; align-content: start; grid-auto-flow: row dense; }
+.dev .kn { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; }
+.dev .kn[hidden] { display: none; }
+.dev .kn > .dim { max-width: 46px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 12px; }
+.dev .kn .auto { color: var(--accent); }
+.dev .kn .driven { opacity: .7; }
+.dev .kn.sel { grid-column: span 2; justify-content: center; gap: 4px; }
+.dev.filter .kn.sel { grid-column: 1 / -1; }
+.dev .kn.sel select { min-width: 0; width: 88px; max-width: 100%; padding: 1px 2px; font-size: 11px; }
 
 /* note editor (lives inside the open clip; x scale follows timeline zoom via --beat) */
 .ne { display: flex; flex-direction: column; height: 100%; }

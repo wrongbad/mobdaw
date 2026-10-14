@@ -8,7 +8,9 @@ import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
 import { noteName, parseNote } from './noteName'
 import { inUse } from './held'
 import { dragToReorder } from './reorder'
-import { valueTip } from './valueTip'
+import { knob } from './knob'
+import { columns, sections } from './deviceLayout'
+import { formatParam, isBipolar } from './knobMath'
 
 export type CardDeps = {
   readOnly: boolean
@@ -37,13 +39,10 @@ export type CardDeps = {
   dragFilter(deviceId: string, change: FilterChange): void
   dragFilterEnd(deviceId: string): void
   /** Make a param's name offer "Automate" (the timeline owns the lanes). */
-  autoMenu(label: HTMLElement, target: ParamTarget): void
+  autoMenu(label: HTMLElement, target: ParamTarget, clickToo?: boolean): void
 }
 
-export const fmt = (p: ParamDef, v: number) =>
-  `${v >= 1000 ? Math.round(v) : v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(3)}${p.unit ? ` ${p.unit}` : ''}`
-
-type Row = { p: ParamDef; input: HTMLInputElement | HTMLSelectElement; out: HTMLElement; label: HTMLElement }
+type Row = { p: ParamDef; input: HTMLSelectElement | null; knob: ReturnType<typeof knob> | null; cell: HTMLElement; label: HTMLElement }
 
 export function deviceCard(dev: Device, deps: CardDeps) {
   const def = DEVICES[dev.type]
@@ -99,8 +98,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
       deps.live(id, pid, v)
       shown.set(pid, v)
       const r = rows.find((r) => r.p.id === pid)!
-      ;(r.input as HTMLInputElement).value = String(paramToPos(r.p, v))
-      r.out.textContent = fmt(r.p, v)
+      r.knob?.set(v)
     }
     deps.drag([...nodeDrag].map(([paramId, value]) => ({ deviceId: id, paramId, value })))
     showCurve()
@@ -112,10 +110,10 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   }
 
   const rows: Row[] = (def?.params ?? []).map((p) => {
-    const out = h('span', { className: 'dim out' })
-    const label = h('span', { className: 'dim' }, p.name)
-    // drop-downs can't be automated
-    if (!p.options) deps.autoMenu(label, { scope: dev.trackId, kind: def?.instrument ? 'synth' : 'effect', owner: id, param: String(p.id) })
+    const label = h('span', { className: 'dim', title: p.name }, p.name)
+    // drop-downs can't be automated; a click on the name offers it, a right-click on the knob too
+    const target: ParamTarget = { scope: dev.trackId, kind: def?.instrument ? 'synth' : 'effect', owner: id, param: String(p.id) }
+    if (!p.options) deps.autoMenu(label, target)
     if (p.options) {
       const input = h('select', { onchange: () => {
         const v = Number(input.value)
@@ -125,23 +123,26 @@ export function deviceCard(dev: Device, deps: CardDeps) {
         showCurve()
       } }, ...p.options.map((o, i) => h('option', { value: String(i) }, o)))
       input.disabled = deps.readOnly
-      return { p, input, out, label }
+      input.title = p.name
+      return { p, input, knob: null, cell: h('label', { className: 'kn sel', 'data-param': p.id }, input, label), label }
     }
-    const input = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly })
-    valueTip(input, out)
-    input.oninput = () => {
-      const v = paramToValue(p, Number(input.value))
-      out.textContent = fmt(p, v)
-      shown.set(p.id, v)
-      deps.live(id, p.id, v)
-      deps.drag([{ deviceId: id, paramId: p.id, value: v }])
-      showCurve()
-    }
-    input.onchange = () => { // fires on release
-      deps.commit(id, p.id, paramToValue(p, Number(input.value)))
-      deps.drag(null)
-    }
-    return { p, input, out, label }
+    const k = knob({
+      min: p.min, max: p.max, value: p.def, def: p.def, size: 30, disabled: deps.readOnly,
+      toPos: (v) => paramToPos(p, v), fromPos: (t) => paramToValue(p, t), bipolar: isBipolar(p),
+      format: (v) => formatParam(p, v),
+      onInput: (v) => {
+        shown.set(p.id, v)
+        deps.live(id, p.id, v)
+        deps.drag([{ deviceId: id, paramId: p.id, value: v }])
+        showCurve()
+      },
+      onChange: (v) => { // the gesture ended
+        deps.commit(id, p.id, v)
+        deps.drag(null)
+      },
+    })
+    deps.autoMenu(k.el, target, false)
+    return { p, input: null, knob: k, cell: h('div', { className: 'kn', 'data-param': p.id }, k.el, label), label }
   })
 
   // Instruments take the notes inside their range: two note-name fields, lo and hi (c2, f#3, or a pitch number).
@@ -166,8 +167,14 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   const el = h('div', { className: 'dev', 'data-device': id },
     head,
     slot,
-    ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input)),
+    h('div', { className: 'kgrps' }, ...((secs) => secs.map((sec) => {
+      const cells = sec.params.map((p) => rows.find((r) => r.p === p)!.cell)
+      const units = sec.params.reduce((n, p) => n + (p.options ? 2 : 1), 0) // a drop-down takes two knob widths
+      return h('div', { className: 'kgrp' }, sec.title && secs.length > 1 ? h('div', { className: 'ktitle' }, sec.title) : null,
+        h('div', { className: 'kcells', style: `--cols:${dev.type === SIMPLE_FILTER ? 3 : columns(units)}` }, ...cells))
+    }))(sections(def ?? { type: dev.type, name: '', instrument: false, params: [] }))),
     range)
+  if (slot) el.classList.add("filter")
   if (slot) el.style.width = `${CARD_W}px` // filters stay narrow: their run shares one curve view, a card wide per filter
   if (!deps.readOnly) dragToReorder(head, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(id, before), end: deps.reorderEnd })
   cardMenu(el, head, title, def?.instrument ? 'delete instrument' : 'delete effect', () => deps.remove(id), () => !deps.readOnly,
@@ -188,23 +195,24 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     if (dc) el.style.setProperty('--rc', dc)
     else el.style.removeProperty('--rc')
     showKeys(d.keyLo ?? KEY_MIN, d.keyHi ?? KEY_MAX)
-    for (const { p, input, out, label } of rows) {
+    for (const { p, input, knob: k, label } of rows) {
       const a = auto.get(String(p.id))
       const driven = !!a?.on && a.value != null
       label.classList.toggle('auto', !!a)
       label.classList.toggle('driven', driven)
-      input.disabled = deps.readOnly || driven
+      const dis = deps.readOnly || driven
+      if (input) input.disabled = dis
+      k?.setDisabled(dis)
       const v = (driven ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def
       const mine = nodeDrag?.get(p.id) // the pointer is on this card's curve
-      const free = driven || (!inUse(input) && mine == null) // a driven slider follows the lane even while focused
+      const free = driven || ((input ? !inUse(input) : true) && mine == null) // a driven knob follows the lane even while focused
       if (free) shown.set(p.id, v)
       if (p.id >= 1 && p.id <= 3) locks[(['cutoff', 'damping', 'gain'] as const)[p.id - 1]] = deps.readOnly || driven
-      if (free) input instanceof HTMLSelectElement ? (input.value = String(Math.round(v))) : (input.value = String(paramToPos(p, v)))
-      if (!(input instanceof HTMLSelectElement) && free) out.textContent = fmt(p, v)
+      if (free) input ? (input.value = String(Math.round(v))) : k!.set(v)
     }
     // the gain row only matters to a bell or shelf
     const gainRow = rows.find((r) => r.p.id === 3 && dev.type === SIMPLE_FILTER)
-    if (gainRow) gainRow.label.parentElement!.hidden = !filterHasGain(shown.get(0) ?? 0)
+    if (gainRow) gainRow.cell.hidden = !filterHasGain(shown.get(0) ?? 0)
     showCurve()
   }
   update(dev, new Map())
