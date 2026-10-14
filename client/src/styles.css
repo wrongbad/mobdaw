@@ -161,6 +161,16 @@ input[type=range]::-webkit-slider-runnable-track { height: 18px; background: tra
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 4px; height: 16px; margin-top: 1px; border: 0; border-radius: 0; background: var(--fg); }
 input[type=range]::-moz-range-track { background: transparent; }
 input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; border-radius: 0; background: var(--fg); }
+/* the track gain slider is also its level meter: a recessed trough, the post-fader L / R peaks drawn in the track colour (--l / --r, 0..1,
+   written by the timeline's meter loop), the handle on top */
+input[type=range].gain {
+  --f: linear-gradient(color-mix(in srgb, var(--tc, var(--accent)) 80%, var(--raise)), color-mix(in srgb, var(--tc, var(--accent)) 80%, var(--raise)));
+  height: 18px; border-radius: var(--r-sm);
+  background: var(--ticks, linear-gradient(transparent, transparent)), var(--f) 0 3px / calc(var(--l, 0) * 100%) 5px no-repeat,
+    var(--f) 0 10px / calc(var(--r, 0) * 100%) 5px no-repeat, var(--raise);
+}
+input[type=range].gain::-webkit-slider-thumb { height: 18px; margin-top: 0; width: 3px; border-radius: 1px; box-shadow: 0 0 0 1px var(--raise); }
+input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radius: 1px; box-shadow: 0 0 0 1px var(--raise); }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {

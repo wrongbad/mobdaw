@@ -17,7 +17,7 @@ import { getInputOffset, setInputOffset, type Captured } from '../audio/recordin
 import { ACTIONS, type Action } from '../audio/pedal'
 import { actionFor, getBindings, getMidiInput, midiSupported, onPress, openMidi } from '../midi'
 import { pedalSession } from './pedalSession'
-import type { PreviewMode } from '../audio/bridge'
+import type { Meters, PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
 import { renderProject } from '../audio/render'
 import { exportDialog } from './exportDialog'
@@ -41,6 +41,7 @@ import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
 import { inUse } from './held'
 import { valueTip } from './valueTip'
 import { trackKind } from './trackKind'
+import { follow, peakToFill } from './meter'
 import { icon, setIcon } from '../theme/icons'
 
 const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in styles.css
@@ -185,6 +186,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       pb = openPlayback(doc, s.projectId, rate, s.userId)
       pb.recorder.onlevel = drawLevel
       pb.oncpu = showCpu
+      pb.onmeters = onMeters
     } catch (err) {
       pb = null
       say(`sample rate: ${(err as Error).message}`, true)
@@ -525,6 +527,38 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     }]])
   }
 
+  // Level meters: the engine's post-fader peaks fill each track's gain slider (--l / --r on the input, a paint-only write).
+  // Reports (~30 Hz) only set targets; one rAF loop eases the bars toward them and stops once everything has settled.
+  const meterTo = new Map<string, [number, number]>()
+  const meterNow = new Map<string, [number, number]>()
+  let meterRaf = 0
+  let meterAt = 0
+  function onMeters(m: Meters) {
+    for (const id of lanes.keys()) {
+      const p = m.tracks.get(id)
+      meterTo.set(id, p ? [peakToFill(p[0]), peakToFill(p[1])] : [0, 0])
+    }
+    if (meterRaf) return
+    meterAt = performance.now()
+    meterRaf = requestAnimationFrame(meterFrame)
+  }
+  function meterFrame(now: number) {
+    const dt = now - meterAt
+    meterAt = now
+    let moving = false
+    for (const [id, to] of meterTo) {
+      const l = lanes.get(id)
+      if (!l) { meterTo.delete(id); meterNow.delete(id); continue }
+      const was = meterNow.get(id) ?? [0, 0]
+      const at: [number, number] = [follow(was[0], to[0], dt), follow(was[1], to[1], dt)]
+      if (at[0] !== was[0]) l.gain.style.setProperty('--l', at[0].toFixed(3))
+      if (at[1] !== was[1]) l.gain.style.setProperty('--r', at[1].toFixed(3))
+      meterNow.set(id, at)
+      if (at[0] > to[0] || at[1] > to[1]) moving = true
+    }
+    meterRaf = moving ? requestAnimationFrame(meterFrame) : 0
+  }
+
   /** The armed track's input meter: level on the drawn scale, red once the input has hit full scale. */
   function drawLevel() {
     const rec = pb?.recorder
@@ -816,7 +850,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     } }, 'I') : null
     const meter = record ? h('i', { className: 'meter', hidden: true, title: 'input level' }) : null
-    const gain = h('input', { type: 'range', min: 0, max: 1, step: 'any', title: 'gain', disabled: readOnly })
+    const gain = h('input', { type: 'range', className: 'gain', min: 0, max: 1, step: 'any', title: 'gain', disabled: readOnly })
     ticks(gain, [UNITY_POS]) // 0 dB; the top of the range is +6 dB
     valueTip(gain, () => fmtDb(posToGain(gain.valueAsNumber)))
     gain.oninput = () => updateTrack(doc, t.id, { gain: posToGain(gain.valueAsNumber) })
@@ -2026,6 +2060,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     pb = openPlayback(doc, s.projectId, rate, s.userId)
     pb.recorder.onlevel = drawLevel
     pb.oncpu = showCpu
+    pb.onmeters = onMeters
     draw()
     zoomFit() // (zoom is not remembered per project, so every open fits the song to the window)
     if (!readOnly) sweepUnusedTakes(takeCtx())
@@ -2041,6 +2076,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       destroyed = true
       cancelAnimationFrame(fitRaf)
       cancelAnimationFrame(raf)
+      cancelAnimationFrame(meterRaf)
       cancelAnimationFrame(previewRaf)
       removeEventListener('keydown', key)
       removeEventListener('resize', schedule)
