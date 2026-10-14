@@ -49,7 +49,7 @@ const HEADER = 146 // the track header (140) plus the gutter to its left; keep i
 const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
 const REARM_PX = 24 // ...and, once pulled free, only snaps to it again after moving this far away
 const MIN_SEC = 0.05
-const LANE_H = 72
+const LANE_H = 84
 const NO_DRAGS = new Map<number, number>()
 
 const accepts = (trackKind: string, clipKind: string) => trackKind === clipKind
@@ -59,23 +59,30 @@ const initials = (n: string) => n.split(/[\s@.]+/).filter(Boolean).slice(0, 2).m
 
 type Card = ReturnType<typeof deviceCard>
 /** A scope's automation: one collapsible section holding a lane per automated param (absent when there are none). */
-type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
+type AutoSec = { el: HTMLElement; toggle: HTMLElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
   el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; kind: HTMLElement; mute: HTMLButtonElement; solo: HTMLButtonElement
-  record: HTMLButtonElement | null; listen: HTMLButtonElement | null; meter: HTMLElement | null; gain: HTMLInputElement; pan: ReturnType<typeof knob>; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
-  synthMore: HTMLButtonElement; synthRow: HTMLElement; synth: HTMLElement; cards: Map<string, Card>
-  loopMore: HTMLButtonElement; loopRow: HTMLElement; loops: HTMLElement
+  record: HTMLButtonElement | null; listen: HTMLButtonElement | null; meter: HTMLElement | null; gain: HTMLInputElement; pan: ReturnType<typeof knob>; tabs: Map<TabName, HTMLButtonElement>; more: HTMLElement; fxRow: HTMLElement; fx: HTMLElement
+  synthMore: HTMLElement; synthRow: HTMLElement; synth: HTMLElement; cards: Map<string, Card>
+  loopMore: HTMLElement; loopRow: HTMLElement; loops: HTMLElement
   loopCards: Map<string, ReturnType<typeof looperCard>>; boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
   pads: Map<string, HTMLElement>
   auto: AutoSec
-  presets: { el: HTMLElement; toggle: HTMLButtonElement; grid: HTMLElement }
+  presets: { el: HTMLElement; toggle: HTMLElement; grid: HTMLElement }
   loopTc: TransportControls // loops preview transport
   /** Soundscape tracks only: the source lane, which has its own time axis, scroll and zoom. */
   src: Src | null
 }
+/** The drawers a track's header tabs open; each is one of the `...Shown` sets below (global fx lives in `expanded` under MASTER_TRACK). */
+type TabName = 'source' | 'synth' | 'loopers' | 'fx' | 'auto' | 'presets'
+const TAB_LABEL: Record<TabName, string> = { source: 'src', synth: 'synth', loopers: 'loops', fx: 'fx', auto: 'auto', presets: 'presets' }
+const TAB_TITLE: Record<TabName, string> = { source: 'source audio', synth: 'instruments', loopers: 'loopers', fx: 'effects', auto: 'automation lanes', presets: 'presets' }
+const TABS: Record<string, TabName[]> = {
+  audio: ['fx', 'auto', 'presets'], midi: ['synth', 'fx', 'auto', 'presets'], soundscape: ['source', 'loopers', 'fx', 'auto', 'presets'], master: ['fx', 'auto'],
+}
 type Src = {
   row: HTMLElement; view: HTMLElement; body: HTMLElement; ticks: HTMLElement; pps: number
-  more: HTMLButtonElement // collapse toggle in the header cell
+  more: HTMLElement // the drawer's label in the header cell
   tc: TransportControls // source preview transport
   playhead: HTMLElement // the preview's own playhead, in source time
   end: number // where the source audio ends (samples)
@@ -292,31 +299,16 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (readOnly) return
     void dropFiles(audioFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   }
-  /** A click on a shut chain's title bar (not a button, not the end of a drag) opens it. */
-  function openOnClick(fx: HTMLElement, open: () => void) {
-    let down = [0, 0]
-    fx.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY]), true)
-    fx.addEventListener('click', (e) => {
-      const el = e.target as HTMLElement
-      if (!fx.classList.contains('collapsed') || !el.closest('.dev-head') || el.closest('button')) return
-      if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return
-      open()
-      draw()
-    })
-  }
   // The global fx lane: the master bus chain. It closes the track list, directly above the global automation (one unit, after every track).
-  let masterOpen = false
   const masterCards = new Map<string, ReturnType<typeof deviceCard>>()
-  const masterMore = h('button', { className: 'fx-toggle', title: 'effects on the whole mix', onclick: () => {
-    masterOpen = !masterOpen
-    draw()
-  } }, 'global fx')
+  const masterMore = h('div', { className: 'fx-toggle' }, 'global fx')
   const masterFx = h('div', { className: 'fx', hidden: true })
   const masterAdd = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
     popover(masterAdd, EFFECTS.map((d) => [d.name, () => addDevice(doc, MASTER_TRACK, d.type)] as [string, () => void])) }, '+')
   masterFx.append(masterAdd)
-  master.append(h('div', { className: 'fx-row' }, masterMore, masterFx), masterAuto.el)
-  openOnClick(masterFx, () => (masterOpen = true))
+  const masterTabs = makeTabs(MASTER_TRACK, TABS.master)
+  const masterFxRow = h('div', { className: 'fx-row', hidden: true }, masterMore, masterFx)
+  master.append(h('div', { className: 'lane-row master-row' }, h('div', { className: 'head' }, h('div', { className: 'head-top' }, h('span', { className: 'name' }, 'global')), masterTabs.el)), masterFxRow, masterAuto.el)
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
 
   const x = (smp: number) => (smp / rate) * pps
@@ -728,11 +720,34 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     ;(scope === MASTER_TRACK ? masterAuto : lanes.get(scope)?.auto)?.el.scrollIntoView({ block: 'nearest' })
   }
 
+  const shownSet = (n: TabName) => ({ source: srcShown, synth: synthShown, loopers: loopShown, fx: expanded, auto: autoShown, presets: presetsShown })[n]
+
+  /** The tab to open or shut one drawer of a track (or MASTER_TRACK): the one way in. */
+  function toggleTab(id: string, n: TabName) {
+    if (shownSet(n).delete(id)) {
+      if (n === 'source' || n === 'loopers') { // the transport is about to be hidden: don't leave it playing
+        const pv = pb?.preview(id, n === 'source' ? 'source' : 'loops')
+        if (pv?.playing) pv.stop()
+      }
+    } else shownSet(n).add(id)
+    draw()
+  }
+
+  /** The row of tabs at the bottom of a header: one per drawer this kind of track has. They live in the header column only. */
+  function makeTabs(id: string, names: TabName[]) {
+    const btns = new Map(names.map((n) => [n, h('button', { className: 'tab', title: TAB_TITLE[n], onclick: () => toggleTab(id, n) }, TAB_LABEL[n])] as [TabName, HTMLButtonElement]))
+    return { el: h('div', { className: 'tabs' }, ...btns.values()), btns }
+  }
+  const syncTabs = (id: string, btns: Map<TabName, HTMLButtonElement>) => {
+    for (const [n, b] of btns) {
+      const on = shownSet(n).has(id)
+      b.classList.toggle('on', on)
+      b.setAttribute('aria-pressed', String(on))
+    }
+  }
+
   function makeAutoSection(scope: string, title = 'automation'): AutoSec {
-    const toggle = h('button', { className: 'fx-toggle', title: 'automation lanes', onclick: () => {
-      if (!autoShown.delete(scope)) autoShown.add(scope)
-      draw()
-    } }, title)
+    const toggle = h('div', { className: 'fx-toggle' }, title)
     const box = h('div', { className: 'auto-box' })
     const el = h('div', { className: 'auto-section', hidden: true }, h('div', { className: 'fx-row' }, toggle), box)
     el.dataset.title = title
@@ -742,13 +757,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   /** The owner's name for a lane header: the device's, numbered when its chain has several of a kind. */
   /** The presets drawer: a section like the automation one (same toggle and box), holding one column of plain-text buttons per group. */
   function makePresetsDrawer(id: string) {
-    const toggle = h('button', { className: 'fx-toggle on', title: 'presets', onclick: () => { presetsShown.delete(id); draw() } }, 'presets')
+    const toggle = h('div', { className: 'fx-toggle on' }, 'presets')
     const grid = h('div', { className: 'preset-grid' })
     return { el: h('div', { className: 'auto-section', hidden: true }, h('div', { className: 'fx-row' }, toggle, grid)), toggle, grid }
   }
 
   function drawPresets(l: Lane, t: Track) {
     const list = presetsShown.has(t.id) ? presetsFor(doc, t.id) : []
+    const has = presetsFor(doc, t.id).length > 0
+    l.tabs.get('presets')!.hidden = !has
     l.presets.el.hidden = !list.length
     const groups = new Map<string, typeof list>()
     for (const p of list) groups.set(p.group, [...(groups.get(p.group) ?? []), p])
@@ -786,14 +803,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         const r = resolveTarget(doc, l)
         return r ? [{ l, r }] : []
       })
-      sec.el.hidden = mine.length === 0
       const open = autoShown.has(scope)
+      const tab = (scope === MASTER_TRACK ? masterTabs.btns : lanes.get(scope)?.tabs)?.get('auto')
+      if (tab) tab.hidden = mine.length === 0 // (no lanes: nothing to open)
+      sec.el.hidden = mine.length === 0 || !open
       sec.toggle.classList.toggle('on', open)
       sec.toggle.textContent = `${sec.el.dataset.title} (${mine.length})`
-      sec.box.hidden = !open
       const ids = new Set(mine.map((m) => m.l.id))
       for (const [id, row] of sec.rows) if (!ids.has(id)) { row.el.remove(); sec.rows.delete(id) }
-      if (!open) continue
+      if (sec.el.hidden) continue
       mine.forEach(({ l, r }, i) => {
         let row = sec.rows.get(l.id)
         if (!row) sec.rows.set(l.id, (row = autoRow(rowDeps)))
@@ -857,18 +875,16 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     gain.oninput = () => updateTrack(doc, t.id, { gain: posToGain(gain.valueAsNumber) })
     gain.onpointerdown = () => undo.stopCapturing()
     const pan = knob({
-      min: -1, max: 1, value: t.pan, def: 0, disabled: readOnly,
+      min: -1, max: 1, value: t.pan, def: 0, size: 20, disabled: readOnly,
       title: (v) => (Math.abs(v) < 0.005 ? 'pan: centre (double-click to reset)' : `pan: ${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v) * 100)}`),
       onStart: () => undo.stopCapturing(), // one undo step per gesture
       onInput: (v) => updateTrack(doc, t.id, { pan: Math.abs(v) < 0.02 ? 0 : v }),
       onChange: () => undo.stopCapturing(),
     })
-    const more = h('button', { className: 'fx-toggle', title: 'effects', onclick: () => {
-      if (!expanded.delete(t.id)) expanded.add(t.id)
-      draw()
-    } }, 'fx')
+    const tabs = makeTabs(t.id, TABS[t.kind] ?? TABS.audio)
+    const more = h('div', { className: 'fx-toggle' }, 'fx')
     const delTrack = () => !locks.has(t.id) && confirm('delete this track and its clips?') && deleteTrack(doc, t.id)
-    const head = h('div', { className: 'head' }, h('div', { className: 'head-top' }, kind, name), h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter), h('div', { className: 'ctl gain-row' }, gain, pan.el))
+    const head = h('div', { className: 'head' }, h('div', { className: 'head-top' }, kind, name), h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter), h('div', { className: 'ctl gain-row' }, gain, pan.el), tabs.el)
     // Click or right-click on the header (not on its controls) offers the track's menu.
     let menuClosed = false // this press just closed the menu: don't open it again
     head.addEventListener('pointerdown', (e) => (menuClosed = closedBy(e)), true)
@@ -876,7 +892,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (readOnly || locks.has(t.id)) return
       popover(head, [
         ['rename', () => rename(t.id)],
-        ...(presetsFor(doc, t.id).length ? [['presets', () => { presetsShown.add(t.id); draw() }] as [string, () => void]] : []),
         ['delete track', () => void delTrack()],
       ], [e.clientX, e.clientY])
     }
@@ -914,18 +929,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     else if (t.kind === 'midi') bgMenu(body, (e) => [['new piano roll', () => newMidiClip(t.id, atX(e))], ['new drum grid', () => newMidiClip(t.id, atX(e), true)]])
     else if (t.kind === 'soundscape') bgMenu(body, (e) => [['new region', () => newPad(t.id, atX(e))]])
     const fx = h('div', { className: 'fx', hidden: true })
-    openOnClick(fx, () => expanded.add(t.id))
     const add = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
       popover(add, EFFECTS.map((d) => [d.name, () => addDevice(doc, t.id, d.type)] as [string, () => void])) }, '+')
     fx.append(add)
     const fxRow = h('div', { className: 'fx-row' }, more, fx) // opaque, so it covers the playhead
     // MIDI tracks: the instrument gets its own row above the FX bar
-    const synthMore = h('button', { className: 'fx-toggle', title: 'instruments', onclick: () => {
-      if (!synthShown.delete(t.id)) synthShown.add(t.id)
-      draw()
-    } }, 'synth')
+    const synthMore = h('div', { className: 'fx-toggle' }, 'synth')
     const synth = h('div', { className: 'fx' })
-    openOnClick(synth, () => synthShown.add(t.id))
     const addSynth = h('button', { className: 'add-fx', title: 'add instrument', disabled: readOnly, onclick: () =>
       popover(addSynth, INSTRUMENTS.map((d) => [d.name, () => (d.type === LOFI_DRUM ? addDrum(doc, t.id) : addDevice(doc, t.id, d.type))] as [string, () => void])) }, '+')
     synth.append(addSynth)
@@ -933,15 +943,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     // soundscape tracks: the main lane is blank like an empty track (regions turn the loopers on); the source audio gets its own lane
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
     // the loopers row: speed and region per slot, above the FX bar
-    const loopMore = h('button', { className: 'fx-toggle', title: 'loopers', onclick: () => {
-      if (loopShown.delete(t.id)) {
-        const pv = pb?.preview(t.id, 'loops') // the transport is about to be hidden: don't leave it playing
-        if (pv?.playing) pv.stop()
-      } else loopShown.add(t.id)
-      draw()
-    } }, 'loopers')
+    const loopMore = h('div', { className: 'fx-toggle' }, 'loopers')
     const loops = h('div', { className: 'fx' })
-    openOnClick(loops, () => loopShown.add(t.id))
     loops.append(h('button', { className: 'add-fx', title: 'add looper', disabled: readOnly, onclick: () => addNextLooper(doc, t.id) }, '+'))
     const loopTc = transportControls({ title: 'play / stop the loops', small: true, onToggle: () => togglePreview(t.id, 'loops') })
     const loopRow = h('div', { className: 'fx-row', hidden: true }, h('div', { className: 'fx-head' }, loopMore, loopTc.el), loops)
@@ -949,7 +952,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const auto = makeAutoSection(t.id)
     const presets = makePresetsDrawer(t.id)
     l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, name, kind, mute, solo, record, listen, meter, gain, pan, more,
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, name, kind, mute, solo, record, listen, meter, gain, pan, tabs: tabs.btns, more,
       fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
       pads: new Map(), auto, presets, loopTc, src,
     }
@@ -990,17 +993,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const synthOpen = t.kind === 'midi' && synthShown.has(t.id)
     const mine = devices.filter((d) => d.trackId === t.id)
     const chain = mine.filter((d) => !DEVICES[d.type]?.instrument)
-    const fxShown = fxOpen || chain.length > 0 // shut: the cards stay as title bars
-    l.fx.hidden = !fxShown
-    l.fx.classList.toggle('collapsed', !fxOpen)
-    l.more.classList.toggle('on', fxOpen)
-    l.synthRow.hidden = t.kind !== 'midi'
     const instruments = mine.filter((d) => DEVICES[d.type]?.instrument)
-    const synthShut = !synthOpen && (t.kind !== 'midi' || instruments.length === 0)
-    l.synth.hidden = synthShut // shut: the synth card stays as a title bar
-    l.synth.classList.toggle('collapsed', !synthOpen)
+    l.fxRow.hidden = !fxOpen // a shut drawer takes no height at all
+    l.fx.hidden = !fxOpen
+    l.more.classList.toggle('on', fxOpen)
+    l.synthRow.hidden = !synthOpen
     l.synthMore.classList.toggle('on', synthOpen)
-    if (!fxShown && synthShut) return
+    if (!fxOpen && !synthOpen) return
     const ids = new Set(mine.map((d) => d.id))
     for (const [id, c] of l.cards) if (!ids.has(id)) { c.el.remove(); l.cards.delete(id) }
     const place = (box: HTMLElement, list: Device[]) => list.forEach((d, i) => {
@@ -1009,22 +1008,24 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (box.children[i] !== c.el) box.insertBefore(c.el, box.children[i] ?? null)
       c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS, autoInfos.get(d.id) ?? NO_AUTO)
     })
-    if (!synthShut) place(l.synth, instruments)
-    if (fxShown) {
+    if (synthOpen) place(l.synth, instruments)
+    if (fxOpen) {
       findRuns(chain)
       place(l.fx, chain)
-      for (const d of chain) l.cards.get(d.id)?.redrawCurve() // (shut too: it colours the titles) // again, now that every card is in place (rows, neighbours)
+      for (const d of chain) l.cards.get(d.id)?.redrawCurve() // again, now that every card is in place (rows, neighbours)
     }
   }
 
   function drawMaster(devices: Device[]) {
     const mine = devices.filter((d) => d.trackId === MASTER_TRACK)
     const n = mine.length
-    masterFx.hidden = !masterOpen && n === 0 // shut: the cards stay as title bars
-    masterFx.classList.toggle('collapsed', !masterOpen)
-    masterMore.classList.toggle('on', masterOpen)
+    const open = expanded.has(MASTER_TRACK)
+    masterFxRow.hidden = !open
+    masterFx.hidden = !open
+    masterMore.classList.toggle('on', open)
     masterMore.textContent = n ? `global fx (${n})` : 'global fx'
-    if (masterFx.hidden) return
+    syncTabs(MASTER_TRACK, masterTabs.btns)
+    if (!open) return
     const ids = new Set(mine.map((d) => d.id))
     for (const [id, c] of masterCards) if (!ids.has(id)) { c.el.remove(); masterCards.delete(id) }
     findRuns(mine)
@@ -1149,13 +1150,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const body = h('div', { className: 'lane-body src-body', 'data-track': trackId }, ticks)
     const view = h('div', { className: 'src-view' }, body)
     const tc = transportControls({ title: 'play / pause the source audio', small: true, onToggle: () => togglePreview(trackId, 'source') })
-    const more = h('button', { className: 'fx-toggle', title: 'source audio', onclick: () => {
-      if (srcShown.delete(trackId)) {
-        const pv = pb?.preview(trackId, 'source') // the transport is about to be hidden: don't leave it playing
-        if (pv?.playing) pv.stop()
-      } else srcShown.add(trackId)
-      draw()
-    } }, 'source')
+    const more = h('div', { className: 'fx-toggle' }, 'source')
     const head = h('div', { className: 'head src-head' }, more, tc.el)
     const playhead = h('div', { className: 'playhead', hidden: true })
     body.append(playhead)
@@ -1278,12 +1273,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   /** Looper rows (cards) and the coloured region boxes drawn over the track's audio. */
   function drawLoopers(l: Lane, t: Track, loopers: Looper[]) {
     const isLoop = t.kind === 'soundscape' && !!l.src
-    l.loopRow.hidden = !isLoop
     const open = isLoop && loopShown.has(t.id)
+    l.loopRow.hidden = !open
     const mine = isLoop ? loopers.filter((x) => x.trackId === t.id) : []
-    const shown = open || mine.length > 0 // shut: the cards stay as title bars
-    l.loops.hidden = !shown
-    l.loops.classList.toggle('collapsed', !open)
+    l.loops.hidden = !open
     l.loopMore.classList.toggle('on', open)
     l.loopTc.el.hidden = !open
     l.src?.body.classList.toggle('arming', mine.some((x) => x.id === armed))
@@ -1305,7 +1298,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       b.style.width = `${Math.max(2, (lp.length / rate) * l.src.pps)}px`
       b.classList.toggle('armed', lp.id === armed)
     }
-    if (!shown) return
+    if (!open) return
     for (const [id, c] of l.loopCards) if (!mine.some((m) => m.id === id)) { c.el.remove(); l.loopCards.delete(id) }
     mine.forEach((lp, i) => {
       let c = l.loopCards.get(lp.id)
@@ -1439,12 +1432,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       drawFx(l, t, devices)
       drawPresets(l, t)
       drawLoopers(l, t, loopers)
+      syncTabs(t.id, l.tabs)
       drawPads(l, t, pads)
       if (l.src) {
         const srcOpen = srcShown.has(t.id)
-        l.src.row.classList.toggle('collapsed', !srcOpen) // collapsed: just the clip names
+        l.src.row.hidden = !srcOpen
         l.src.more.classList.toggle('on', srcOpen)
-        l.src.tc.el.hidden = !srcOpen
         l.src.end = srcEnd(t.id)
         const end = Math.max(60 * rate, l.src.end + 30 * rate)
         l.src.body.style.width = `${(end / rate) * l.src.pps}px`

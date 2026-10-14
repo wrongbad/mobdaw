@@ -135,12 +135,13 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 
 /* lanes: header, clip row, FX chain */
 .lane { --lane: var(--panel); background: var(--lane); position: relative; margin: var(--gutter) 0 0 var(--gutter); border-radius: var(--r-md); overflow: clip; } /* clip, not hidden: the sticky headers must still stick to the scroller */
-.lane-row { display: flex; height: 72px; }
+.lane-row { display: flex; height: 84px; }
 .lane.editing .lane-row { height: 320px; }
 /* the drum grid: header, a row per drum, the "add drum" button */
 .lane.editing.drums .lane-row { height: calc(20px + var(--dg-rows, 0) * 18px + 32px + 2px); }
-.head { background: var(--lane); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 0 12px; border-right: 1px solid var(--line); }
-.head-top { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.head { background: var(--lane); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); display: flex; flex-direction: column; justify-content: flex-start; gap: 3px; padding: 4px 8px 0 12px; border-right: 1px solid var(--line); }
+.head > * { flex: none; }
+.head-top { height: 16px; display: flex; align-items: center; gap: 4px; min-width: 0; }
 .kind { flex: none; display: flex; color: var(--tc, var(--dim)); }
 .name { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; padding-right: 14px; }
 .rename { width: 100%; padding: 0 4px; }
@@ -172,7 +173,7 @@ input[type=range].gain {
 input[type=range].gain::-webkit-slider-thumb { height: 18px; margin-top: 0; width: 3px; border-radius: 1px; box-shadow: 0 0 0 1px var(--raise); }
 input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radius: 1px; box-shadow: 0 0 0 1px var(--raise); }
 /* pan knob, beside the gain slider */
-.gain-row { gap: 6px; }
+.gain-row { gap: 6px; height: 20px; }
 .knob { flex: none; display: flex; cursor: ns-resize; touch-action: none; user-select: none; -webkit-user-select: none; border-radius: 50%; outline-offset: 1px; }
 .knob-track { fill: none; stroke: var(--line-strong); stroke-width: 3.5; stroke-linecap: round; }
 .knob-fill { fill: none; stroke: var(--tc, var(--accent)); stroke-width: 3.5; stroke-linecap: round; }
@@ -180,6 +181,14 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .knob-pointer { stroke: var(--fg); stroke-width: 3; stroke-linecap: round; }
 .knob:hover .knob-cap, .knob.active .knob-cap { stroke: var(--dim); }
 .knob.disabled { opacity: .5; cursor: default; }
+/* drawer tabs: the bottom edge of the header column (never the clip area). Shut ones are recessed, open ones lit and in the track colour */
+.tabs { display: flex; margin: auto -8px 0 -9px; height: 16px; }
+.tab { flex: 1; min-width: 0; padding: 0; border: 0; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-radius: 0; background: color-mix(in srgb, var(--bg) 60%, var(--lane)); color: var(--faint); font-size: 10px; line-height: 15px; }
+.tab:last-child { border-right: 0; }
+.tab:hover { color: var(--dim); }
+.tab.on { background: var(--lane); color: var(--fg); box-shadow: inset 0 2px 0 var(--tc, var(--accent)); border-top-color: transparent; }
+.tab[hidden] { display: none; }
+.lane.master .lane-row { height: 52px; }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {
@@ -221,7 +230,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 
 /* bottom bar of every lane: the toggle is its header-width left cell, the chain opens to its right */
 .fx-row { position: relative; z-index: 2; display: flex; background: var(--lane); border-top: 1px solid var(--line); }
-.fx-toggle { position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
+.fx-toggle { cursor: default; position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
 .fx-toggle.on { color: var(--fg); }
 .fx { position: sticky; left: calc(var(--head) + var(--gutter)); width: calc(100vw - var(--head) - var(--gutter)); display: flex; align-items: stretch; min-height: 72px; overflow-x: auto; overflow-y: hidden; } /* cards stay one row and scroll sideways; they stretch to the row's tallest, so borders line up */
 /* the device rows (synth, effects, loopers, global fx) and the presets drawer never show scroll bars; wheel, trackpad and touch still scroll them */
@@ -229,13 +238,8 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .fx::-webkit-scrollbar, .preset-grid::-webkit-scrollbar { display: none; }
 .fx > * { flex: none; }
 .fx[hidden] { display: none; }
-/* shut: only each card's title bar */
-.fx.collapsed { min-height: 0; align-items: stretch; }
-.fx.collapsed .dev > :not(.dev-head), .fx.collapsed .add-fx { display: none; }
-.fx.collapsed .dev { cursor: pointer; display: flex; flex-direction: column; } /* the title bar fills the bar's height */
-.fx.collapsed .dev-head { height: auto; flex: 1; color: var(--dim); }
-.fx.collapsed .dev-head strong { opacity: .65; } /* filter colour-coding stays, darkened */
-.fx-row[hidden] { display: none; }
+
+.fx-row[hidden], .lane-row[hidden] { display: none; }
 /* The track colour bar: --tc is set once on the .lane, and every row of the block (header, fx, automation, presets) draws its slice of one
    continuous bar. A sticky 3px strip over the first pixels of the sticky left column; it also covers the row's 1px top border. */
 .lane-row::before, .fx-row::before {
@@ -351,11 +355,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .src-head { padding: 0; gap: 0; justify-content: flex-start; align-items: stretch; }
 .src-head .fx-toggle { position: relative; left: 0; width: auto; flex: none; border-right: 0; box-shadow: none; }
 .src-head .transport.sm { padding: 3px 0 0 6px; }
-/* collapsed source lane: a thin row showing only the clip names */
-.src-row.collapsed { height: 20px; }
-.src-row.collapsed .src-view { overflow: hidden; }
-.src-row.collapsed .src-body .clip { top: 0; padding: 0 6px; line-height: 20px; }
-.src-row.collapsed .wave, .src-row.collapsed .src-ticks, .src-row.collapsed .loop-box, .src-row.collapsed .playhead { display: none; }
+
 .transport[hidden] { display: none; }
 .src-view { position: sticky; left: calc(var(--head) + var(--gutter)); flex: none; width: calc(var(--view, 100vw) - var(--head) - var(--gutter)); height: 100%;
   overflow-x: auto; overflow-y: hidden; }
@@ -391,14 +391,14 @@ button.danger:hover { color: var(--danger); }
 .clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); pointer-events: none; z-index: 1; }
 /* M S R I: small square toggles, lit in their own colour; the strip after them is the armed track's input meter */
 .ctl.track-btns { background: none; gap: 2px; }
-.ctl.track-btns button { flex: none; width: 18px; height: 18px; padding: 0; font-size: 10px; font-weight: 600; line-height: 1; border-radius: var(--r-sm); background: var(--raise); }
+.ctl.track-btns button { flex: none; width: 16px; height: 16px; padding: 0; font-size: 10px; font-weight: 600; line-height: 1; border-radius: var(--r-sm); background: var(--raise); }
 .ctl.track-btns button:hover:not(:disabled) { color: var(--fg); }
 .ctl.track-btns button.mute.on { color: var(--on-accent); background: var(--accent); }
 .ctl.track-btns button.solo.on { color: var(--bg); background: var(--tc-1); }
 .ctl.track-btns button.record:hover:not(:disabled) { color: var(--rec); }
 .ctl.track-btns button.record.on { color: var(--on-rec); background: var(--rec); }
 .ctl.track-btns button.listen.on { color: var(--bg); background: var(--ok); }
-.ctl.track-btns .meter { height: 18px; border-radius: var(--r-sm); }
+.ctl.track-btns .meter { height: 16px; border-radius: var(--r-sm); }
 .ctl button.listen[hidden] { display: none; }
 .ctl .meter { background: var(--line); flex: 1; align-self: stretch; position: relative; overflow: hidden; }
 .ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: var(--ok); transition: width 60ms linear; }
