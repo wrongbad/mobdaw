@@ -2,6 +2,8 @@
 //! Everything here is unit-tested natively with `cargo test -p dsp`.
 
 pub mod adsr;
+pub mod bore;
+pub mod bore_cal;
 pub mod analog;
 pub mod compressor;
 pub mod delay;
