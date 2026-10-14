@@ -11,7 +11,8 @@ export type ParamDef = {
   /** Discrete choices (value = index); rendered as a select. */
   options?: string[]
 }
-export type DeviceDef = { type: number; name: string; instrument: boolean; params: ParamDef[] }
+/** `hidden` devices are pinned by the document (see `MIX`) and never offered in the fx menus. */
+export type DeviceDef = { type: number; name: string; instrument: boolean; hidden?: boolean; params: ParamDef[] }
 
 export const SIMPLE_FILTER = 1
 export const FINNWAVE = 2
@@ -21,6 +22,10 @@ export const TREMOLO = 5
 export const DELAY = 6
 export const LOFI_DRUM = 7
 export const EQ = 8
+/** The track's (or master's) fader and pan: hidden, pinned last in its chain, one per track and one for the master bus. */
+export const MIX = 9
+export const MIX_GAIN = 0
+export const MIX_PAN = 1
 
 const EQ_BANDS = [
   { name: 'low', hz: 100 },
@@ -45,6 +50,13 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 1, name: 'cutoff', min: 20, max: 20000, def: 1000, scale: 'log', unit: 'hz' },
       { id: 2, name: 'damping', min: 0.05, max: 2, def: 0.7071, scale: 'lin' },
       { id: 3, name: 'gain', min: -24, max: 24, def: 0, scale: 'lin', unit: 'db' },
+    ],
+  },
+  [MIX]: {
+    type: MIX, name: 'mix', instrument: false, hidden: true,
+    params: [
+      { id: MIX_GAIN, name: 'volume', min: 0, max: 2, def: 1, scale: 'lin' }, // linear, as the fader's `posToGain`: 1 is unity, 2 is +6 dB
+      { id: MIX_PAN, name: 'pan', min: -1, max: 1, def: 0, scale: 'lin' },
     ],
   },
   [EQ]: { type: EQ, name: 'EQ', instrument: false, params: eqParams() },
@@ -113,7 +125,7 @@ export const DEVICES: Record<number, DeviceDef> = {
 }
 
 /** Effects offered by the fx bar's "+". */
-export const EFFECTS = Object.values(DEVICES).filter((d) => !d.instrument)
+export const EFFECTS = Object.values(DEVICES).filter((d) => !d.instrument && !d.hidden)
 /** Instruments offered by the synths lane's "+". */
 export const INSTRUMENTS = Object.values(DEVICES).filter((d) => d.instrument)
 

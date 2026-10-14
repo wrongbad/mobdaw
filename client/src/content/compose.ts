@@ -3,7 +3,7 @@
 import type * as Y from 'yjs'
 import {
   DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, SCHEMA_VERSION,
-  addLane, addMidiClip, addNote, addPoint, addTrack, metaMap, paramToPos, updateTrack,
+  addLane, addMidiClip, addNote, addPoint, addTrack, ensureMixDevice, metaMap, paramToPos, setMixParam, updateTrack,
   type ParamKind, type TrackKind, type TrackRole,
 } from '@mobdaw/shared'
 
@@ -16,6 +16,7 @@ export function initProject(doc: Y.Doc, bpm: number, beatsPerBar = 4): Song {
     const meta = metaMap(doc)
     meta.set('schemaVersion', SCHEMA_VERSION)
     meta.set('sampleRate', rate)
+    ensureMixDevice(doc, MASTER_TRACK)
   })
   return { doc, bpm, beatsPerBar, rate, ppq: DEFAULT_PPQ }
 }
@@ -26,8 +27,9 @@ export const barPos = (s: Song, bar: number) => Math.round((bar * s.beatsPerBar 
 export type TrackOpts = { color: number; gain?: number; pan?: number; muted?: boolean; role?: TrackRole }
 export function track(s: Song, name: string, kind: TrackKind, o: TrackOpts): string {
   const id = addTrack(s.doc, name, kind, undefined, o.role, o.color)
-  const patch = { ...(o.gain != null ? { gain: o.gain } : {}), ...(o.pan != null ? { pan: o.pan } : {}), ...(o.muted ? { muted: true } : {}) }
-  if (Object.keys(patch).length) updateTrack(s.doc, id, patch)
+  if (o.gain != null) setMixParam(s.doc, id, 'gain', o.gain)
+  if (o.pan != null) setMixParam(s.doc, id, 'pan', o.pan)
+  if (o.muted) updateTrack(s.doc, id, { muted: true })
   return id
 }
 

@@ -1,4 +1,4 @@
-// Yjs document schema v2 (docs/engine.md §3). Every map is flat and keyed by id; children
+// Yjs document schema v3 (docs/engine.md §3). Every map is flat and keyed by id; children
 // reference their parent by id; positions are integer samples at meta.sampleRate.
 //   meta    Y.Map  { schemaVersion, sampleRate }
 //   tracks  Y.Map  id -> Y.Map Track
@@ -12,10 +12,10 @@
 //   samples Y.Map  hash -> plain object SampleMeta
 //   chat    Y.Array of plain ChatMessage, append-only; outside the undo scope
 import * as Y from 'yjs'
-import { DEVICES, LOFI_DRUM } from './devices.ts'
+import { DEVICES, LOFI_DRUM, MIX, MIX_GAIN, MIX_PAN } from './devices.ts'
 import type { ParamTarget } from './params.ts'
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 export const DEFAULT_SAMPLE_RATE = 48000
 export const DEFAULT_PPQ = 960
 export const DEFAULT_MIDI_BPM = 120
@@ -35,7 +35,7 @@ export const LOOP_CUTOFF_MIN = 200
 export const LOOP_CUTOFF_MAX = 20000
 /** `role: 'click'` marks the metronome's track: it ignores other tracks' solo (still audible), and its own mute counts. */
 export type TrackRole = 'click'
-export type Track = { id: string; name: string; kind: TrackKind; order: number; gain: number; pan: number; muted: boolean; soloed: boolean; role?: TrackRole; color?: number; preset?: string }
+export type Track = { id: string; name: string; kind: TrackKind; order: number; muted: boolean; soloed: boolean; role?: TrackRole; color?: number; preset?: string }
 /** 0 equal-power, 1 linear, 2 s-curve */
 export type FadeShape = 0 | 1 | 2
 /**
@@ -194,9 +194,10 @@ const patchMap = (doc: Y.Doc, m: YM | undefined, patch: object) => {
 // --- tracks
 export function addTrack(doc: Y.Doc, name: string, kind: TrackKind = 'audio', order?: number, role?: TrackRole, color?: number): string {
   const id = newId()
-  const t: Track = { id, name, kind, order: order ?? orderBetween(getTracks(doc).at(-1)?.order), gain: 1, pan: 0, muted: false, soloed: false, ...(role ? { role } : {}), ...(color != null ? { color } : {}) }
+  const t: Track = { id, name, kind, order: order ?? orderBetween(getTracks(doc).at(-1)?.order), muted: false, soloed: false, ...(role ? { role } : {}), ...(color != null ? { color } : {}) }
   doc.transact(() => {
     tracksMap(doc).set(id, toMap(t))
+    ensureMixDevice(doc, id)
     if (kind === 'soundscape') for (let slot = 0; slot < LOOPERS_PER_TRACK; slot++) addLooper(doc, id, slot)
   })
   return id
@@ -206,7 +207,7 @@ export const updateTrack = (doc: Y.Doc, id: string, patch: Partial<Omit<Track, '
 export function deleteTrack(doc: Y.Doc, id: string) {
   doc.transact(() => {
     for (const c of getClips(doc)) if (c.trackId === id) deleteClip(doc, c.id)
-    for (const d of getDevices(doc)) if (d.trackId === id) deleteDevice(doc, d.id)
+    for (const d of getDevices(doc)) if (d.trackId === id) dropDevice(doc, d.id)
     for (const p of getPads(doc)) if (p.trackId === id) padsMap(doc).delete(p.id)
     for (const l of getLoopers(doc)) if (l.trackId === id) loopersMap(doc).delete(l.id)
     tracksMap(doc).delete(id)
@@ -306,10 +307,14 @@ export const updateNote = (doc: Y.Doc, id: string, patch: Partial<Omit<Note, 'id
 export const deleteNote = (doc: Y.Doc, id: string) => doc.transact(() => notesMap(doc).delete(id))
 
 // --- devices
-/** Append a device to a track's chain with default params. */
+/**
+ * Append a device to a track's chain with default params (just before the pinned mix device, which stays last). A mix device
+ * is made through `ensureMixDevice`, so there is only ever one.
+ */
 export function addDevice(doc: Y.Doc, trackId: string, type: number, extra: Partial<Pick<Device, 'name' | 'keyLo' | 'keyHi'>> = {}, initial: Record<string, number> = {}): string {
+  if (type === MIX) return ensureMixDevice(doc, trackId)
   const id = newId()
-  const order = orderBetween(getDevices(doc).filter((d) => d.trackId === trackId).at(-1)?.order)
+  const order = orderInChain(doc, trackId)
   doc.transact(() => {
     const m = toMap({ id, trackId, type, order, bypass: false, ...extra })
     const params = new Y.Map<number>()
@@ -319,13 +324,82 @@ export function addDevice(doc: Y.Doc, trackId: string, type: number, extra: Part
   })
   return id
 }
-export const updateDevice = (doc: Y.Doc, id: string, patch: Partial<Pick<Device, 'order' | 'bypass' | 'name' | 'keyLo' | 'keyHi'>>) =>
-  patchMap(doc, devicesMap(doc).get(id), patch)
+/** A device's `order` kept below the pinned mix device of its chain. */
+const beforeMix = (doc: Y.Doc, d: Pick<Device, 'id' | 'trackId' | 'type'>, order: number) => {
+  const mix = d.type === MIX ? undefined : getMixDevice(doc, d.trackId)
+  if (!mix || order < mix.order) return order
+  return orderBetween(getDevices(doc).filter((x) => x.trackId === d.trackId && x.id !== d.id && x.id !== mix.id).at(-1)?.order, mix.order)
+}
+/** The `order` that puts a new device at the end of `trackId`'s chain, before its mix device. */
+const orderInChain = (doc: Y.Doc, trackId: string) => {
+  const chain = getDevices(doc).filter((d) => d.trackId === trackId)
+  const mix = chain.find((d) => d.type === MIX)
+  return orderBetween(chain.filter((d) => d !== mix).at(-1)?.order, mix?.order)
+}
+/** The mix device is pinned last and always on: its `order` and `bypass` are ignored here. */
+export function updateDevice(doc: Y.Doc, id: string, patch: Partial<Pick<Device, 'order' | 'bypass' | 'name' | 'keyLo' | 'keyHi'>>) {
+  const m = devicesMap(doc).get(id)
+  if (!m) return
+  if (m.get('type') === MIX) {
+    const { order: _o, bypass: _b, ...rest } = patch
+    return patchMap(doc, m, rest)
+  }
+  patchMap(doc, m, patch.order == null ? patch : { ...patch, order: beforeMix(doc, m.toJSON() as Device, patch.order) })
+}
 export function setParam(doc: Y.Doc, deviceId: string, paramId: number, value: number) {
   const params = devicesMap(doc).get(deviceId)?.get('params') as Y.Map<number> | undefined
   params?.set(String(paramId), value)
 }
+/** The mix device of a track (or `MASTER_TRACK`), or undefined before `ensureMixDevice` has made it. */
+export const getMixDevice = (doc: Y.Doc, scope: string) => getDevices(doc).find((d) => d.trackId === scope && d.type === MIX)
+/** Set a mix device param: `gain` (linear, 0..2) or `pan` (-1..1). */
+export function setMixParam(doc: Y.Doc, scope: string, which: 'gain' | 'pan', value: number) {
+  const d = getMixDevice(doc, scope)
+  if (d) setParam(doc, d.id, which === 'gain' ? MIX_GAIN : MIX_PAN, value)
+}
+/** A mix device's `gain` and `pan` (unity and centre while it is missing). */
+export function getMix(doc: Y.Doc, scope: string): { gain: number; pan: number } {
+  const p = getMixDevice(doc, scope)?.params
+  return { gain: p?.[MIX_GAIN] ?? 1, pan: p?.[MIX_PAN] ?? 0 }
+}
+const mixId = (scope: string) => `mix:${scope}`
+/**
+ * Make sure `scope` (a track id or `MASTER_TRACK`) has exactly one mix device, last in its chain. The id is a function of the
+ * scope, so clients doing this at once write the same entry. `seed` sets the params of a device made now. Writes nothing when
+ * all is in order. Returns the device's id.
+ */
+export function ensureMixDevice(doc: Y.Doc, scope: string, seed: { gain?: number; pan?: number } = {}): string {
+  const all = getDevices(doc).filter((d) => d.trackId === scope)
+  const mixes = all.filter((d) => d.type === MIX).sort((a, b) => (a.id === mixId(scope) ? -1 : b.id === mixId(scope) ? 1 : a.id < b.id ? -1 : 1))
+  const keep = mixes[0]
+  doc.transact(() => {
+    for (const d of mixes.slice(1)) dropDevice(doc, d.id)
+    if (!keep) {
+      const params = new Y.Map<number>()
+      params.set(String(MIX_GAIN), seed.gain ?? 1)
+      params.set(String(MIX_PAN), seed.pan ?? 0)
+      const m = toMap({ id: mixId(scope), trackId: scope, type: MIX, order: orderBetween(all.at(-1)?.order), bypass: false })
+      m.set('params', params)
+      devicesMap(doc).set(mixId(scope), m)
+    } else {
+      const m = devicesMap(doc).get(keep.id)!
+      if (keep.bypass) m.set('bypass', false)
+      const rest = all.filter((d) => d.id !== keep.id)
+      if (rest.length && rest.some((d) => d.order >= keep.order)) m.set('order', orderBetween(Math.max(...rest.map((d) => d.order))))
+    }
+  })
+  return keep?.id ?? mixId(scope)
+}
+/** A mix device goes with its track and nowhere else. */
+const pinned = (doc: Y.Doc, id: string) => {
+  const m = devicesMap(doc).get(id)
+  return m?.get('type') === MIX && (m.get('trackId') === MASTER_TRACK || tracksMap(doc).has(m.get('trackId') as string))
+}
+/** Delete a device and its lanes. A track's (or master's) mix device stays: it is deleted with its track. */
 export function deleteDevice(doc: Y.Doc, id: string) {
+  if (!pinned(doc, id)) dropDevice(doc, id)
+}
+function dropDevice(doc: Y.Doc, id: string) {
   doc.transact(() => {
     for (const l of getLanes(doc)) if (l.kind !== 'looper' && l.owner === id) deleteLane(doc, l.id)
     devicesMap(doc).delete(id)
@@ -476,7 +550,7 @@ export function sweepOrphans(doc: Y.Doc) {
   doc.transact(() => {
     const tracks = tracksMap(doc), clips = clipsMap(doc)
     for (const c of getClips(doc)) if (!tracks.has(c.trackId)) deleteClip(doc, c.id)
-    for (const d of getDevices(doc)) if (d.trackId !== MASTER_TRACK && !tracks.has(d.trackId)) deleteDevice(doc, d.id)
+    for (const d of getDevices(doc)) if (d.trackId !== MASTER_TRACK && !tracks.has(d.trackId)) dropDevice(doc, d.id)
     for (const l of getLoopers(doc)) if (!tracks.has(l.trackId)) loopersMap(doc).delete(l.id)
     for (const p of getPads(doc)) if (!tracks.has(p.trackId)) padsMap(doc).delete(p.id)
     for (const n of getNotes(doc)) if (!clips.has(n.clipId)) notesMap(doc).delete(n.id)
@@ -525,7 +599,27 @@ export function migrateToV2(doc: Y.Doc) {
       c.set('fadeShape', 0)
       for (const k of ['sampleHash', 'duration', 'offset']) c.delete(k)
     }
-    meta.set('schemaVersion', SCHEMA_VERSION)
+    meta.set('schemaVersion', 2)
+  }, 'migrate')
+}
+
+/**
+ * v2 -> v3: a track's `gain` and `pan` move into a mix device (see `ensureMixDevice`), seeded from them, and the master bus
+ * gets one at unity and centre. Also the load-time repair, so it runs on every load and writes nothing when all is in order:
+ * one mix device per track and for the master, last in its chain. Run `migrateToV2` first. Origin 'migrate' keeps it out of undo.
+ */
+export function migrateToV3(doc: Y.Doc) {
+  const meta = metaMap(doc)
+  doc.transact(() => {
+    const num = (v: unknown, def: number) => (typeof v === 'number' && Number.isFinite(v) ? v : def)
+    for (const t of tracksMap(doc).values()) {
+      const id = t.get('id') as string
+      ensureMixDevice(doc, id, { gain: num(t.get('gain'), 1), pan: num(t.get('pan'), 0) })
+      t.delete('gain')
+      t.delete('pan')
+    }
+    ensureMixDevice(doc, MASTER_TRACK)
+    if (meta.get('schemaVersion') !== SCHEMA_VERSION && meta.get('schemaVersion') != null) meta.set('schemaVersion', SCHEMA_VERSION)
   }, 'migrate')
 }
 /** A forever audio clip's length in samples (what the engine is sent), mirroring `foreverTicks`. */

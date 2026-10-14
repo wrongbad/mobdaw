@@ -73,11 +73,11 @@ uses fractional `order` numbers. As a result:
 
 | map | key → value (Y.Map unless noted) |
 |---|---|
-| `meta` | `schemaVersion: 2`, `sampleRate` |
-| `tracks` | `{ id, name, kind: 'audio'\|'midi'\|'soundscape', order, gain, pan, muted, soloed, role?: 'click' }` |
+| `meta` | `schemaVersion: 3`, `sampleRate` |
+| `tracks` | `{ id, name, kind: 'audio'\|'midi'\|'soundscape', order, muted, soloed, role?: 'click' }`. A track's fader and pan are its mix device. |
 | `clips` | Audio clips: `{ id, trackId, kind:'audio', start, length, sourceHash, sourceOffset, gain, fadeIn, fadeOut, fadeShape, loopLength?, loopPhase?, forever? }`. MIDI clips: `{ id, trackId, kind:'midi', start, bpm, ppq, lengthTicks, loopTicks?, forever?, view?: 'drums' }` |
 | `notes` | `{ id, clipId, tick, durTicks, pitch, velocity }` |
-| `devices` | `{ id, trackId, type, order, bypass, params: Y.Map<paramId, number>, keyLo?, keyHi? }`. `keyLo`/`keyHi` (MIDI 0..127, default 0 and 127) are an instrument's note range; they are not params. |
+| `devices` | `{ id, trackId, type, order, bypass, params: Y.Map<paramId, number>, keyLo?, keyHi? }`. `keyLo`/`keyHi` (MIDI 0..127, default 0 and 127) are an instrument's note range; they are not params. Every track, and `'master'`, has exactly one **mix device** (type 9, id `mix:<trackId>`; params 0 gain, linear 0..2, unity 1, and 1 pan, -1..1) pinned last in its chain: the shared helpers keep it last, refuse to delete it on its own (deleting the track deletes it) and `applyPreset` keeps it. The fx drawers do not show it. |
 | `lanes` | Automation lanes, one per automated param: `{ id, enabled, order, scope, kind: 'synth'\|'effect'\|'looper', owner, param }`. `scope` is a track id, or `'master'` for the global fx chain; `owner` is the device or looper id; `param` is the device's param id (as a string) or the looper's field name (`gain`, `speed`, `sat`, `cutoff`, `warble`). The registry (`shared/src/params.ts`) resolves it to a range and scale. While `enabled` the lane *replaces* the param's value; the doc keeps the static value, and it comes back when the lane is disabled or deleted. |
 | `points` | `{ id, laneId, pos (timeline samples), value (normalised 0..1 along the param's own scale), curve: 'linear'\|'hold' }`. `curve` shapes the segment *after* the point. |
 | `samples` | Plain objects: `hash → { hash, name, duration, size, mime, status?: 'incoming'\|'missing', by?, peaks? }` (`by` is the recorder's username; `peaks` a base64 waveform). No `status` means the audio is in storage and anyone in the project can load it. See §9 for `incoming` and `missing`. |
@@ -101,6 +101,9 @@ uses fractional `order` numbers. As a result:
 - **v1 → v2 migration** (seconds → samples) happens in the bridge at load time:
   - It applies once, when `meta.schemaVersion` is absent.
   - It sets `sampleRate = 48000`, rounds the positions, and gives tracks `kind: 'audio'`.
+- **v2 → v3 migration** (`migrateToV3`, run on every load, idempotent):
+  - Each track gets a mix device seeded from its `gain` and `pan`, which are then removed; the master bus gets one at unity and centre.
+  - It doubles as the repair: a missing mix device is made, extras are dropped, and it is moved back to the end of its chain.
 
 ## 4. Threads and data flow
 ```
