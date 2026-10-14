@@ -3,7 +3,6 @@
 import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, isDrum, isLooping, patternTicks, setMidiView, updateClip, updateNote, type Device, type MidiClip, type Note } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'
-import { noteName } from './noteName'
 import { drumColor } from './drumColor'
 import { clampVelocity, gmDrum, hitOpacity, nextVelocity } from './noteOps'
 
@@ -98,7 +97,7 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
       row.onpointerdown = (e) => toggle(e, row, key)
       const color = drumColor(key) // shared with the synth drawer's drum cards
       row.style.setProperty('--rc', color)
-      row.append(h('i', { className: 'dg-edge' }), h('span', { className: 'dg-label' }, `${d.name ?? gmDrum(key) ?? DEVICES[d.type]?.name ?? 'drum'} · ${noteName(key)}`))
+      row.append(h('i', { className: 'dg-edge' }), h('span', { className: 'dg-label' }, `${d.name ?? gmDrum(key) ?? DEVICES[d.type]?.name ?? 'drum'}`))
       const passes = looping ? Math.ceil(extent / pattern) : 1
       for (const n of notes) {
         if (n.pitch !== key || n.tick < 0 || n.tick >= pattern) continue
