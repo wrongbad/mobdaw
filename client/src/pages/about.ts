@@ -20,7 +20,7 @@ export function aboutColumn(): { el: HTMLElement; toggle(): void } {
 
     h('h3', {}, 'what it does'),
     h('ul', {},
-      h('li', {}, h('strong', {}, 'looping built in. '), 'a foot-pedal loop station that is part of the timeline, not a bolt-on: loops land quantized, layer onto new tracks, and end up as ordinary clips you can edit. clips can loop, too.'),
+      h('li', {}, h('strong', {}, 'looping built in. '), 'loop-station commands (keys or a MIDI foot switch) that are part of the timeline, not a bolt-on: loops land on the cycle, layer onto the next track, and are ordinary clips you can edit; a mute is volume automation, so replaying the song replays it. clips can loop, too.'),
       h('li', {}, h('strong', {}, 'deep automation. '), 'draw automation on any effect or instrument parameter, per track or across the whole mix.'),
       h('li', {}, h('strong', {}, 'click tracks you build. '), 'the metronome is a real track: a drum grid with its own sounds and patterns, not a beep you can only speed up.'),
       h('li', {}, h('strong', {}, 'real instruments and effects. '), 'synths, lofi drums, filter / eq, reverb, compressor, tremolo and tape delay, on every track and on the master bus, running in a native-speed audio engine.'),

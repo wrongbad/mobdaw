@@ -354,7 +354,7 @@ the take only when the person who recorded it chooses to.
   `manual` is a per-device offset in ms kept in `localStorage` (set from the right-click
   menu on ●). Anything that would land before sample 0 is trimmed off the front of the take
   (`sourceOffset`). Automatic loopback calibration comes later.
-- **Live take (the loop pedal's source).** `record` can also write every captured block into a *live source*
+- **Live take (the loop commands' source).** `record` can also write every captured block into a *live source*
   (`engine_source_live_*`, docs/engine-api.md): a growing source in the engine, in chunks, silent past the frames written.
   The persistence path above is unchanged and still gets every chunk. Clips can play the take while it is being recorded.
   - **Timeline alignment.** Live frame `i` is the input captured at timeline sample `recstart + i`, where `recstart` is the
@@ -368,7 +368,7 @@ the take only when the person who recorded it chooses to.
     `sourceOffset = (B - P - recstart) + latency`, is therefore complete from `B` on whenever `latency < P`; the part of the window
     not yet written (the last `latency` samples, if `P` were shorter) is silent.
   - **Finishing.** `finishTake(..., onHash)` calls `onHash(hash)` once the WAV is hashed, before the sample and clip are
-    written to the doc; the pedal binds the live source there (`Playback.bindLiveSource`). The bridge then neither decodes nor
+    written to the doc; a loop binds the live source there (`Playback.bindLiveSource`). The bridge then neither decodes nor
     loads that sample, and doc clips use the live source's handle. The live audio is the unquantized float input while the
     sample is its 16-bit WAV, so a replay in another session differs by the 16-bit rounding only.
   - **Headroom.** The Recorder reserves 30 s up front and tops up with every ~1 s chunk (a message to the worklet, which
@@ -464,36 +464,42 @@ client diverged, so we don't.
   (their own mute still counts). There is no count-in feature: start the song at bar 2, mute the click, and the
   export trims the lead-in (export covers only audible clips).
 
-### Loop pedal principles (for later work)
+### Loop commands (as built)
 
-- **Triggers resolve on the audio side, at exact samples.** A pedal press is timed by the audio thread, not the UI;
-  the doc records the result afterwards (the clip's `start`, `length`, `loopLength`, `loopPhase`). Because playback is
-  stateless, upserting the identical clip is a no-op, so what was heard live replays identically.
-- **The seam rule uses only past audio.** The pass tail crossfades with the pre-roll before the pass start, never with
-  audio after the pass end, so the seam can be computed while the loop is still being recorded.
-- **Quantize boundaries** come from the click track's repeat seams when there is one, else the first live loop's pass
-  defines them.
+**The timeline is the performance record.** The transport keeps rolling and everything the performer does is written into the
+doc at the timeline sample where they did it, so playing the song from 0 reproduces the performance. A loop is an ordinary
+audio clip with `forever: true`; a mute is a step in the track's volume automation. There is no mode and no pedal session.
+The logic is `client/src/audio/loopPedal.ts` (pure, tested with a fake clock in `client/test/loopPedal.test.ts`); `ui/timeline.ts`
+wires it to the recorder and the engine.
 
-### Loop pedal (as built)
-
-A MIDI foot controller (Web MIDI; `client/src/midi.ts`) drives the timeline like a loop station while one continuous take of the
-whole session is captured into a live source. The logic is `client/src/audio/pedal.ts` (pure, tested with fake times);
-`client/src/ui/pedalSession.ts` carries it out.
-
-- **Where a press is.** A press is placed where the performer *heard* the timeline: the event's `timeStamp` (performance.now) is
-  mapped through `AudioContext.getOutputTimestamp()` (the context time at the speaker, output latency included) and the
-  engine's last `pos` report (`pos` at context `frame`) to a timeline sample (`heardPosition`).
-- **Quantizing.** A press snaps to the next boundary of the grid, or to the one just before it when it is at most 150 ms late
-  (never more than a quarter period). The grid is the click track's looping clip (origin = its start, period = its pass) if the
-  project has one, else the first loop of the session (origin = where it began, period = its length).
-- **Actions.** Loop (idle: begin the take and mark the layer start; next: close the layer at a boundary, which sounds the loop
-  from there as a `forever` engine-only clip of the window `[start, end)` of the take, `sourceOffset = (start - recstart) + latency`;
-  next: a new layer on a new track "loop n"), stop last, stop all (with nothing looping: end the session), undo (cancel the layer
-  being recorded, else remove the latest loop).
-- **Applying.** Playback is stateless, so adding a loop and removing one are applied at once, and a stop is scheduled at its
-  boundary (`callAt`); an undo clears the queue and schedules the remaining stops again.
-- **Session end** (pedal off, transport stop, or stop all with nothing looping): the take is saved with `finishTake` (binding the live
-  source) on its own muted "pedal take" track, and the surviving loops are written in the same transaction as audio clips with
-  the same track / source / start / sourceOffset, which the bridge adopts. A loop still going stays `forever`, with an extent of
-  whole passes covering what was heard (at least two); a stopped one has `length = stop - start`.
-
+- **Always listening.** Bound keys (whenever focus is not a text field) and the bound messages of the chosen MIDI input (`client/src/midi.ts`).
+  Both are set in the project settings, "loop commands" (`ui/loopSettings.ts`; learn a key or a switch). Defaults: `1` loop
+  record, `2` mute, `3` previous track, `4` next track (bare 1-4 were free; z, s, space, delete stay the studio's).
+- **Where a press is.** Placed where the performer *heard* the timeline: the event's `timeStamp` (performance.now) is mapped
+  through `AudioContext.getOutputTimestamp()` and the engine's last `pos` report to a timeline sample (`audio/pedal.ts`
+  `heardPosition`). With the transport stopped, a press is at the playhead.
+- **Current track.** The armed track if there is one (the same R-armed track), else the commands' own: highlighted on its header in the
+  track colour. Next past the last audio track makes a new one (undoable); previous stops at the first. The click track is skipped.
+- **Loop record (toggle).** The first press starts the normal take (recorder, `takeJournal`, `finishTake`) on the current track, into a
+  live source, and starts the transport if it is stopped (the microphone is armed on the first press; it stays armed). The
+  next press stops it. The clip is `start` = where recording began on the timeline, `loopLength` = the pass, `length` = two passes,
+  `forever`, `sourceOffset = (start - recstart) + latency`.
+  - **Cycle.** The first loop of a project (no audio clip with a `loopLength`) is free length, press to press, and its start and pass
+    are the cycle (`cycleGrid`: origin = that clip's start, period = its pass; nothing is stored). Every later loop starts at the first
+    boundary at or after the press and stops at the first boundary after the stop press (at least one cycle), so lengths are whole
+    cycles and loops stay in phase with the first. No global tempo.
+  - **Overwrite only.** A loop already playing on the track at the new start is not deleted: it is ended exactly there (`forever` off,
+    `length` cut), written when recording begins so replaying from 0 stops it at the same place. A loop starting exactly there is replaced.
+  - **Seamless.** At the stop press an engine-only clip (`Playback.liveClip`) on the take's live source is made with the same track,
+    source, `start` and `sourceOffset` the doc clip will have. It is silent until the loop's window is written and then plays on,
+    so the loop sounds from the boundary without waiting for anything. The take is stopped once the loop's last frame has arrived
+    (`end + latency + 50 ms`), saved with `finishTake(..., own = true)`: `onHash` binds the live source, the same transaction writes the
+    loop clip, and the bridge adopts the engine-only clip. The saved sample is the whole take; the clip plays a window of it.
+  - **Undo.** Ending the earlier clip and writing the new one are one undo step (`joinUndo`); a recording cancelled before it began
+    gives the earlier clip back. A transport stop mid-loop saves the take as an ordinary take and the loop is dropped.
+- **Mute (toggle, current track).** Volume automation on the track's mix device, not quantized: the lane is made on first use
+  (seeded at the track's volume), a mute writes a `hold` point at 0 at the press, an unmute a `hold` point at the prior volume. A linear
+  segment before the step is pinned one sample earlier so the curve up to the press is unchanged. The engine evaluates lanes statelessly
+  by position, so a point written during playback is heard at its sample. One undo step per toggle. With the transport stopped it is the
+  track's plain mute. The press time is the heard position, so there is no further latency compensation.
+- **Status.** While a loop records, the top bar shows "rec loop" in red with the time to the next boundary (elapsed time for the free first loop).

@@ -15,7 +15,7 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
   let oncpu: ((m: { load: number; peak: number }) => void) | null = null
   let onmeters: ((m: Meters) => void) | null = null
   let analyser: AnalyserNode | null = null
-  let lastPos: (PosReport & { playing: boolean }) | null = null // the engine's latest position report, to place pedal presses
+  let lastPos: (PosReport & { playing: boolean }) | null = null // the engine's latest position report, to place loop-command presses
   const hostP = EngineHost.create(ctx).then((h) => {
     h.oncpu = (m) => oncpu?.(m)
     h.node.connect(ctx.destination)

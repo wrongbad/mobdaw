@@ -257,7 +257,7 @@ class EngineProcessor extends AudioWorkletProcessor {
   private report() {
     if (typeof this.x.engine_position !== 'function') return
     this.sinceReport = 0
-    // `frame` is the context frame at which the engine stood at `pos` (the output timestamp's clock), so a pedal press can be placed on the timeline.
+    // `frame` is the context frame at which the engine stood at `pos` (the output timestamp's clock), so a loop-command press can be placed on the timeline.
     this.port.postMessage({ type: 'pos', pos: this.x.engine_position(this.e), frame: currentFrame + this.done, playing: this.x.engine_is_playing(this.e) === 1 })
   }
 

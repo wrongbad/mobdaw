@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { actionFor, debouncer, describeTrigger, parseTrigger, sameTrigger } from '../src/midi'
+import { describe, expect, it, vi } from 'vitest'
+import { actionFor, cmdForKey, debouncer, describeTrigger, getKeys, keyAllowed, setKey, parseTrigger, sameTrigger } from '../src/midi'
 
 describe('parseTrigger', () => {
   it('accepts note-on and controller changes with a value above 0', () => {
@@ -32,9 +32,25 @@ describe('debouncer', () => {
 describe('bindings', () => {
   it('finds the action of a trigger, and tells triggers apart by kind and channel', () => {
     const t = { kind: 'cc' as const, channel: 2, number: 7 }
-    expect(actionFor({ stopAll: t }, { ...t })).toBe('stopAll')
-    expect(actionFor({ stopAll: t }, { ...t, channel: 3 })).toBeNull()
+    expect(actionFor({ mute: t }, { ...t })).toBe('mute')
+    expect(actionFor({ mute: t }, { ...t, channel: 3 })).toBeNull()
     expect(sameTrigger(t, { ...t, kind: 'note' })).toBe(false)
     expect(describeTrigger({ kind: 'note', channel: 0, number: 60 })).toBe('note c4 · ch 1')
+  })
+})
+
+describe('loop command keys', () => {
+  it('default to 1-4, a key means one command, and the studio\'s own keys are refused', () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v), removeItem: (k: string) => store.delete(k) })
+    expect(getKeys()).toEqual({ record: '1', mute: '2', prev: '3', next: '4' })
+    expect(cmdForKey(getKeys(), '2')).toBe('mute')
+    setKey('record', '2') // steals it
+    expect(getKeys()).toEqual({ record: '2', mute: '', prev: '3', next: '4' })
+    expect(cmdForKey(getKeys(), '')).toBeNull()
+    expect(keyAllowed('z')).toBe(false)
+    expect(keyAllowed(' ')).toBe(false)
+    expect(keyAllowed('r')).toBe(true)
+    vi.unstubAllGlobals()
   })
 })

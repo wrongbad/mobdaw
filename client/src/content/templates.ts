@@ -79,6 +79,6 @@ export const TEMPLATES: Template[] = [
   { id: 'empty', name: 'Empty', blurb: 'One audio track at 120 bpm.', build: empty },
   { id: 'beat', name: 'Beat', blurb: 'A two-bar drum groove and a bass line at 90 bpm.', build: beat },
   { id: 'band', name: 'Band', blurb: 'Vocal and guitar tracks ready to record, with keys, drums and a muted click.', build: band },
-  { id: 'loopjam', name: 'Loop jam', blurb: 'A click, three audio tracks for the loop pedal and a tape echo on the master.', build: loopjam },
+  { id: 'loopjam', name: 'Loop jam', blurb: 'A click, three audio tracks for the loop commands and a tape echo on the master.', build: loopjam },
   { id: 'demo', name: 'Demo song', blurb: 'A short chillhop piece made from the built-in synths.', build: buildDemo },
 ]

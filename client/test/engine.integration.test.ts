@@ -1,5 +1,6 @@
 // End-to-end: Yjs doc → Bridge → the real engine.wasm (as built by `npm run build:wasm`),
 // driven synchronously in Node the same way engine-processor.ts drives it in the worklet.
+import { toggleMute } from '../src/audio/loopPedal'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
@@ -269,6 +270,62 @@ describe('bridge + real engine.wasm', () => {
     bridge.seek(0)
     const b = samples(1024)
     expect(b.subarray(100, 400)).toEqual(a.subarray(100, 400)) // the doc clip adopted the live one: one clip, not two
+    bridge.destroy()
+  })
+
+  it('a just-recorded loop plays from its boundary on the live source, and the doc clip that follows takes over without a seam', async () => {
+    const doc = new Y.Doc()
+    const t = addTrack(doc, 'audio')
+    const { sink, samples, x, e } = host()
+    const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
+    const live = bridge.liveSource(1)
+    // the take began at timeline 0 and the input is 20 samples late: the performer's sample at timeline T is frame T + 20
+    const start = 100, pass = 400, latency = 20, offset = start + latency
+    const input = new Float32Array(x.memory.buffer, x.engine_input_ptr(e), 128)
+    const value = (i: number) => 0.0005 * i + 0.1
+    for (let b = 0; b < 6; b++) { // 768 frames: the loop's last frame (offset + pass = 520) and a tail
+      for (let j = 0; j < 128; j++) input[j] = value(b * 128 + j)
+      x.engine_source_live_append(e, live, 128)
+    }
+    // (the clip is made at the stop press and the frames are already there in this test; before the boundary it would be silent)
+    const h = bridge.liveClip(t, { source: live, start, length: 2000, sourceOffset: offset, loopLength: pass })
+    bridge.play(0)
+    const a = samples(1500)
+    const ratio = a[start + 100] / value(offset + 100) // (past the clip edge fade)
+    expect(ratio).toBeGreaterThan(0.1)
+    for (const k of [100, 200, 300]) expect(a[start + k] / value(offset + k)).toBeCloseTo(ratio, 3) // the window, aligned to the timeline
+    for (const k of [100, 150, 250]) expect(a[start + pass + k]).toBeCloseTo(a[start + k], 5) // the second pass is the first again
+    // the take is saved: the doc clip (a plain forever audio clip) adopts the live one on the same handle, nothing is created twice
+    expect(bridge.bindLiveSource('loop', live)).toBe(true)
+    addSample(doc, { hash: 'loop', name: 'loop', duration: 1, size: 10, mime: 'audio/wav' })
+    addAudioClip(doc, { trackId: t, sourceHash: 'loop', start, length: pass * 2, sourceOffset: offset, loopLength: pass, forever: true })
+    await tick()
+    bridge.seek(0)
+    const b = samples(1500)
+    expect(b.subarray(0, 1500)).toEqual(a.subarray(0, 1500))
+    void h
+    bridge.destroy()
+  })
+
+  it('a mute written while playing is heard at its sample: a hold step in the track volume lane, and the unmute restores it', async () => {
+    const doc = new Y.Doc()
+    const t = addTrack(doc, 'audio')
+    const { sink, samples } = host()
+    const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
+    sink.source(900, [new Float32Array(SR).fill(0.5)], SR)
+    bridge.liveClip(t, { source: 900, start: 0, length: SR })
+    bridge.play(0)
+    const before = samples(2000)
+    expect(Math.abs(before[1500])).toBeGreaterThan(0.1)
+    toggleMute(doc, t, 2500) // (the engine is at 2000: ahead of the playhead, like a press heard slightly late/early)
+    toggleMute(doc, t, 3777) // unmute at a fractional-looking offset
+    await tick()
+    const a = samples(2400) // timeline 2000..4400
+    expect(Math.abs(a[499])).toBeGreaterThan(0.1) // sample 2499: still audible
+    expect(a[500]).toBe(0) // 2500: silent from its sample
+    expect(a[1776]).toBe(0)
+    expect(Math.abs(a[1777])).toBeGreaterThan(0.1) // 3777: back at the volume it had
+    expect(a[1777] / before[1500]).toBeCloseTo(1, 3)
     bridge.destroy()
   })
 

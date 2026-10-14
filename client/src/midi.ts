@@ -1,6 +1,6 @@
-// Web MIDI for the loop pedal: pick an input, learn what its switches send, and report each press once. Thin on purpose;
-// what a press means is in audio/pedal.ts. Chromium and Firefox have Web MIDI; Safari does not.
-import { ACTIONS, type Action } from './audio/pedal'
+// Web MIDI for the loop commands: pick an input, learn what its switches send, and report each press once. Thin on purpose;
+// what a press means is in audio/loopPedal.ts. Also the keys the commands are bound to. Chromium and Firefox have Web MIDI; Safari does not.
+import { CMDS, type Cmd } from './audio/loopPedal'
 
 /** What one foot switch sends when pressed: a note-on (velocity > 0) or a controller change (value > 0). */
 export type Trigger = { kind: 'note' | 'cc'; channel: number; number: number }
@@ -36,29 +36,54 @@ export function debouncer(window = DEBOUNCE_MS) {
 
 // --- settings kept in this browser
 const inputKey = 'mobdaw.midiInput'
-const bindKey = 'mobdaw.pedalBindings'
+const bindKey = 'mobdaw.loopMidi'
+const keysKey = 'mobdaw.loopKeys'
 /** The MIDI input chosen in the project settings (an input id); empty = none. */
 export const getMidiInput = () => localStorage.getItem(inputKey) ?? ''
 export const setMidiInput = (id: string) => (id ? localStorage.setItem(inputKey, id) : localStorage.removeItem(inputKey))
 
-export type Bindings = Partial<Record<Action, Trigger>>
+export type Bindings = Partial<Record<Cmd, Trigger>>
 export function getBindings(): Bindings {
   try {
     const raw = JSON.parse(localStorage.getItem(bindKey) ?? '{}') as Bindings
-    return Object.fromEntries(ACTIONS.flatMap((a) => (raw[a] && typeof raw[a]!.number === 'number' ? [[a, raw[a]]] : [])))
+    return Object.fromEntries(CMDS.flatMap((a) => (raw[a] && typeof raw[a]!.number === 'number' ? [[a, raw[a]]] : [])))
   } catch {
     return {}
   }
 }
 /** Bind `t` to `action` (or clear it); a switch means one action, so another action that had it loses it. */
-export function setBinding(action: Action, t: Trigger | null) {
+export function setBinding(action: Cmd, t: Trigger | null) {
   const b = getBindings()
-  for (const a of ACTIONS) if (t && b[a] && sameTrigger(b[a]!, t)) delete b[a]
+  for (const a of CMDS) if (t && b[a] && sameTrigger(b[a]!, t)) delete b[a]
   if (t) b[action] = t
   else delete b[action]
   localStorage.setItem(bindKey, JSON.stringify(b))
 }
-export const actionFor = (b: Bindings, t: Trigger): Action | null => ACTIONS.find((a) => b[a] && sameTrigger(b[a]!, t)) ?? null
+
+// --- keys (the commands also listen to the keyboard, wherever the focus is not a text field)
+export const DEFAULT_KEYS: Record<Cmd, string> = { record: '1', mute: '2', prev: '3', next: '4' }
+/** Keys the studio already uses. */
+const RESERVED = new Set([' ', 'z', 's', 'escape', 'delete', 'backspace', 'enter', 'tab'])
+export const keyAllowed = (k: string) => k.length > 0 && !RESERVED.has(k.toLowerCase()) && !/^(shift|control|alt|meta)$/i.test(k)
+/** The key of each command ('' = none): the defaults until changed. */
+export function getKeys(): Record<Cmd, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(keysKey) ?? '{}') as Partial<Record<Cmd, string>>
+    return Object.fromEntries(CMDS.map((c) => [c, typeof raw[c] === 'string' ? raw[c] : DEFAULT_KEYS[c]])) as Record<Cmd, string>
+  } catch {
+    return { ...DEFAULT_KEYS }
+  }
+}
+/** Bind a key to a command (or '' to clear it); a key means one command, so another that had it loses it. */
+export function setKey(cmd: Cmd, key: string) {
+  const k = getKeys()
+  for (const c of CMDS) if (key && k[c] === key) k[c] = ''
+  k[cmd] = key
+  localStorage.setItem(keysKey, JSON.stringify(k))
+}
+export const cmdForKey = (keys: Record<Cmd, string>, key: string): Cmd | null => (key ? CMDS.find((c) => keys[c] === key) ?? null : null)
+
+export const actionFor = (b: Bindings, t: Trigger): Cmd | null => CMDS.find((a) => b[a] && sameTrigger(b[a]!, t)) ?? null
 
 // --- access
 export const midiSupported = () => typeof navigator !== 'undefined' && typeof navigator.requestMIDIAccess === 'function'

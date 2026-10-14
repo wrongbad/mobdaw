@@ -9,15 +9,14 @@ import {
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
   type Point, type SampleMeta, type Track,
-  type Role, nextTrackColor, trackColor,
+  type Role, nextTrackColor, trackColor, foreverSamples,
 } from '@mobdaw/shared'
 import { homeLink } from '../router'
 import { drawWave, onPeaks, peaksFor, storedPeaks } from '../audio/peaks'
 import { shape } from '../audio/probe'
 import { getInputOffset, setInputOffset, type Captured } from '../audio/recording'
-import { ACTIONS, type Action } from '../audio/pedal'
-import { actionFor, getBindings, getMidiInput, midiSupported, onPress, openMidi } from '../midi'
-import { pedalSession } from './pedalSession'
+import { LoopPedal, commitLoop, joinUndo, loopOffset, type Cmd, type LoopIO, type LoopTake } from '../audio/loopPedal'
+import { actionFor, cmdForKey, getBindings, getKeys, getMidiInput, midiSupported, onPress, openMidi } from '../midi'
 import type { Meters, PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
 import { renderProject } from '../audio/render'
@@ -107,10 +106,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let monitored: string | null = null // the track the engine is currently monitoring
   let take: { trackId: string; trackName: string; start: number; journal: ReturnType<typeof takeJournal> } | null = null // the take being recorded
   let locks = new Map<string, string>() // track id -> who is recording on it (someone else)
-  let pedalOn = false // loop pedal mode (local UI state): MIDI presses and the keys 1-4 drive loops
-  let pedal: ReturnType<typeof pedalSession> | null = null
-  let offPedal = () => {} // stops listening to the MIDI input
-  const pedalEls = new Map<string, HTMLElement>() // the layer being recorded and the live loops, drawn in their lanes
+  let loops: LoopPedal | null = null // the loop commands (keys and MIDI are always listened for; docs/engine.md §9.2)
+  let offMidi = () => {} // stops listening to the MIDI input
+  let loopLive: { source: number; clip?: number } | null = null // the live source (and engine-only clip) of the loop being recorded
+  let loopTimer = 0 // while a loop records: ends its take when it has what it needs
+  let loopArming = false // asking for the microphone
   const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
   const recRegions = new Map<string, HTMLElement>()
   let armed: string | null = null // looper whose region is being drawn (local UI state)
@@ -146,7 +146,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     cpu.textContent = `cpu ${pct}%`
     cpu.classList.toggle('hot', m.peak >= 0.8)
   }
-  const pedalText = h('span', { className: 'pedal-st', title: 'loop pedal: the number of loops going; red while a layer is recording' })
+  const loopText = h('span', { className: 'pedal-st rec', title: 'recording a loop: the time to the next boundary of the cycle (a loop starts and ends on it); the first loop runs press to press' })
+  loopText.hidden = true
   const presence = h('span', { className: 'presence' })
   const chatBtn = h('button', { className: 'chat-btn', title: 'chat', onclick: () => {
     chat.setOpen(!chat.open)
@@ -171,11 +172,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
           set: (r) => isBlank() && metaMap(doc).set('sampleRate', r),
         },
         onInputChanged: () => void reopenInput(),
-        onPedalChanged: readOnly ? undefined : () => {
-          if (pedalOn && !getMidiInput()) void setPedal(false)
-          else if (pedalOn) listenPedal() // the input may have changed
-          syncPedalBtn()
-        },
+        onLoopBindings: readOnly ? undefined : listenMidi, // (the keys are read at each press; the input may have changed)
       })
     } }, projectName)
     return el
@@ -189,7 +186,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function rateChanged() {
     const next = getSampleRate(doc)
     if (!pb || next === rate) return
-    setPedal(false)
+    resetLoops()
     pb.destroy()
     rate = next
     armedTrack = null
@@ -235,17 +232,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (t) updateTrack(doc, t.id, { muted: !t.muted })
     else addClickTrack(doc)
   } })
-  const pedalBtn = h('button', { className: 'pedal-btn', onclick: () => void setPedal(!pedalOn) }, 'pedal')
-  transport.el.append(clickBtn, pedalBtn) // sit right of the time readout
-  /** The pedal needs Web MIDI (not in Safari) and a chosen input; otherwise the button says why it is off. */
-  function syncPedalBtn() {
-    const why = readOnly ? 'you can only view this project' : !midiSupported() ? 'loop pedal: this browser has no Web MIDI (try Chrome or Firefox)'
-      : !getMidiInput() ? 'loop pedal: choose a MIDI input in the project settings first' : ''
-    pedalBtn.disabled = !!why && !pedalOn
-    pedalBtn.title = why || 'loop pedal: foot switches record, loop and overdub on the beat (keys 1-4 do the same). Learn the switches in the project settings'
-    pedalBtn.classList.toggle('on', pedalOn)
-  }
-  syncPedalBtn()
+  transport.el.append(clickBtn) // sits right of the time readout
   const glass = (sign: string) => `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 18 18M6 8.5h5${sign}"/></svg>`
   const zoomOut = h('button', { className: 'bar-btn zoom', title: 'zoom out (ctrl + scroll)', onclick: () => zoomButton(1 / 1.5) })
   zoomOut.innerHTML = glass('')
@@ -260,7 +247,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'),
       readOnly ? h('span', { className: 'dim' }, 'view only') : null),
     transport.el,
-    h('div', { className: 'bar-r' }, pedalText, cpu, status, presence, h('div', { className: 'bar-btns' }, zoomOut, zoomIn, exportBtn, s.local ? null : chatBtn)))
+    h('div', { className: 'bar-r' }, loopText, cpu, status, presence, h('div', { className: 'bar-btns' }, zoomOut, zoomIn, exportBtn, s.local ? null : chatBtn)))
   const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }, where, projectTitle()))
   const rulerBody = h('div', { className: 'ruler-body' })
   ruler.append(rulerBody)
@@ -341,8 +328,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function stop() {
     const t = take
     take = null
-    void pedal?.end() // (the take must end before the engine stops)
+    loops?.reset()
+    const live = loopLive // (a loop interrupted by the stop is saved as a plain take; its live source goes once the take has ended)
+    loopLive = null
+    clearLoopTimer()
+    drawLoopStatus()
     const captured = t ? pb?.recorder.stop() : undefined // (asks the worklet to end the take before the engine stops)
+    if (live) void Promise.resolve(captured).then(() => (live.clip != null && pb?.removeLiveClip(live.clip), pb?.dropLiveSource(live.source)))
     pb?.stop()
     transport.setPlaying(false)
     s.setLocal({ playhead: null, ...(t ? { recording: null } : {}) })
@@ -375,7 +367,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let preparing = false // asking for the microphone: ignore further presses
   async function toggleRecord() {
     if (!pb || readOnly || preparing) return
-    if (pedal?.active) return void say('record: the loop pedal is recording', true)
+    if (loops?.recording) return void say('record: a loop is recording', true)
     if (take) return stop()
     if (!armedTrack || !tracksMap(doc).has(armedTrack) || !pb.recorder.armed) {
       preparing = true
@@ -431,84 +423,154 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
 
   const takeCtx = (): TakeCtx => ({ doc, projectId: s.projectId, me: s.userId == null ? null : { id: s.userId, name: s.user.username }, rate })
 
-  // --- loop pedal (docs/engine.md §9.2, audio/pedal.ts): MIDI presses are placed on the timeline where they were heard
-  /** Pedal mode on (the microphone and the MIDI input are opened) or off (the session, if any, ends). */
-  async function setPedal(on: boolean) {
-    if (on === pedalOn) return
-    if (!on) {
-      pedalOn = false
-      offPedal()
-      const ended = pedal?.end()
-      pedal = null
-      void ended?.then(() => !pedalOn && !armedTrack && !take && pb?.recorder.disarm())
-      if (!ended && !armedTrack && !take) pb?.recorder.disarm()
-      return afterPedal()
+  // --- loop commands (docs/engine.md §9.2, audio/loopPedal.ts): the transport keeps rolling and every command is written into
+  // the doc where it was heard. A loop take goes through the normal take path (`take`, the recorder, `finishTake`).
+  function resetLoops() {
+    loops?.reset()
+    dropLoopLive()
+    loops = null
+  }
+  const clearLoopTimer = () => (clearInterval(loopTimer), (loopTimer = 0))
+  /** Let go of a loop's live source and engine-only clip that never became a doc clip. */
+  function dropLoopLive() {
+    clearLoopTimer()
+    const l = loopLive
+    loopLive = null
+    if (!l || !pb) return
+    if (l.clip != null) pb.removeLiveClip(l.clip)
+    pb.dropLiveSource(l.source)
+  }
+  function makeLoops(): LoopPedal | null {
+    if (!pb || readOnly) return null
+    const io: LoopIO = {
+      playing: () => !!pb?.playing,
+      play: startTransport,
+      beginTake: beginLoopTake,
+      liveLoop: (t) => {
+        // The clip plays from the live source at once: silent until the boundary, then the loop, whatever the save is doing.
+        if (loopLive) loopLive.clip = pb!.liveClip(t.trackId, { source: loopLive.source, start: t.start, length: foreverSamples(rate), sourceOffset: loopOffset(t), loopLength: t.pass })
+      },
+      endTake: endLoopTake,
+      cancelTake: cancelLoopTake,
+      say: (m) => say(m, true),
     }
-    if (!pb || readOnly || take || !midiSupported() || !getMidiInput()) return
+    return new LoopPedal({ doc, rate, io, undo, latency: () => pb!.recorder.latency() })
+  }
+  /** The take of a loop: the normal recording path, written into a live source the engine can play while it grows. */
+  function beginLoopTake(trackId: string): boolean {
+    const rec = pb!.recorder
+    if (take || rec.recording || !rec.armed || !rec.info) {
+      say('loop: the previous take is still closing', true)
+      return false
+    }
+    const source = pb!.liveSource(rec.info.channels)
+    const info = { trackId, trackName: String(tracksMap(doc).get(trackId)!.get('name')) }
+    const journal = takeJournal(s.projectId, info, rate, rec.info.channels)
+    const from = Math.round(position())
     try {
-      await openMidi()
-      await pb.recorder.arm()
+      rec.start((pcm, seq) => journal.chunk(pcm, seq), (pos) => (journal.header(pos, rec.latency()), loops?.tookAt(pos)), source)
     } catch (err) {
-      say(`pedal: ${(err as Error).message}`, true)
-      return
+      journal.release()
+      pb!.dropLiveSource(source)
+      say(`loop: ${(err as Error).message}`, true)
+      return false
     }
-    if (destroyed || pedalOn || !pb) return
-    pedalOn = true
-    say('')
-    pedal = pedalSession({
-      doc, undo, pb, rate, projectId: s.projectId, takeCtx, play: startTransport, changed: afterPedal,
-      fail: (m) => say(m, true),
-    })
-    listenPedal()
-    afterPedal()
+    take = { ...info, start: from, journal }
+    loopLive = { source }
+    armedTrack = trackId
+    s.setLocal({ recording: { trackId, start: from } })
+    loopTimer = window.setInterval(() => loops && (loops.tick(position()), drawLoopStatus()), 30)
+    return true
   }
-  function listenPedal() {
-    offPedal()
-    offPedal = onPress(getMidiInput(), (t, at) => {
-      const a = actionFor(getBindings(), t)
-      if (a) pedalPress(a, at)
-    })
+  /** The loop has all its frames: stop the take and save it. Its clip is the loop, written with the take (one undo step). */
+  function endLoopTake(t: LoopTake) {
+    const tk = take, live = loopLive
+    take = null
+    loopLive = null
+    clearLoopTimer()
+    s.setLocal({ recording: null })
+    if (!tk || !live || !pb) return
+    void saveLoopTake(tk, pb.recorder.stop(), t, live)
+    draw()
   }
-  function pedalPress(a: Action, at: number) {
-    if (!pedal || destroyed) return
-    if (take) return void say('pedal: stop recording first', true)
-    pedal.press(a, at)
+  function cancelLoopTake() {
+    const tk = take, live = loopLive
+    take = null
+    clearLoopTimer()
+    s.setLocal({ recording: null })
+    const stopped = pb?.recorder.stop()
+    loopLive = null
+    void stopped?.then(() => live && pb?.dropLiveSource(live.source))
+    tk?.journal.discard()
+    tk?.journal.release()
+    draw()
   }
-  const afterPedal = () => (syncPedalBtn(), draw())
+  async function saveLoopTake(tk: NonNullable<typeof take>, captured: Promise<Captured | null>, t: LoopTake, live: NonNullable<typeof loopLive>) {
+    const gone = () => (live.clip != null && pb?.removeLiveClip(live.clip), pb?.dropLiveSource(live.source))
+    const cap = await captured
+    if (!cap) return gone(), tk.journal.discard(), tk.journal.release()
+    try {
+      await finishTake(takeCtx(), { ...cap, trackId: tk.trackId, trackName: tk.trackName }, `loop ${new Date().toLocaleTimeString([], { hour12: false })}`,
+        (hash) => (pb?.bindLiveSource(hash, live.source), joinUndo(undo, t.undoDepth)),
+        ({ trackId, hash }) => void commitLoop(doc, { ...t, recstart: cap.startPos }, trackId, hash), true)
+      await tk.journal.settled()
+      tk.journal.discard() // (on failure the backup stays, and is recovered next time)
+    } catch (err) {
+      gone()
+      say(`loop: ${(err as Error).message}`, true)
+    }
+    tk.journal.release()
+    undo.stopCapturing()
+  }
 
-  /** The pedal's layer and loops, drawn into their lanes like the take in progress; the text beside the CPU meter says what is going on. */
-  function drawPedal() {
-    const v = pedal?.view()
-    const want = new Map<string, { trackId: string; start: number; end: number; pass: number; cls: string; label: string }>()
-    const now = position()
-    if (v?.layer) want.set('layer', { trackId: v.layer.trackId, start: v.layer.start, end: now, pass: 0, cls: 'clip recording', label: 'recording' })
-    for (const l of v?.loops ?? []) {
-      // a loop with no end is drawn to the seam after the playhead, so its leading edge stays ahead of it
-      const end = l.stopAt ?? l.start + Math.max(1, Math.ceil((now - l.start) / l.pass)) * l.pass
-      want.set(`loop:${l.id}`, { trackId: l.trackId, start: l.start, end, pass: l.pass, cls: `clip live-loop${l.stopAt == null ? ' forever' : ''}`, label: `loop ${l.id}` })
+  /** Run a command heard at `perfTime` (performance.now clock; a key or MIDI event's timeStamp). */
+  async function command(cmd: Cmd, perfTime: number) {
+    if (!pb || readOnly || destroyed || loopArming) return
+    let at = perfTime
+    if (cmd === 'record' && !loops?.recording) {
+      if (take) return void say('loop: stop recording first', true)
+      if (!pb.recorder.armed) { // the first press asks for the microphone; it stays armed
+        loopArming = true
+        try {
+          await pb.recorder.arm()
+        } catch (err) {
+          return void say(`loop: ${(err as Error).message}`, true)
+        } finally {
+          loopArming = false
+        }
+        say('')
+        at = performance.now()
+        if (destroyed || !pb) return
+      }
     }
-    for (const [k, e] of pedalEls) if (!want.has(k)) { e.remove(); pedalEls.delete(k) }
-    for (const [k, w] of want) {
-      const body = lanes.get(w.trackId)?.body
-      if (!body) continue
-      let e = pedalEls.get(k)
-      if (!e) pedalEls.set(k, (e = h('div', { className: w.cls }, h('i', { className: 'seams' }), h('span', { className: 'label' }, w.label))))
-      if (e.parentElement !== body) body.append(e)
-      const width = x(Math.max(0, w.end - w.start))
-      e.hidden = width < 1
-      e.style.left = `${x(w.start)}px`
-      e.style.width = `${width}px`
-      const seams = e.firstElementChild as HTMLElement
-      const pass = x(w.pass)
-      seams.style.display = w.pass && width > pass ? '' : 'none'
-      seams.style.left = `${pass}px`
-      seams.style.width = `${Math.max(0, width - pass)}px`
-      seams.style.backgroundSize = `${pass}px 100%`
-    }
-    const n = (v?.loops ?? []).filter((l) => l.stopAt == null || l.stopAt > now).length
-    const text = !pedalOn ? '' : v?.layer ? 'pedal · rec' : v ? `pedal · ${n ? `${n} loop${n > 1 ? 's' : ''}` : 'ready'}` : 'pedal · ready'
-    if (pedalText.textContent !== text) pedalText.textContent = text
-    pedalText.classList.toggle('rec', !!v?.layer)
+    loops ??= makeLoops()
+    if (!loops) return
+    if (armedTrack && tracksMap(doc).has(armedTrack)) loops.current = armedTrack // an armed track is the current one
+    loops.press(cmd, pb.playing ? pb.heard(at) : Math.round(position()))
+    if (armedTrack && loops.current) armedTrack = loops.current
+    draw()
+  }
+  /** Listen to the chosen MIDI input (always, once one is set up). */
+  function listenMidi() {
+    offMidi()
+    offMidi = () => {}
+    const id = getMidiInput()
+    if (!id || !midiSupported() || readOnly) return
+    void openMidi().then(() => {
+      if (destroyed || id !== getMidiInput()) return
+      offMidi = onPress(id, (t, at) => {
+        const c = actionFor(getBindings(), t)
+        if (c) void command(c, at)
+      })
+    }, () => {})
+  }
+  const fmtSec = (smp: number) => `${(smp / rate).toFixed(1)}s`
+  /** The top bar's loop status: only while a loop records. */
+  function drawLoopStatus() {
+    const st = loops?.status(position())
+    const text = !st ? '' : st.free ? `rec loop · ${fmtSec(st.samples)}` : `rec loop · ${st.stopping ? 'ends' : 'edge'} in ${fmtSec(st.samples)}`
+    if (loopText.textContent !== text) loopText.textContent = text
+    loopText.hidden = !st
   }
 
   /** Right-click on ●: the manual input delay for the microphone in use (added to the automatic compensation). */
@@ -612,11 +674,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       say('take stopped: it reached the longest take that can be played back yet')
       return
     }
-    if (pedal?.active && (position() - pedal.since) * pb.recorder.info!.channels * 2 >= PLAYBACK_MAX_BYTES - 1024 * 1024) {
-      stop()
-      say('pedal take stopped: it reached the longest take that can be played back yet')
-      return
-    }
     drawPlayhead()
     const now = performance.now()
     if (now - lastAware > 100) {
@@ -632,10 +689,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     rulerHead.style.left = `${x(p)}px`
     transport.setTime(p / rate)
     drawRecRegions()
-    drawPedal()
+    drawLoopStatus()
   }
   function seek(smp: number) {
-    if (take || pedal?.active) return // a take is one continuous stretch of the timeline
+    if (take) return // a take is one continuous stretch of the timeline
     pb?.seek(smp)
     drawPlayhead()
   }
@@ -1479,6 +1536,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       l.kind.title = k.label
       l.el.classList.toggle('locked', locks.has(t.id))
       l.record?.classList.toggle('on', armedTrack === t.id)
+      l.el.classList.toggle('current', !readOnly && loops?.current === t.id)
       if (l.meter) l.meter.hidden = armedTrack !== t.id
       if (l.listen) {
         l.listen.hidden = armedTrack !== t.id
@@ -2072,7 +2130,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void toggleRecord() : toggle() }
     else if (!mod && !e.shiftKey && e.key.toLowerCase() === 'z') zoomFit()
     else if (e.key === 'Escape' && (editing || armed || padSel)) { editing = null; noteSel = null; armed = null; padSel = null; draw() }
-    else if (pedalOn && tag !== 'TEXTAREA' && !mod && !e.repeat && /^[1-4]$/.test(e.key)) { e.preventDefault(); pedalPress(ACTIONS[Number(e.key) - 1], e.timeStamp) } // the pedal's four actions, without a pedal
+    else if (!readOnly && tag !== 'TEXTAREA' && !(e.target as HTMLElement).isContentEditable && !mod && !e.altKey && !e.repeat && cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)) {
+      e.preventDefault()
+      void command(cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)!, e.timeStamp)
+    } // the loop commands, wherever the focus is not a text field
     else if (readOnly) return
     else if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? undo.redo() : undo.undo() }
     else if (!mod && e.key.toLowerCase() === 's') {
@@ -2124,6 +2185,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     pb.recorder.onlevel = drawLevel
     pb.oncpu = showCpu
     pb.onmeters = onMeters
+    listenMidi()
     draw()
     zoomFit() // (zoom is not remembered per project, so every open fits the song to the window)
     if (!readOnly) sweepUnusedTakes(takeCtx())
@@ -2144,8 +2206,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       removeEventListener('keydown', key)
       ne.destroy()
       removeEventListener('resize', schedule)
-      offPedal()
-      pedal?.abandon() // (its backup is recovered on the next open)
+      offMidi()
+      clearLoopTimer()
       if (take) s.setLocal({ recording: null }), take.journal.release() // (its backup is recovered on the next open)
       watched.forEach((m) => m.unobserveDeep(schedule))
       s.awareness.off('change', schedule)

@@ -58,6 +58,8 @@ export async function finishTake(
   onHash?: (hash: string) => void,
   /** Runs inside the same doc transaction as the take's own writes (one undo step), with the take's track (a new one if `t.trackId` is gone) and sample. */
   inTx?: (f: { trackId: string; hash: string }) => void,
+  /** The caller places the take's clip itself in `inTx` (a loop: a window of the take, looping), so none is made for the whole take. */
+  own = false,
 ): Promise<Finished> {
   const { doc, projectId, rate } = c
   const wav = encodeWav(t.pcm, t.channels, rate)
@@ -79,7 +81,7 @@ export async function finishTake(
   doc.transact(() => {
     if (meta) addSample(doc, meta)
     if (!tracksMap(doc).has(trackId)) trackId = addTrack(doc, t.trackName, 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))
-    clipId = addAudioClip(doc, { trackId, sourceHash: hash, start: place.start, length: place.length, sourceOffset: place.sourceOffset })
+    if (!own) clipId = addAudioClip(doc, { trackId, sourceHash: hash, start: place.start, length: place.length, sourceOffset: place.sourceOffset })
     inTx?.({ trackId, hash })
   })
   return { hash, trackId, clipId }

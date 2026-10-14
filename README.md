@@ -9,7 +9,7 @@ Free and open source under the [Apache License 2.0](LICENSE.md). Invite-only for
 
 ## Why it's cool
 
-- **Looping, built in.** A foot-pedal loop station that is part of the timeline, not a bolt-on.
+- **Looping, built in.** Loop-station commands (keys or a MIDI foot switch) that are part of the timeline, not a bolt-on.
   Presses land quantized to your click, layers stack onto new tracks, and when you stop, every loop
   is an ordinary clip you can trim, loop or move. Clips loop too.
 - **Automation on everything.** Draw automation on any effect or instrument parameter, per track or

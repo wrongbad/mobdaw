@@ -21,7 +21,7 @@ export interface EngineSink {
 export const LIVE_HEADROOM_S = 30
 
 /**
- * An audio clip that exists only in the engine (the loop pedal's live loops), in the engine's own terms: `length` is what the
+ * An audio clip that exists only in the engine (a loop being recorded, before its take is saved), in the engine's own terms: `length` is what the
  * engine is sent (a forever clip is 24 hours of samples), and `source` is an engine source handle (usually a live one).
  */
 export type LiveClip = {
@@ -524,7 +524,7 @@ export class Bridge {
     this.sink.call('engine_param_set', h, p, v)
   }
 
-  // --- live sources and engine-only clips (the loop pedal; docs/engine.md §9.2)
+  // --- live sources and engine-only clips (loop recording; docs/engine.md §9.2)
   /**
    * Reserve a live source for a take that is about to be recorded: an engine source handle that grows as the Recorder
    * writes into it (pass the handle to `Recorder.start`), with `LIVE_HEADROOM_S` of room up front. Clips on it
@@ -569,7 +569,7 @@ export class Bridge {
     return h
   }
 
-  /** Change an engine-only clip (the pedal's stop: a new `length`), now or at sample `at`. False once it is adopted or removed. */
+  /** Change an engine-only clip (a new `length`), now or at sample `at`. False once it is adopted or removed. */
   updateLiveClip(h: number, patch: Partial<LiveClip>, at?: number): boolean {
     const e = this.ephemeral.get(h)
     if (!e) return false

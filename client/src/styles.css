@@ -483,14 +483,11 @@ button.danger:hover { color: var(--danger); }
 .clip.forever::after { display: none; }
 .clip.forever:not(.editing) { mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); }
 
-/* loop pedal */
-.pedal-btn { height: 36px; padding: 0 10px; border: 0; background: none; color: var(--dim); }
-.pedal-btn:hover { color: var(--fg); }
-.pedal-btn.on { color: var(--bg); background: var(--accent); }
-.pedal-btn:disabled { opacity: .4; }
+/* loop commands */
 .pedal-st { font-size: 11px; color: var(--faint); cursor: default; white-space: nowrap; }
 .pedal-st.rec { color: var(--danger); }
 .pedal-row { margin-bottom: 6px; }
+.lane.current .head { box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), inset 3px 0 0 var(--tc); }
 .clip.live-loop { --clip: color-mix(in srgb, var(--tc, var(--accent)) 16%, var(--bg)); --clip-head: color-mix(in srgb, var(--tc, var(--accent)) 40%, var(--bg)); pointer-events: none; z-index: 1; }
 .clip.live-loop.forever { background-image: linear-gradient(to right, transparent calc(100% - 24px), var(--bg)), linear-gradient(var(--clip-head), var(--clip-head)); background-size: 100% 100%, 100% 15px; background-position: 0 0, top; background-repeat: no-repeat; }
 /* presets drawer: a column per group (heading over plain-text buttons), side by side, scrolling sideways when narrow */
