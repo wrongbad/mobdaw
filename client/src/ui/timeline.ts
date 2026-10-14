@@ -2,7 +2,7 @@
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import { MAX_PPS, MIN_PPS, fitPps } from './zoomFit'
 import {
-  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, FINNWAVE, SIMPLE_FILTER, addAudioClip, addClickTrack, addDevice, addDrum, isLooping, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
+  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, MIX, MIX_GAIN, MIX_PAN, getMixDevice, setMixParam, migrateToV3, FINNWAVE, SIMPLE_FILTER, addAudioClip, addClickTrack, addDevice, addDrum, isLooping, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
   deleteDevice, deleteLooper, addNextLooper, isDrum, isForever, passLength, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples, metaMap,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
@@ -58,11 +58,13 @@ const audioFiles = (list: FileList | null | undefined) =>
 const initials = (n: string) => n.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()
 
 type Card = ReturnType<typeof deviceCard>
+/** A header's volume fader and pan knob (both on the scope's mix device), with the row that holds them. */
+type MixCtl = { gain: HTMLInputElement; pan: ReturnType<typeof knob>; row: HTMLElement }
 /** A scope's automation: one collapsible section holding a lane per automated param (absent when there are none). */
 type AutoSec = { el: HTMLElement; toggle: HTMLElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
   el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; kind: HTMLElement; mute: HTMLButtonElement; solo: HTMLButtonElement
-  record: HTMLButtonElement | null; listen: HTMLButtonElement | null; meter: HTMLElement | null; gain: HTMLInputElement; pan: ReturnType<typeof knob>; tabs: Map<TabName, HTMLButtonElement>; more: HTMLElement; fxRow: HTMLElement; fx: HTMLElement
+  record: HTMLButtonElement | null; listen: HTMLButtonElement | null; meter: HTMLElement | null; mix: MixCtl; tabs: Map<TabName, HTMLButtonElement>; more: HTMLElement; fxRow: HTMLElement; fx: HTMLElement
   synthMore: HTMLElement; synthRow: HTMLElement; synth: HTMLElement; cards: Map<string, Card>
   loopMore: HTMLElement; loopRow: HTMLElement; loops: HTMLElement
   loopCards: Map<string, ReturnType<typeof looperCard>>; boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
@@ -308,7 +310,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   masterFx.append(masterAdd)
   const masterTabs = makeTabs(MASTER_TRACK, TABS.master)
   const masterFxRow = h('div', { className: 'fx-row', hidden: true }, masterMore, masterFx)
-  master.append(h('div', { className: 'lane-row master-row' }, h('div', { className: 'head' }, h('div', { className: 'head-top' }, h('span', { className: 'name' }, 'master')), masterTabs.el)), masterFxRow, masterAuto.el)
+  const masterMix = mixControls(MASTER_TRACK)
+  master.append(h('div', { className: 'lane-row master-row' }, h('div', { className: 'head' }, h('div', { className: 'head-top' }, h('span', { className: 'name' }, 'master')), masterMix.row, masterTabs.el)), masterFxRow, masterAuto.el)
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
 
   const x = (smp: number) => (smp / rate) * pps
@@ -527,8 +530,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let meterRaf = 0
   let meterAt = 0
   function onMeters(m: Meters) {
-    for (const id of lanes.keys()) {
-      const p = m.tracks.get(id)
+    for (const id of [...lanes.keys(), MASTER_TRACK]) {
+      const p = id === MASTER_TRACK ? m.master : m.tracks.get(id)
       meterTo.set(id, p ? [peakToFill(p[0]), peakToFill(p[1])] : [0, 0])
     }
     if (meterRaf) return
@@ -540,12 +543,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     meterAt = now
     let moving = false
     for (const [id, to] of meterTo) {
-      const l = lanes.get(id)
-      if (!l) { meterTo.delete(id); meterNow.delete(id); continue }
+      const fader = (id === MASTER_TRACK ? masterMix : lanes.get(id)?.mix)?.gain
+      if (!fader) { meterTo.delete(id); meterNow.delete(id); continue }
       const was = meterNow.get(id) ?? [0, 0]
       const at: [number, number] = [follow(was[0], to[0], dt), follow(was[1], to[1], dt)]
-      if (at[0] !== was[0]) l.gain.style.setProperty('--l', at[0].toFixed(3))
-      if (at[1] !== was[1]) l.gain.style.setProperty('--r', at[1].toFixed(3))
+      if (at[0] !== was[0]) fader.style.setProperty('--l', at[0].toFixed(3))
+      if (at[1] !== was[1]) fader.style.setProperty('--r', at[1].toFixed(3))
       meterNow.set(id, at)
       if (at[0] > to[0] || at[1] > to[1]) moving = true
     }
@@ -684,22 +687,60 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     changed: (d: string) => { const host = runs.get(d)?.[0]; if (host && host !== d) cardOf(host)?.redrawCurve() },
     dragFilter: (d: string, change: FilterChange) => cardOf(d)?.dragMove(change),
     dragFilterEnd: (d: string) => cardOf(d)?.dragEnd(),
-    autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, t),
+    autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, () => t),
   }
 
   // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
   const rowDeps = { doc, readOnly, grab: () => undo.stopCapturing(), x, fromX, get rate() { return getSampleRate(doc) } }
 
-  function autoMenu(label: HTMLElement, t: ParamTarget) {
-    const lane = () => laneOf(doc, t)
+  function autoMenu(label: HTMLElement, target: () => ParamTarget, clickToo = true) {
+    const lane = () => laneOf(doc, target())
     automateMenu(label, {
       state: () => { const l = lane(); return !l ? 'none' : l.enabled ? 'on' : 'off' },
-      automate: () => automate(t),
-      lfo: () => automate(t, true),
-      show: () => reveal(t.scope),
+      automate: () => automate(target()),
+      lfo: () => automate(target(), true),
+      show: () => reveal(target().scope),
       toggle: () => { const l = lane(); if (l) setLaneEnabled(doc, l.id, !l.enabled) },
       remove: () => { const l = lane(); if (l) deleteLane(doc, l.id) },
-    }, readOnly)
+    }, readOnly, clickToo)
+  }
+
+  /**
+   * The volume fader and pan knob of a track or the master bus: they read and write the scope's mix device (one undo step per
+   * gesture), and right-click offers automation. The fader doubles as the level meter (`onMeters`).
+   */
+  function mixControls(scope: string): MixCtl {
+    const gain = h('input', { type: 'range', className: 'gain', min: 0, max: 1, step: 'any', title: 'volume', disabled: readOnly })
+    ticks(gain, [UNITY_POS]) // 0 dB; the top of the range is +6 dB
+    valueTip(gain, () => fmtDb(posToGain(gain.valueAsNumber)))
+    gain.oninput = () => setMixParam(doc, scope, 'gain', posToGain(gain.valueAsNumber))
+    gain.onpointerdown = () => undo.stopCapturing()
+    const pan = knob({
+      min: -1, max: 1, value: 0, def: 0, size: 20, disabled: readOnly,
+      title: (v) => (Math.abs(v) < 0.005 ? 'pan: centre (double-click to reset)' : `pan: ${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v) * 100)}`),
+      onStart: () => undo.stopCapturing(), // one undo step per gesture
+      onInput: (v) => setMixParam(doc, scope, 'pan', Math.abs(v) < 0.02 ? 0 : v),
+      onChange: () => undo.stopCapturing(),
+    })
+    const target = (p: number) => (): ParamTarget => ({ scope, kind: 'effect', owner: getMixDevice(doc, scope)?.id ?? '', param: String(p) })
+    autoMenu(gain, target(MIX_GAIN), false)
+    autoMenu(pan.el, target(MIX_PAN), false)
+    return { gain, pan, row: h('div', { className: 'ctl gain-row' }, gain, pan.el) }
+  }
+
+  /** Show the mix device's values on its controls; while a lane drives one, it follows the lane (as device knobs do) and can't be dragged. */
+  function drawMix(scope: string, c: MixCtl) {
+    const d = getMixDevice(doc, scope)
+    const auto = d ? autoInfos.get(d.id) : undefined
+    const drive = (p: number) => {
+      const a = auto?.get(String(p))
+      return a?.on && a.value != null ? a.value : null
+    }
+    const g = drive(MIX_GAIN), pn = drive(MIX_PAN)
+    if (g != null || !inUse(c.gain)) c.gain.value = String(gainToPos(g ?? d?.params?.[MIX_GAIN] ?? 1))
+    c.gain.disabled = readOnly || g != null
+    c.pan.setDisabled(readOnly || pn != null)
+    c.pan.set(pn ?? d?.params?.[MIX_PAN] ?? 0)
   }
 
   /** Automate a param: a lane that starts flat at its current value, so nothing changes until a point is moved (or, with `lfo`, one in LFO mode). */
@@ -799,10 +840,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     for (const l of autoLanes) (byScope.get(l.scope) ?? byScope.set(l.scope, []).get(l.scope)!).push(l)
     const sections: [string, AutoSec][] = [[MASTER_TRACK, masterAuto], ...[...lanes].map(([id, l]) => [id, l.auto] as [string, AutoSec])]
     for (const [scope, sec] of sections) {
+      const mixId = getMixDevice(doc, scope)?.id
+      const rank = (l: AutoLane) => (l.owner === mixId ? 0 : 1) // the fader's and pan's lanes lead the section
       const mine = (byScope.get(scope) ?? []).flatMap((l) => {
         const r = resolveTarget(doc, l)
         return r ? [{ l, r }] : []
-      })
+      }).sort((a, b) => rank(a.l) - rank(b.l) || (rank(a.l) ? 0 : Number(a.l.param) - Number(b.l.param)))
       const open = autoShown.has(scope)
       const tab = (scope === MASTER_TRACK ? masterTabs.btns : lanes.get(scope)?.tabs)?.get('auto')
       if (tab) tab.hidden = mine.length === 0 // (no lanes: nothing to open)
@@ -818,7 +861,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         if (sec.box.children[i] !== row.el) sec.box.insertBefore(row.el, sec.box.children[i] ?? null)
         const slot = l.kind === 'looper' ? loopers.find((x) => x.id === l.owner)?.slot : undefined
         row.update(l, autoPoints.get(l.id) ?? [], {
-          def: r.def, label: `${ownerLabel(l, r.owner, devices)} · ${r.label}`, value: r.value, width,
+          def: r.def, label: devices.find((d) => d.id === l.owner)?.type === MIX ? r.label : `${ownerLabel(l, r.owner, devices)} · ${r.label}`, value: r.value, width,
           color: slot != null ? LOOP_COLORS[slot % LOOP_COLORS.length] : 'var(--accent)',
         })
       })
@@ -847,6 +890,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       for (const [id, c] of l.loopCards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)
     }
     for (const [id, c] of masterCards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)
+    for (const [scope, c] of [[MASTER_TRACK, masterMix] as const, ...[...lanes].map(([id, l]) => [id, l.mix] as const)]) drawMix(scope, c)
   }
 
   function laneFor(t: Track): Lane {
@@ -869,22 +913,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     } }, 'I') : null
     const meter = record ? h('i', { className: 'meter', hidden: true, title: 'input level' }) : null
-    const gain = h('input', { type: 'range', className: 'gain', min: 0, max: 1, step: 'any', title: 'gain', disabled: readOnly })
-    ticks(gain, [UNITY_POS]) // 0 dB; the top of the range is +6 dB
-    valueTip(gain, () => fmtDb(posToGain(gain.valueAsNumber)))
-    gain.oninput = () => updateTrack(doc, t.id, { gain: posToGain(gain.valueAsNumber) })
-    gain.onpointerdown = () => undo.stopCapturing()
-    const pan = knob({
-      min: -1, max: 1, value: t.pan, def: 0, size: 20, disabled: readOnly,
-      title: (v) => (Math.abs(v) < 0.005 ? 'pan: centre (double-click to reset)' : `pan: ${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v) * 100)}`),
-      onStart: () => undo.stopCapturing(), // one undo step per gesture
-      onInput: (v) => updateTrack(doc, t.id, { pan: Math.abs(v) < 0.02 ? 0 : v }),
-      onChange: () => undo.stopCapturing(),
-    })
+    const mix = mixControls(t.id)
     const tabs = makeTabs(t.id, TABS[t.kind] ?? TABS.audio)
     const more = h('div', { className: 'fx-toggle' }, 'fx')
     const delTrack = () => !locks.has(t.id) && confirm('delete this track and its clips?') && deleteTrack(doc, t.id)
-    const head = h('div', { className: 'head' }, h('div', { className: 'head-top' }, kind, name, h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter)), h('div', { className: 'ctl gain-row' }, gain, pan.el), tabs.el)
+    const head = h('div', { className: 'head' }, h('div', { className: 'head-top' }, kind, name, h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter)), mix.row, tabs.el)
     // Click or right-click on the header (not on its controls) offers the track's menu.
     let menuClosed = false // this press just closed the menu: don't open it again
     head.addEventListener('pointerdown', (e) => (menuClosed = closedBy(e)), true)
@@ -952,7 +985,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const auto = makeAutoSection(t.id)
     const presets = makePresetsDrawer(t.id)
     l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, name, kind, mute, solo, record, listen, meter, gain, pan, tabs: tabs.btns, more,
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, name, kind, mute, solo, record, listen, meter, mix, tabs: tabs.btns, more,
       fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
       pads: new Map(), auto, presets, loopTc, src,
     }
@@ -991,7 +1024,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function drawFx(l: Lane, t: Track, devices: Device[]) {
     const fxOpen = expanded.has(t.id)
     const synthOpen = t.kind === 'midi' && synthShown.has(t.id)
-    const mine = devices.filter((d) => d.trackId === t.id)
+    const mine = devices.filter((d) => d.trackId === t.id && !DEVICES[d.type]?.hidden)
     const chain = mine.filter((d) => !DEVICES[d.type]?.instrument)
     const instruments = mine.filter((d) => DEVICES[d.type]?.instrument)
     l.fxRow.hidden = !fxOpen // a shut drawer takes no height at all
@@ -1017,7 +1050,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   function drawMaster(devices: Device[]) {
-    const mine = devices.filter((d) => d.trackId === MASTER_TRACK)
+    const mine = devices.filter((d) => d.trackId === MASTER_TRACK && !DEVICES[d.type]?.hidden)
     const n = mine.length
     const open = expanded.has(MASTER_TRACK)
     masterFxRow.hidden = !open
@@ -1264,7 +1297,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     setMuted: (id: string, muted: boolean) => updateLooper(doc, id, { muted }),
     setGain: (id: string, gain: number) => updateLooper(doc, id, { gain }),
     setTape: (id: string, patch: { sat?: number; cutoff?: number; warble?: number }) => updateLooper(doc, id, patch),
-    autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, t),
+    autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, () => t),
     toggleArm: (id: string) => { armed = armed === id ? null : id; draw() },
     clear: (id: string) => updateLooper(doc, id, { start: 0, length: 0 }),
     remove: (id: string) => { if (armed === id) armed = null; deleteLooper(doc, id) },
@@ -1427,8 +1460,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       l.mute.classList.toggle('on', t.muted)
       l.el.classList.toggle('muted', t.muted)
       l.solo.classList.toggle('on', t.soloed)
-      if (!inUse(l.gain)) l.gain.value = String(gainToPos(t.gain))
-      l.pan.set(t.pan)
+      drawMix(t.id, l.mix)
       drawFx(l, t, devices)
       drawPresets(l, t)
       drawLoopers(l, t, loopers)
@@ -1445,6 +1477,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       }
     })
 
+    drawMix(MASTER_TRACK, masterMix)
     drawMaster(devices)
     drawAutomation(devices, loopers, x(total))
 
@@ -2054,6 +2087,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (destroyed) return
     if (!readOnly) {
       migrateToV2(doc)
+      migrateToV3(doc)
       sweepOrphans(doc)
       stashLaneRanges(doc)
     }

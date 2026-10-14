@@ -1,5 +1,5 @@
 import {
-  FINNWAVE, LOFI_DRUM, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getTracks, metaMap, type MidiClip,
+  FINNWAVE, LOFI_DRUM, MIX, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getTracks, metaMap, type MidiClip,
 } from '@mobdaw/shared'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
@@ -143,7 +143,7 @@ describe('files to clips', () => {
     expect(r.adopted).toBe(true)
     expect(getTracks(doc).map((t) => t.name)).toEqual(['Strings', 'Drums'])
     expect(r.tracks).toHaveLength(2)
-    const devs = getDevices(doc)
+    const devs = getDevices(doc).filter((d) => d.type !== MIX)
     expect(devs.filter((d) => d.trackId === r.tracks[0]).map((d) => [d.type, d.name])).toEqual([[FINNWAVE, 'String section']])
     expect(devs.filter((d) => d.trackId === r.tracks[1]).every((d) => d.type === LOFI_DRUM)).toBe(true)
     const clips = getClips(doc) as MidiClip[]

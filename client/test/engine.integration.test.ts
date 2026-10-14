@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addAudioClip, addClickTrack, addDevice, addDrum, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, getClips, setLaneState, setParam, updateClip, updateDevice, updateLaneLfo, updateTrack, type SampleMeta } from '@mobdaw/shared'
+import { addAudioClip, addClickTrack, addDevice, addDrum, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, getClips, setLaneState, setMixParam, setParam, updateClip, updateDevice, updateLaneLfo, updateTrack, type SampleMeta } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 import { CallQueue } from '../src/audio/schedule'
 import { readMeters } from '../src/audio/meters'
@@ -282,7 +282,7 @@ describe('bridge + real engine.wasm', () => {
     const { sink, samples, x, e } = host()
     const bridge = new Bridge(doc, sink, async () => [click], SR)
     await tick()
-    updateTrack(doc, t, { pan: -1 })
+    setMixParam(doc, t, 'pan', -1)
     bridge.setCycle(1000, 1777, true)
     bridge.play(900)
     const l = samples(4000)
@@ -307,8 +307,10 @@ describe('bridge + real engine.wasm', () => {
     const { sink, samples, x, e } = host()
     const bridge = new Bridge(doc, sink, async () => [dc], SR)
     await tick()
-    updateTrack(doc, a, { pan: -1, gain: 0.5 })
-    updateTrack(doc, b, { pan: 1, muted: true })
+    setMixParam(doc, a, 'pan', -1)
+    setMixParam(doc, a, 'gain', 0.5)
+    setMixParam(doc, b, 'pan', 1)
+    updateTrack(doc, b, { muted: true })
     bridge.play(0)
     samples(2048)
     readMeters(x, e) // past the gain ramps

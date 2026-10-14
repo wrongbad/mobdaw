@@ -45,10 +45,12 @@ export type AutoMenu = {
   remove(): void
 }
 
-/** Left or right click on a param's name offers Automate (or, once it has a lane, show / disable / delete it). */
-export function automateMenu(label: HTMLElement, m: AutoMenu, readOnly: boolean) {
-  label.classList.add('automatable')
-  label.title = 'click to automate'
+/** Left or right click on a param's name (only right-click with `clickToo` off, for controls a click drives) offers Automate (or, once it has a lane, show / disable / delete it). */
+export function automateMenu(label: HTMLElement, m: AutoMenu, readOnly: boolean, clickToo = true) {
+  if (clickToo) {
+    label.classList.add('automatable')
+    label.title = 'click to automate'
+  }
   const open = (e: MouseEvent) => {
     e.preventDefault()
     e.stopPropagation() // not the card's own menu, nor the <label> focusing its control
@@ -58,7 +60,7 @@ export function automateMenu(label: HTMLElement, m: AutoMenu, readOnly: boolean)
         : [['show automation', m.show], ...(readOnly ? [] : [[s === 'on' ? 'disable automation' : 'enable automation', m.toggle], ['delete automation', m.remove]] as [string, () => void][])]
     if (items.length) popover(label, items, [e.clientX, e.clientY])
   }
-  label.addEventListener('click', open)
+  if (clickToo) label.addEventListener('click', open)
   label.addEventListener('contextmenu', open)
 }
 

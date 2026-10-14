@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  DEVICES, addAudioClip, addDevice, MASTER_TRACK, devicesMap, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
+  DEVICES, MIX, addAudioClip, addDevice, MASTER_TRACK, devicesMap, addPad, deletePad, getPads, updatePad, addMidiClip, addNote, addSample, addTrack, addNextLooper, deleteLooper, clipsMap, deleteClip, deleteDevice, deleteTrack,
   addLane, addPoint, deleteLane, evalPoints, getLanes, getPoints, laneOf, setLaneEnabled, setLaneState, updateLaneLfo, updatePoint, resolveTarget,
   getClips, getLoopers, getSampleRate, getTracks, migrateToV2, notesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap,
   orderBetween, getDevices, updateDevice, updateClip, updateLooper, updateNote, updateTrack, type SampleMeta, setSampleStatus, discardSample, getSamples, undoScope,
@@ -42,8 +42,8 @@ describe('bridge', () => {
     expect(n.filter((x) => x === 'engine_clip_audio_upsert')).toHaveLength(1)
     expect(n.filter((x) => x === 'engine_clip_midi_upsert')).toHaveLength(1)
     expect(n.filter((x) => x === 'engine_note_upsert')).toHaveLength(1)
-    expect(n.filter((x) => x === 'engine_device_upsert')).toHaveLength(1)
-    expect(n.filter((x) => x === 'engine_param_set')).toHaveLength(7)
+    expect(n.filter((x) => x === 'engine_device_upsert')).toHaveLength(3) // the synth and the two tracks' mix devices
+    expect(n.filter((x) => x === 'engine_param_set')).toHaveLength(11) // 7 + gain and pan twice
     const midi = calls.find((c) => c[0] === 'engine_clip_midi_upsert')!
     expect(midi.slice(3)).toEqual([100, 120, 960, 15360, 0]) // start, bpm, ppq, lengthTicks, loopTicks (0: none)
   })
@@ -53,16 +53,16 @@ describe('bridge', () => {
     const t = addTrack(doc, 'a')
     const [[, th, kind]] = take().filter((c) => c[0] === 'engine_track_upsert')
     expect(kind).toBe(0)
-    updateTrack(doc, t, { gain: 0.5, muted: true })
-    expect(take()).toEqual([['engine_track_upsert', th, 0, 0.5, 0, 1, 0, 0]]) // kind, gain, pan, muted, soloed, solo_safe
+    updateTrack(doc, t, { muted: true })
+    expect(take()).toEqual([['engine_track_upsert', th, 0, 1, 0, 0]]) // kind, muted, soloed, solo_safe
     const c = addAudioClip(doc, { trackId: t, sourceHash: 'h', start: 5, length: 6 })
     const up = take()[0]
-    expect(up.slice(0, 2)).toEqual(['engine_clip_audio_upsert', 2])
+    expect(up.slice(0, 2)).toEqual(['engine_clip_audio_upsert', 3]) // handles: track 1, its mix device 2
     updateClip(doc, c, { start: 7 })
     expect(take()[0].slice(4, 6)).toEqual([7, 6]) // start, length
     deleteTrack(doc, t)
     const rm = take()
-    expect(rm).toContainEqual(['engine_clip_remove', 2])
+    expect(rm).toContainEqual(['engine_clip_remove', 3])
     expect(rm).toContainEqual(['engine_track_remove', th])
     // undo-like re-creation gets a fresh handle
     const t2 = addTrack(doc, 'b')
@@ -77,7 +77,7 @@ describe('bridge', () => {
     const n = addNote(doc, { clipId: c, tick: 0, durTicks: 10, pitch: 60, velocity: 1 })
     take()
     updateNote(doc, n, { pitch: 62 })
-    expect(take()).toEqual([['engine_note_upsert', 3, 2, 0, 10, 62, 1]])
+    expect(take()).toEqual([['engine_note_upsert', 4, 3, 0, 10, 62, 1]])
     deleteClip(doc, c)
     expect(take().map((x) => x[0]).sort()).toEqual(['engine_clip_remove', 'engine_note_remove'])
   })
@@ -102,7 +102,7 @@ describe('bridge', () => {
     const t = addTrack(doc, 'a')
     const d = addDevice(doc, t, 1)
     const calls = take()
-    const dh = calls.find((c) => c[0] === 'engine_device_upsert')![1]
+    const dh = calls.find((c) => c[0] === 'engine_device_upsert' && c[3] === 1)![1]
     setParam(doc, d, 1, 500)
     expect(take()).toEqual([['engine_param_set', dh, 1, 500]])
     bridge.setOverrides([{ deviceId: d, paramId: 1, value: 2000 }])
@@ -122,7 +122,7 @@ describe('bridge', () => {
     const t = addTrack(doc, 'a')
     const a = addDevice(doc, t, 1)
     const b = addDevice(doc, t, 4)
-    const ups = () => take().filter((c) => c[0] === 'engine_device_upsert') // [fn, handle, track, kind, order, bypass]
+    const ups = () => take().filter((c) => c[0] === 'engine_device_upsert' && c[3] !== 9) // [fn, handle, track, kind, order, bypass]
     const [ua, ub] = ups()
     expect(ua[4]).toBeLessThan(ub[4])
     updateDevice(doc, b, { order: orderBetween(undefined, getDevices(doc).find((d) => d.id === a)!.order) }) // b goes in front of a
@@ -151,7 +151,7 @@ describe('bridge', () => {
     addSample(doc, meta('h'))
     await new Promise((r) => setTimeout(r))
     expect(loads).toEqual(['h'])
-    expect(sources).toEqual([[3, 2, 4]]) // handles: track 1, clip 2, source 3
+    expect(sources).toEqual([[4, 2, 4]]) // handles: track 1, its mix device 2, clip 3, source 4
   })
 
   it('does not request incoming or missing sources, except incoming ones of the local user', async () => {
@@ -367,7 +367,7 @@ describe('automation', () => {
     const t = addTrack(doc, 'a')
     const dev = addDevice(doc, t, 1) // filter
     setParam(doc, dev, 1, 4000)
-    const dh = take().find((c) => c[0] === 'engine_device_upsert')![1]
+    const dh = take().find((c) => c[0] === 'engine_device_upsert' && c[3] === 1)![1]
 
     const lane = addLane(doc, { scope: t, kind: 'effect', owner: dev, param: '1' })
     const up = take().find((c) => c[0] === 'engine_lane_upsert')!
@@ -529,7 +529,7 @@ describe('metronome, looping clips and note ranges', () => {
     expect(other).toBeTruthy()
     const click = addClickTrack(doc)
     const tracks = take().filter((x) => x[0] === 'engine_track_upsert')
-    expect(tracks.map((x) => x[7])).toEqual([1]) // solo_safe, only for the click track
+    expect(tracks.map((x) => x[5])).toEqual([1]) // solo_safe, only for the click track
     expect(click).toBeTruthy()
   })
 
@@ -556,7 +556,7 @@ describe('metronome, looping clips and note ranges', () => {
     const tracks = getTracks(doc)
     expect(tracks.map((x) => x.id)[0]).toBe(id) // first in the list
     expect(tracks[0]).toMatchObject({ name: 'click', kind: 'midi', role: 'click', muted: false })
-    const devs = getDevices(doc).filter((x) => x.trackId === id)
+    const devs = getDevices(doc).filter((x) => x.trackId === id && x.type !== MIX)
     expect(devs.map((x) => [x.name, x.type, x.keyLo, x.keyHi])).toEqual([['accent', 7, 37, 37], ['tick', 7, 36, 36]])
     const [clip] = getClips(doc).filter((x) => x.trackId === id)
     expect(clip).toMatchObject({ kind: 'midi', start: 0, bpm: 120, view: 'drums', loopTicks: 3840, lengthTicks: 15360, forever: true })
@@ -566,7 +566,7 @@ describe('metronome, looping clips and note ranges', () => {
     expect(getNotes(doc).map((n) => [n.tick, n.pitch]).sort((a, b) => a[0] - b[0] || a[1] - b[1])).toEqual([[0, 36], [0, 37], [960, 36], [1920, 36], [2880, 36]]) // the tick on every beat, the accent doubled on beat 1
     undo.undo()
     expect(getTracks(doc).map((x) => x.name)).toEqual(['existing'])
-    expect(getDevices(doc)).toEqual([])
+    expect(getDevices(doc).map((d) => d.trackId)).toEqual([getTracks(doc)[0].id]) // only the existing track's mix device
     expect(getNotes(doc)).toEqual([])
   })
 

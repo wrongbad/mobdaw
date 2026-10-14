@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, SCHEMA_VERSION, addTrack, clipsMap, devicesMap, getClips, getDevices,
+  DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, MIX, SCHEMA_VERSION, addTrack, clipsMap, devicesMap, getClips, getDevices,
   getLanes, getNotes, getPoints, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, sweepOrphans, undoScope,
   tracksMap, metaMap, type Device,
 } from '@mobdaw/shared'
@@ -78,7 +78,7 @@ describe('presets', () => {
 
 describe('track presets', () => {
   const ids = (doc: Y.Doc, t: string) => presetsFor(doc, t).map((p) => p.id)
-  const mine = (doc: Y.Doc, t: string) => getDevices(doc).filter((d) => d.trackId === t)
+  const mine = (doc: Y.Doc, t: string) => getDevices(doc).filter((d) => d.trackId === t && d.type !== MIX) // (the pinned mix device is not part of a chain preset)
 
   it('offers fx-only on audio tracks, every instrument (synths then kits) on any MIDI track, nothing elsewhere', () => {
     const doc = new Y.Doc()

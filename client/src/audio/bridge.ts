@@ -458,7 +458,7 @@ export class Bridge {
   private upsertTrack(t: Track): boolean {
     const code = { audio: 0, midi: 1, soundscape: 2 }[t.kind]
     if (code == null) return false
-    this.sink.call('engine_track_upsert', this.handle('track', t.id), code, t.gain, t.pan, +t.muted, +t.soloed, +(t.role === 'click'))
+    this.sink.call('engine_track_upsert', this.handle('track', t.id), code, +t.muted, +t.soloed, +(t.role === 'click'))
     return true
   }
 
