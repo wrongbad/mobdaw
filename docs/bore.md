@@ -75,13 +75,16 @@ A Rust binary (e.g. `engine/crates/dsp/src/bin/bore_calibrate.rs`, or an `xtask`
   - A loudness gain that flattens steady RMS along the path and across notes.
   - A tuning correction in cents/samples for the loop's phase delay, measured rather than computed (Saxofony subtracts `filter.phaseDelay(f)` analytically; measuring also catches the junction's effect).
   - The note range where the cell speaks at all.
-- **Output:** a generated Rust source file of const tables (e.g. `bore_tables.rs`), committed with a header naming the generator and its parameters. At runtime, interpolate bilinearly across the continuous params (character, position, bore) and note. Regenerate whenever the DSP changes.
+- **Output: closed-form curves, not tables.** Each derived quantity (the region's low and high bound for drive and aperture, the loudness gain, the tuning correction, the note-range limits) is fitted as a closed-form function of the inputs (note or log-frequency, character, position, bore).
+  - Start with a **linear approximation**: least squares over the sweep. Report the residuals per quantity, and plot them against each input.
+  - Only where the residuals show clear structure, pick an appropriate curve: for example exponential or power-law in pitch, a quadratic in position, or a piecewise fit across the reed/jet/bow anchors. Keep each formula small and explain the choice.
+  - The fitted coefficients go into the DSP code as a few named constants, with a comment naming the generator, its grid and the fit error. The sweep tool stays in the repo so the fit can be redone whenever the DSP changes.
 - **Regression test:** for every preset and every note in its range, a short render speaks (onset, pitch and stability within limits). This catches DSP edits that silently break calibration.
 
 Open questions for the calibration phase:
 - Whether `stiffness` and `damping` also shift the region enough to need a table axis, or whether a small correction suffices.
 - Whether vibrato and noise at preset levels push cells out of the sounding region; if so, calibrate with them on.
-- Table size versus wasm size; trim axes that barely matter.
+- Which inputs each fitted quantity actually depends on; drop the terms that don't matter.
 
 ## Phases
 
