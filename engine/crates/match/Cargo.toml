@@ -1,0 +1,17 @@
+[package]
+name = "match"
+description = "Offline patch matching: render GM soundfont targets, score engine candidates, search parameters (docs/matching.md)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "match_"
+path = "src/lib.rs"
+
+[dependencies]
+dsp = { path = "../dsp" }
+rustysynth = "1"
+rustfft = "6"
+rayon = "1"
