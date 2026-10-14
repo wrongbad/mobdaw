@@ -59,6 +59,9 @@ fn process_never_allocates_across_a_busy_scene() {
         e.device_upsert(400 + t, t, 2, 1.0, false);
         e.device_upsert(900 + t, t, 7, 1.5, false); // lofi drum on the low keys, layered with the synth
         e.device_keys(900 + t, 36, 50);
+        if t == 22 || t == 23 {
+            e.device_upsert(1500 + t, t, 10, 1.7, false); // bore (waveguide) synth, layered too
+        }
         e.clip_midi_upsert(500 + t, t, 0, 100.0 + t as f64, 960, 30_000.0, 0.0);
         e.clip_midi_upsert(600 + t, t, 40_000, 140.0, 480, 30_000.0, 2_500.0);
         for n in 0..120u32 {
@@ -130,6 +133,13 @@ fn process_never_allocates_across_a_busy_scene() {
             30 => e.seek((block as i64 * 53) % 90_000),
             40 => e.track_upsert(3, 0, block % 2 == 0, block % 3 == 0, false),
             50 => e.param_set(423, 6, 1.5),
+            35 => {
+                // bore: smoothed knobs, a note-time knob and the bore switch
+                e.param_set(1522, 7, (block % 10) as f32 * 0.1);
+                e.param_set(1522, 0, (block % 7) as f32 / 7.0);
+                e.param_set(1523, 3, (block % 9) as f32 / 9.0);
+                e.param_set(1523, 4, (block % 2) as f32);
+            }
             90 => e.param_set(1203, 1, 20.0 + (block % 11) as f32 * 150.0), // delay time: the head moves
             80 => e.preview_seek(950, (block as i64 * 17) % 40_000),
             70 => e.looper_upsert(1100, 30, 1.0 + (block % 5) as f64 * 0.3, 1000, 4000),

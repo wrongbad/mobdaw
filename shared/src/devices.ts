@@ -24,6 +24,7 @@ export const LOFI_DRUM = 7
 export const EQ = 8
 /** The track's (or master's) fader and pan: hidden, pinned last in its chain, one per track and one for the master bus. */
 export const MIX = 9
+export const BORE = 10
 export const MIX_GAIN = 0
 export const MIX_PAN = 1
 
@@ -108,6 +109,25 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 1, name: 'resonance', min: 0, max: 1, def: 0.3, scale: 'lin' },
       { id: 2, name: 'decay', min: 1, max: 2000, def: 60, scale: 'pow', unit: 'ms' },
       { id: 3, name: 'gain', min: 0, max: 2, def: 0.5, scale: 'lin' },
+    ],
+  },
+  [BORE]: {
+    type: BORE, name: 'bore', instrument: true,
+    params: [
+      { id: 0, name: 'character', min: 0, max: 1, def: 0, scale: 'lin' }, // 0 reed, 0.5 jet (flute), 1 bow
+      { id: 1, name: 'stiffness', min: 0, max: 1, def: 0.5, scale: 'lin' },
+      { id: 2, name: 'aperture', min: 0, max: 1, def: 0.5, scale: 'lin' }, // reed opening / bow force, normalised
+      { id: 3, name: 'position', min: 0, max: 1, def: 0.3, scale: 'lin' }, // where along the bore the valve sits (read at note start)
+      { id: 4, name: 'bore', min: 0, max: 1, def: 1, scale: 'lin', options: ['closed', 'open'] }, // closed: odd harmonics
+      { id: 5, name: 'damping', min: 0, max: 1, def: 0.3, scale: 'lin' },
+      { id: 6, name: 'decay', min: 0, max: 1, def: 0.7, scale: 'lin' }, // ring after release
+      { id: 7, name: 'breath', min: 0, max: 1, def: 0.5, scale: 'lin' }, // breath pressure / bow speed, normalised
+      { id: 8, name: 'noise', min: 0, max: 1, def: 0, scale: 'lin' },
+      { id: 9, name: 'vibrato rate', min: 0.1, max: 12, def: 5, scale: 'log', unit: 'hz' },
+      { id: 10, name: 'vibrato depth', min: 0, max: 1, def: 0, scale: 'lin' },
+      { id: 11, name: 'attack', min: 0, max: 2000, def: 30, scale: 'pow', unit: 'ms' },
+      { id: 12, name: 'release', min: 1, max: 5000, def: 120, scale: 'pow', unit: 'ms' },
+      { id: 13, name: 'gain', min: 0, max: 2, def: 1, scale: 'lin' },
     ],
   },
   [FINNWAVE]: {

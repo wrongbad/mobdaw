@@ -460,6 +460,31 @@ resampler, with an SVF and a soft saturator in the feedback loop.
   linear to target). Exponential segments come later.
 - Output is mono, written to both channels.
 
+**kind 10: Bore synth** (instrument). `dsp::boresynth`: a waveguide wind/string synth (docs/bore.md). 8 voices of
+`dsp::bore` behind calibrated knobs (`dsp::bore_cal`): `aperture` and `breath` are normalised into the sounding region
+for the note, so any value in 0..1 speaks and levels out.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| character | 0 | 0..1 | 0 | 0 reed, 0.5 jet (flute), 1 bow; blends between. Smoothed. |
+| stiffness | 1 | 0..1 | 0.5 | Smoothed. |
+| aperture | 2 | 0..1 | 0.5 | Reed opening / bow force. Smoothed. |
+| position | 3 | 0..1 | 0.3 | Valve position along the bore; read when a note starts. |
+| bore | 4 | 0..1 (rounded) | 1 | 0 closed (odd harmonics, an octave lower), 1 open. Read when a note starts. |
+| damping | 5 | 0..1 | 0.3 | Loop low-pass. Smoothed. |
+| decay | 6 | 0..1 | 0.7 | Ring after release. Smoothed. |
+| breath | 7 | 0..1 | 0.5 | Breath pressure / bow speed. Smoothed. |
+| noise | 8 | 0..1 | 0 | Smoothed. |
+| vibrato rate | 9 | 0.1..12 Hz | 5 | |
+| vibrato depth | 10 | 0..1 | 0 | Smoothed. |
+| attack | 11 | 0..2000 ms | 30 | Read when a note starts. |
+| release | 12 | 1..5000 ms | 120 | Read when a note is released. |
+| gain | 13 | 0..2 | 1 | Smoothed. |
+
+- Notes outside the working range of the current character, position and bore get no voice. When all 8 voices are
+  busy the oldest is stolen with a 64-sample fade. Velocity sets a breath burst and scales level (0.5 + 0.5 v).
+- No allocation after construction. A voice is idle once released and its loop has died away.
+
 **kind 7: Lofi drum** (instrument). `dsp::lofidrum`: white noise → SVF low-pass (`dsp::svf`) → exponential
 decay envelope → gain. A one-shot.
 

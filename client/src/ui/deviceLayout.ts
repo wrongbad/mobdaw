@@ -1,6 +1,6 @@
 // How a device card arranges its params: knobs in titled sections on a grid. Known devices name their sections; any other
 // device (a new synth, say) falls back to a generic split, so adding a device needs no layout code.
-import { COMPRESSOR, DELAY, EQ, FINNWAVE, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO, type DeviceDef, type ParamDef } from '@mobdaw/shared'
+import { BORE, COMPRESSOR, DELAY, EQ, FINNWAVE, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO, type DeviceDef, type ParamDef } from '@mobdaw/shared'
 
 /** One justified row of cells (knobs and selectors); `title` captions it (only the first row of a section has one). */
 export type Row = { title: string; params: ParamDef[] }
@@ -9,6 +9,7 @@ export type Row = { title: string; params: ParamDef[] }
 const ROWS: Record<number, [string, number[]][]> = {
   [SIMPLE_FILTER]: [['', [0]], ['', [1, 2, 3]]],
   [FINNWAVE]: [['tone / output', [0, 1, 6]], ['envelope', [2, 3, 4, 5]]],
+  [BORE]: [['voice', [0, 1, 2]], ['', [4]], ['bore', [3, 5, 6]], ['breath', [7, 8, 13]], ['vibrato', [9, 10]], ['envelope', [11, 12]]],
   [LOFI_DRUM]: [['filter', [0, 1]], ['voice', [2, 3]]],
   [COMPRESSOR]: [['detector', [0, 1]], ['timing', [2, 3]], ['output', [4]]],
   [DELAY]: [['delay', [0, 1, 2]], ['filter', [5]], ['', [6, 7]], ['tape', [3, 4]]],

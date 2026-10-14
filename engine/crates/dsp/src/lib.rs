@@ -4,6 +4,7 @@
 pub mod adsr;
 pub mod bore;
 pub mod bore_cal;
+pub mod boresynth;
 pub mod analog;
 pub mod compressor;
 pub mod delay;
@@ -28,6 +29,7 @@ pub use adsr::Adsr;
 pub use compressor::{CompParams, Compressor};
 pub use delay::{DelayParams, TapeDelay};
 pub use fade::FadeShape;
+pub use boresynth::BoreSynth;
 pub use finnwave::Finnwave;
 pub use lofidrum::LofiDrum;
 pub use looper::{LoopParams, LoopVoice};

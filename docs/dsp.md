@@ -278,3 +278,12 @@ depend on a number that only grows being precise.
 - **EQ device UI.** A multi-band curve instead of plain sliders.
 - *(Quality, later)* Exponential ADSR segments and an FDN reverb (both change existing projects' sound), decramped
   bells and shelves near Nyquist.
+
+## 14. Bore synth (waveguide)
+
+`dsp::bore` (one voice: two fractional delay legs split at the valve, damping FIR, DC block), `dsp::bore_cal` (knobs to raw
+valve settings through fitted closed-form curves) and `dsp::boresynth` (the 8-voice device). The plan, the calibration
+method and its status are in docs/bore.md. Per sub-block (32 samples) each voice re-resolves its calibration (a few dozen
+multiply-adds plus `ln`/`exp`); the inner loop is one `g(Δ)` evaluation per sample. Delay lines are fixed 2048-sample rings,
+so the lowest note depends on position and bore (`Bore::fits`); the calibrated range is the tighter limit. Nothing allocates
+after construction; a voice sleeps once released and silent.

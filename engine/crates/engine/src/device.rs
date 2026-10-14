@@ -1,6 +1,6 @@
 //! Devices: the effect/instrument processors in a track's chain.
 
-use dsp::{CompParams, Compressor, DelayParams, LofiDrum, Ramp, Reverb, Svf, Synth, TapeDelay, TremParams, Tremolo};
+use dsp::{BoreSynth, CompParams, Compressor, DelayParams, LofiDrum, Ramp, Reverb, Svf, Synth, TapeDelay, TremParams, Tremolo};
 
 pub const KIND_FILTER: u32 = 1;
 pub const KIND_SYNTH: u32 = 2;
@@ -11,6 +11,7 @@ pub const KIND_DELAY: u32 = 6;
 pub const KIND_LOFI_DRUM: u32 = 7;
 pub const KIND_EQ: u32 = 8;
 pub const KIND_MIX: u32 = 9;
+pub const KIND_BORE: u32 = 10;
 
 const SMOOTH_MS: f64 = 10.0;
 
@@ -42,6 +43,7 @@ pub enum DeviceKind {
     Lofi(Box<LofiDrum>),
     Eq(Box<EqDevice>),
     Mix(Box<MixDevice>),
+    Bore(Box<BoreSynth>),
 }
 
 impl Device {
@@ -56,18 +58,19 @@ impl Device {
             KIND_LOFI_DRUM => DeviceKind::Lofi(Box::new(LofiDrum::new(sample_rate))),
             KIND_EQ => DeviceKind::Eq(Box::new(EqDevice::new(sample_rate))),
             KIND_MIX => DeviceKind::Mix(Box::new(MixDevice::new(sample_rate, track == crate::engine::MASTER_TRACK))),
+            KIND_BORE => DeviceKind::Bore(Box::new(BoreSynth::new(sample_rate))),
             _ => DeviceKind::Unknown,
         };
         Self { track, order, bypass, kind_id, kind, key_lo: 0, key_hi: 127 }
     }
 
     pub fn is_instrument(&self) -> bool {
-        matches!(self.kind, DeviceKind::Synth(_) | DeviceKind::Lofi(_))
+        matches!(self.kind, DeviceKind::Synth(_) | DeviceKind::Lofi(_) | DeviceKind::Bore(_))
     }
 
     /// Whether this is a sounding (not bypassed) instrument whose note range holds `pitch`.
     pub fn takes_note(&self, pitch: u32) -> bool {
-        self.is_instrument() && !self.bypass && (self.key_lo..=self.key_hi).contains(&pitch)
+        self.is_instrument() && !self.bypass && (self.key_lo..=self.key_hi).contains(&pitch) && !matches!(&self.kind, DeviceKind::Bore(b) if !b.accepts(pitch))
     }
 
     /// Start a note (`start` is its timeline sample, the lofi drum's noise seed). `release_at`
@@ -75,6 +78,7 @@ impl Device {
     pub fn note_on(&mut self, pitch: u32, velocity: f32, release_at: i64, start: i64) {
         match &mut self.kind {
             DeviceKind::Synth(s) => s.note_on(pitch, velocity, release_at),
+            DeviceKind::Bore(s) => s.note_on(pitch, velocity, release_at),
             DeviceKind::Lofi(d) => d.note_on(velocity, start),
             _ => {}
         }
@@ -82,15 +86,19 @@ impl Device {
 
     /// Let go of a held live key (see [`Engine::note_live`]); the drum is a one-shot and ignores it.
     pub fn note_off(&mut self, pitch: u32) {
-        if let DeviceKind::Synth(s) = &mut self.kind {
-            s.release_key(pitch);
+        match &mut self.kind {
+            DeviceKind::Synth(s) => s.release_key(pitch),
+            DeviceKind::Bore(s) => s.release_key(pitch),
+            _ => {}
         }
     }
 
     /// Let go of the notes whose release time has come (instruments only).
     pub fn release_due(&mut self, now: i64) {
-        if let DeviceKind::Synth(s) = &mut self.kind {
-            s.release_due(now);
+        match &mut self.kind {
+            DeviceKind::Synth(s) => s.release_due(now),
+            DeviceKind::Bore(s) => s.release_due(now),
+            _ => {}
         }
     }
 
@@ -98,6 +106,7 @@ impl Device {
     pub fn next_release_after(&self, now: i64) -> i64 {
         match &self.kind {
             DeviceKind::Synth(s) => s.next_release_after(now),
+            DeviceKind::Bore(s) => s.next_release_after(now),
             _ => i64::MAX,
         }
     }
@@ -106,6 +115,7 @@ impl Device {
     pub fn release_all(&mut self) {
         match &mut self.kind {
             DeviceKind::Synth(s) => s.release_all(),
+            DeviceKind::Bore(s) => s.release_all(),
             DeviceKind::Lofi(d) => d.release_all(),
             _ => {}
         }
@@ -114,8 +124,10 @@ impl Device {
     /// Release the notes with a scheduled release (clip notes; a transport loop wrap). Held live keys and drum tails
     /// keep sounding.
     pub fn release_scheduled(&mut self) {
-        if let DeviceKind::Synth(s) = &mut self.kind {
-            s.release_scheduled();
+        match &mut self.kind {
+            DeviceKind::Synth(s) => s.release_scheduled(),
+            DeviceKind::Bore(s) => s.release_scheduled(),
+            _ => {}
         }
     }
 
@@ -123,6 +135,7 @@ impl Device {
         match &mut self.kind {
             DeviceKind::Filter(f) => f.set_param(param, value),
             DeviceKind::Synth(s) => s.set_param(param, value),
+            DeviceKind::Bore(s) => s.set_param(param, value),
             DeviceKind::Reverb(v) => v.set_param(param, value),
             DeviceKind::Compressor(c) => c.set_param(param, value),
             DeviceKind::Tremolo(t) => t.set_param(param, value),
@@ -151,6 +164,7 @@ impl Device {
         match &mut self.kind {
             DeviceKind::Filter(f) => f.set_param_smooth(param, value, s),
             DeviceKind::Synth(d) => d.set_param_smooth(param, value, s),
+            DeviceKind::Bore(d) => d.set_param_smooth(param, value, s),
             DeviceKind::Reverb(v) => v.set_param_smooth(param, value, s),
             DeviceKind::Compressor(c) => c.set_param_smooth(param, value, s),
             DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, s),
@@ -173,6 +187,7 @@ impl Device {
             DeviceKind::Tremolo(t) => t.rate_log2.is_moving() || t.depth.is_moving() || t.spread.is_moving(),
             DeviceKind::Delay(d) => d.mix.is_moving() || d.feedback.is_moving() || d.drive.is_moving() || d.cutoff_log2.is_moving() || d.resonance.is_moving(),
             DeviceKind::Synth(s) => s.is_ramping(),
+            DeviceKind::Bore(s) => s.is_ramping(),
             DeviceKind::Lofi(d) => d.is_ramping(),
             DeviceKind::Eq(e) => e.out_db.is_moving() || e.bands.iter().any(|b| b.freq_log2.is_moving() || b.gain_db.is_moving() || b.damping.is_moving()),
             DeviceKind::Mix(m) => m.gain.is_moving() || m.pan.is_moving(),
@@ -185,6 +200,7 @@ impl Device {
     pub fn is_idle_instrument(&self) -> bool {
         match &self.kind {
             DeviceKind::Synth(s) => !s.is_active(),
+            DeviceKind::Bore(s) => !s.is_active(),
             DeviceKind::Lofi(d) => !d.is_active() && !d.is_ramping(),
             _ => false,
         }
@@ -209,7 +225,7 @@ impl Device {
             DeviceKind::Delay(d) => d.is_asleep(),
             DeviceKind::Eq(e) => e.bands.iter().all(|b| b.st == [[0.0; 2]; 2]),
             DeviceKind::Mix(_) => true,
-            DeviceKind::Synth(_) | DeviceKind::Lofi(_) => false,
+            DeviceKind::Synth(_) | DeviceKind::Lofi(_) | DeviceKind::Bore(_) => false,
         }
     }
 
@@ -228,6 +244,7 @@ impl Device {
     fn is_smoothed(&self, param: u32) -> bool {
         match &self.kind {
             DeviceKind::Filter(_) => matches!(param, 1..=3),
+            DeviceKind::Bore(_) => matches!(param, 0 | 1 | 2 | 5 | 6 | 7 | 8 | 10 | 13),
             DeviceKind::Synth(_) => matches!(param, dsp::synth::P_ROLLOFF | dsp::synth::P_ENV_TO_ROLLOFF | dsp::synth::P_SUSTAIN | dsp::synth::P_GAIN),
             DeviceKind::Reverb(_) => matches!(param, 0..=2),
             DeviceKind::Compressor(_) => matches!(param, 0 | 1 | 4),
@@ -246,6 +263,7 @@ impl Device {
         match &mut self.kind {
             DeviceKind::Filter(f) => f.reset(),
             DeviceKind::Synth(s) => s.reset(),
+            DeviceKind::Bore(s) => s.reset(),
             DeviceKind::Reverb(v) => v.reset(),
             DeviceKind::Compressor(c) => c.reset(),
             DeviceKind::Tremolo(t) => t.reset(),
@@ -277,6 +295,17 @@ impl Device {
             DeviceKind::Eq(e) => e.process(l, r, sample_rate),
             DeviceKind::Mix(m) => m.process(l, r),
             DeviceKind::Synth(s) => {
+                for (l, r) in l.chunks_mut(dsp::finnwave::SUB_BLOCK).zip(r.chunks_mut(dsp::finnwave::SUB_BLOCK)) {
+                    let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
+                    let mono = &mut mono[..l.len()];
+                    s.render_add(mono);
+                    for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
+                        *l += *m;
+                        *r += *m;
+                    }
+                }
+            }
+            DeviceKind::Bore(s) => {
                 for (l, r) in l.chunks_mut(dsp::finnwave::SUB_BLOCK).zip(r.chunks_mut(dsp::finnwave::SUB_BLOCK)) {
                     let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
                     let mono = &mut mono[..l.len()];
