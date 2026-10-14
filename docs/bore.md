@@ -1,6 +1,6 @@
 # Bore: a unified waveguide wind/string synth
 
-Status: **draft playable; calibration rough.** Phases 1-4 have landed: DSP core (`bore.rs`), calibration (`bore_cal.rs`, linear fits, 5 character anchors), engine device kind 10 (`boresynth.rs`), and ten presets (winds / strings groups). Calibration quality: about 70% of (anchor, bore, position, note, breath 0/.5/1) test points speak with the first linear fit (`bore_calibrate verify`, docs/bore/runs/2026-10-14-draft/verify.txt); the drive band edges and loudness are only roughly modelled, so levels vary between notes and the extremes of `breath` can fall silent or squeal. Next: refine the calibration (see "Calibration log").
+Status: **draft playable; calibration improving.** Phases 1-4 have landed: DSP core (`bore.rs`), calibration (`bore_cal.rs`, linear fits, 5 character anchors), engine device kind 10 (`boresynth.rs`), and ten presets (winds / strings groups). Calibration quality: 79% of (anchor, bore, position, note, breath 0/.5/1) test points speak (`bore_calibrate verify`, docs/bore/runs/2026-10-14-combined/verify.txt), up from 70% after adding stiffness/damping/decay correction terms from the factor sweep (docs/bore/runs/2026-10-14-factors/analysis.md). The drive band edges and loudness are still roughly modelled; levels vary between notes and the extremes of `breath` can fall silent or squeal. Next: the user tunes the presets by ear.
 This doc is the plan of record across sessions; update it as phases land.
 The automatic patch-matching optimizer that consumes this calibration is planned in `docs/matching.md` (Python orchestrates, a Rust worker runs the hot loops). Calibration is its prerequisite.
 
@@ -12,6 +12,7 @@ The automatic patch-matching optimizer that consumes this calibration is planned
 
 ### Calibration log
 - 2026-10-14-draft: first sweep with the current tool (1000 cells, 920 live) and linear fit emitted into `bore_cal.rs`. Summaries: docs/bore/runs/2026-10-14-draft/ (`fit.md`, `verify.txt`; raw CSV/SVG are on disk only, git-ignored). The earlier runs in docs/bore/runs/2026-10-14-first used an older CSV format.
+- 2026-10-14-combined: combined pinned sweep (1000 cells) + factor sweeps (17x280 cells varying stiffness/damping/decay one at a time) refitted together. The stiffness/damping/decay features now have non-zero coefficients. Verify: 923/1170 (79%), up from 824/1170 (70%). Factor sweep analysis in docs/bore/runs/2026-10-14-factors/analysis.md; decay has the largest effect, stiffness is moderate, damping is minimal.
 
 Sources: wade `wip/simple_bow.h` and `wip/simple_flute.h` (our own code, free to reuse), and STK `Saxofony.cpp` (MIT-style). The implementation is new Rust in `engine/crates/dsp`, using these as reference.
 
@@ -136,5 +137,6 @@ Calibration runs record provenance in their `fit.md`/`verify.txt`: commit hash a
 ## Where we left off (2026-10-14)
 
 - Playable draft landed: engine device (kind 10), ten presets, SLOW regression, and fitted calibration from the pinned sweep (1a69c36).
-- Started a factor sweep (`docs/bore/runs/2026-10-14-factors/`) varying stiffness and damping one at a time with the others pinned, to model them as separate correction terms. Its CSVs are local-only and git-ignored (a cache, regenerable with `run.sh` at the commit it was run from, about `439be4f`); they were saved but not analysed or fitted.
-- Next: analyse the factor runs, add stiffness/damping correction terms if they move the band, re-emit, and verify by render. Then the user tunes the presets by ear.
+- Factor sweeps (stiffness/damping/decay one-at-a-time) analysed: decay has the largest effect on drive band edges and level (up to 1.07 shift in ln drive hi, non-linear, anchor-dependent); stiffness is moderate (~0.7-0.8); damping is minimal. Full analysis: docs/bore/runs/2026-10-14-factors/analysis.md.
+- Combined fit (pinned + factor sweeps, ~5400 live cells) emitted into `bore_cal.rs`. Verify: **923/1170 (79%)**, up from 824/1170 (70%). The stiffness/damping/decay coefficients are now populated.
+- Next: the user tunes the presets by ear. Further calibration gains would likely require non-linear correction terms for decay's effect on drive hi / rms (R² = 0.25-0.36 with the current linear model).
