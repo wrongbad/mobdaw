@@ -16,7 +16,7 @@
 //! clips change.
 //!
 //! # Rendering one block (<= 128 frames)
-//! 1. Update each track's gain/pan ramp targets (mute, solo, gain, pan).
+//! 1. Update each track's gain ramp target (mute, solo).
 //! 2. Clear the per-track scratch buffers; if playing, mix every overlapping audio clip into
 //!    its track's scratch.
 //! 3. Per track, walk the block in control segments of at most 32 frames, additionally split
@@ -25,7 +25,7 @@
 //!    instrument whose note range holds its pitch). Run the instruments (summed) per segment.
 //!    Then run each effect in `order` over the whole block (split only at its own lanes'
 //!    breakpoints, and into pieces of at most 32 frames if it has lanes), and add the result,
-//!    scaled by the gain/pan ramp across the block, into the master output, keeping the track's
+//!    scaled by the mute/solo ramp across the block, into the master output, keeping the track's
 //!    post-fader peak for the meters.
 //! 4. Mix in the M1 test voice if its gate is on; keep the master peak; advance the transport.
 //!
@@ -51,7 +51,6 @@ use crate::source::Source;
 use crate::transport::Transport;
 use crate::test_voice::TestVoice;
 use dsp::finnwave::SUB_BLOCK;
-use dsp::pan::equal_power;
 use dsp::fade::{clip_edge_gain, fade_in_gain};
 use dsp::looper::MIN_LENGTH;
 use dsp::{FadeShape, LoopParams, LoopVoice, Ramp, TapeColor};
@@ -89,17 +88,14 @@ const LOOP_SPEED: (f64, f64) = (0.1, 4.0);
 const SMOOTH_MS: f64 = 10.0;
 
 struct Track {
-    gain: f32,
-    pan: f32,
     muted: bool,
     soloed: bool,
     /// Ignores other tracks' solo (the metronome's click track); its own mute still applies.
     solo_safe: bool,
     /// New tracks snap to their first target instead of ramping up from silence.
     fresh: bool,
-    /// Linear ramps of the final per-channel coefficient `gain * pan_law * audible`.
-    gain_l: Ramp,
-    gain_r: Ramp,
+    /// Linear ramp of `audible` (mute and solo); the fader and pan are the track's mix device.
+    gain: Ramp,
     /// Preallocated planar stereo scratch: `BLOCK` left, then `BLOCK` right.
     scratch: Vec<f32>,
     /// Set when a clip wrote into `scratch` this block.
@@ -495,7 +491,7 @@ impl Engine {
         self.input.as_mut_ptr()
     }
 
-    /// Play the live input through track `h`'s device chain, gain and pan (or stop with `None`).
+    /// Play the live input through track `h`'s device chain (or stop with `None`).
     /// Moving to another track fades the old one out and the new one in.
     pub fn monitor(&mut self, h: Option<u32>) {
         self.monitor = h;
@@ -701,25 +697,20 @@ impl Engine {
 
     // ---- tracks ---------------------------------------------------------------------------
 
-    pub fn track_upsert(&mut self, h: u32, kind: u32, gain: f32, pan: f32, muted: bool, soloed: bool, solo_safe: bool) {
-        let gain = if gain.is_finite() { gain.max(0.0) } else { 1.0 };
-        let pan = if pan.is_finite() { pan.clamp(-1.0, 1.0) } else { 0.0 };
+    pub fn track_upsert(&mut self, h: u32, kind: u32, muted: bool, soloed: bool, solo_safe: bool) {
         if let Some(t) = self.tracks.get_mut(h) {
-            (t.gain, t.pan, t.muted, t.soloed, t.solo_safe) = (gain, pan, muted, soloed, solo_safe);
+            (t.muted, t.soloed, t.solo_safe) = (muted, soloed, solo_safe);
             t.soundscape = kind == KIND_SOUNDSCAPE;
             return;
         }
         self.tracks.insert(
             h,
             Track {
-                gain,
-                pan,
                 muted,
                 soloed,
                 solo_safe,
                 fresh: true,
-                gain_l: Ramp::new(0.0),
-                gain_r: Ramp::new(0.0),
+                gain: Ramp::new(0.0),
                 scratch: vec![0.0; 2 * BLOCK],
                 has_audio: false,
                 chain: Vec::new(),
@@ -1199,27 +1190,18 @@ impl Engine {
         let (out_l, out_r) = out.split_at_mut(BLOCK);
         let (out_l, out_r) = (&mut out_l[off..off + n], &mut out_r[off..off + n]);
 
-        // 1. Mute/solo/gain/pan targets. Solo: if any track is soloed, the rest are silent.
+        // 1. Mute/solo targets. Solo: if any track is soloed, the rest are silent.
         //    Mute always wins. Silence is a gain target of 0, so it ramps over 10 ms.
         let any_solo = tracks.values().any(|t| t.soloed);
         for t in tracks.values_mut() {
             let audible = !t.muted && (!any_solo || t.soloed || t.solo_safe);
-            let g = if audible { t.gain } else { 0.0 };
-            let (pl, pr) = equal_power(t.pan);
-            let (tl, tr) = ((g * pl) as f64, (g * pr) as f64);
+            let g = if audible { 1.0 } else { 0.0 };
             if t.fresh {
                 t.fresh = false;
-                t.gain_l.set_target(tl, 1.0);
-                t.gain_l.snap();
-                t.gain_r.set_target(tr, 1.0);
-                t.gain_r.snap();
-            } else {
-                if t.gain_l.target() != tl {
-                    t.gain_l.set_target(tl, smooth);
-                }
-                if t.gain_r.target() != tr {
-                    t.gain_r.set_target(tr, smooth);
-                }
+                t.gain.set_target(g, 1.0);
+                t.gain.snap();
+            } else if t.gain.target() != g {
+                t.gain.set_target(g, smooth);
             }
             t.scratch.fill(0.0);
             t.has_audio = false;
@@ -1366,7 +1348,7 @@ impl Engine {
         }
 
         // 2d. Input monitoring: the live input joins the monitored track's scratch, so its chain,
-        //     gain, pan, mute and solo all apply. A change of track (or of on/off) fades over 10 ms.
+        //     mute and solo all apply. A change of track (or of on/off) fades over 10 ms.
         if *monitor_track != *monitor && monitor_gain.value() == 0.0 {
             *monitor_track = *monitor;
         }
@@ -1394,8 +1376,7 @@ impl Engine {
         //    then gain/pan into the master sum.
         for t in tracks.values_mut() {
             if t.chain.is_empty() && !t.has_audio {
-                t.gain_l.advance(n);
-                t.gain_r.advance(n);
+                t.gain.advance(n);
                 continue;
             }
             let (sl, sr_buf) = t.scratch.split_at_mut(BLOCK);
@@ -1469,8 +1450,7 @@ impl Engine {
                 for s in t.chain.iter().filter(|s| !s.instrument) {
                     devices.get_index_mut(s.dev as usize).skip(n, sr32);
                 }
-                t.gain_l.advance(n);
-                t.gain_r.advance(n);
+                t.gain.advance(n);
                 *sleep_skips += 1;
                 continue;
             }
@@ -1480,11 +1460,11 @@ impl Engine {
                 run_device(s, devices, lanes, p, playing, sl, sr_buf, sr32);
             }
 
-            // Gain/pan: a linear ramp across the block between the smoothed values at its edges,
+            // Mute/solo: a linear ramp across the block between the smoothed values at its edges,
             // in closed form (`g0 + dg * (j + 1)`), so the loops are independent per sample.
-            let (l0, r0) = (t.gain_l.value() as f32, t.gain_r.value() as f32);
-            let (l1, r1) = (t.gain_l.advance(n) as f32, t.gain_r.advance(n) as f32);
-            let (dl, dr) = ((l1 - l0) / n as f32, (r1 - r0) / n as f32);
+            let g0 = t.gain.value() as f32;
+            let g1 = t.gain.advance(n) as f32;
+            let (l0, r0, dl, dr) = (g0, g0, (g1 - g0) / n as f32, (g1 - g0) / n as f32);
             // The meter's peak rides along: an integer max of the `|v|` bits, which vectorizes (a float max reduction
             // would not without fast-math).
             let (mut pl, mut pr) = (t.peak[0], t.peak[1]);

@@ -140,7 +140,7 @@ fn effect_over_a_block_matches_segmented_processing_when_params_are_at_rest() {
 /// (`(pos, normalised value, hold)`; range 0..2, so 0.5 is unity). Returns the left channel.
 fn synth_with_gain_lane(points: &[(i64, f32, bool)], blocks: usize) -> Vec<f32> {
     let mut e = Engine::new(48000.0);
-    e.track_upsert(1, 1, 1.0, 0.0, false, false, false);
+    e.track_upsert(1, 1, false, false, false);
     e.clip_midi_upsert(1, 1, 0, 120.0, 480, 480.0 * 16.0, 0.0);
     e.note_upsert(1, 1, 0.0, 480.0 * 16.0, 69, 1.0);
     e.device_upsert(1, 1, 2, 0.0, false);

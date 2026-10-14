@@ -10,6 +10,7 @@ pub const KIND_TREMOLO: u32 = 5;
 pub const KIND_DELAY: u32 = 6;
 pub const KIND_LOFI_DRUM: u32 = 7;
 pub const KIND_EQ: u32 = 8;
+pub const KIND_MIX: u32 = 9;
 
 const SMOOTH_MS: f64 = 10.0;
 
@@ -40,6 +41,7 @@ pub enum DeviceKind {
     Delay(Box<DelayDevice>),
     Lofi(Box<LofiDrum>),
     Eq(Box<EqDevice>),
+    Mix(Box<MixDevice>),
 }
 
 impl Device {
@@ -53,6 +55,7 @@ impl Device {
             KIND_DELAY => DeviceKind::Delay(Box::new(DelayDevice::new(sample_rate))),
             KIND_LOFI_DRUM => DeviceKind::Lofi(Box::new(LofiDrum::new(sample_rate))),
             KIND_EQ => DeviceKind::Eq(Box::new(EqDevice::new(sample_rate))),
+            KIND_MIX => DeviceKind::Mix(Box::new(MixDevice::new(sample_rate, track == crate::engine::MASTER_TRACK))),
             _ => DeviceKind::Unknown,
         };
         Self { track, order, bypass, kind_id, kind, key_lo: 0, key_hi: 127 }
@@ -126,6 +129,7 @@ impl Device {
             DeviceKind::Delay(d) => d.set_param(param, value),
             DeviceKind::Lofi(d) => d.set_param(param, value),
             DeviceKind::Eq(e) => e.set_param(param, value),
+            DeviceKind::Mix(m) => m.set_param(param, value),
             DeviceKind::Unknown => {}
         }
     }
@@ -153,6 +157,7 @@ impl Device {
             DeviceKind::Delay(d) => d.set_param_smooth(param, value, s),
             DeviceKind::Lofi(d) => d.set_param_smooth(param, value, s),
             DeviceKind::Eq(e) => e.set_param_smooth(param, value, s),
+            DeviceKind::Mix(m) => m.set_param_smooth(param, value, s),
             DeviceKind::Unknown => {}
         }
     }
@@ -170,6 +175,7 @@ impl Device {
             DeviceKind::Synth(s) => s.is_ramping(),
             DeviceKind::Lofi(d) => d.is_ramping(),
             DeviceKind::Eq(e) => e.out_db.is_moving() || e.bands.iter().any(|b| b.freq_log2.is_moving() || b.gain_db.is_moving() || b.damping.is_moving()),
+            DeviceKind::Mix(m) => m.gain.is_moving() || m.pan.is_moving(),
             DeviceKind::Unknown => false,
         }
     }
@@ -202,6 +208,7 @@ impl Device {
             DeviceKind::Reverb(v) => v.zero_run >= v.reverb.tail_samples(v.size_max),
             DeviceKind::Delay(d) => d.is_asleep(),
             DeviceKind::Eq(e) => e.bands.iter().all(|b| b.st == [[0.0; 2]; 2]),
+            DeviceKind::Mix(_) => true,
             DeviceKind::Synth(_) | DeviceKind::Lofi(_) => false,
         }
     }
@@ -228,6 +235,7 @@ impl Device {
             DeviceKind::Delay(_) => matches!(param, 0 | 2 | 4 | 6 | 7),
             DeviceKind::Lofi(_) => matches!(param, dsp::lofidrum::P_CUTOFF | dsp::lofidrum::P_RESONANCE | dsp::lofidrum::P_GAIN),
             DeviceKind::Eq(_) => param <= 12,
+            DeviceKind::Mix(_) => param <= 1,
             DeviceKind::Unknown => false,
         }
     }
@@ -244,6 +252,7 @@ impl Device {
             DeviceKind::Delay(d) => d.reset(),
             DeviceKind::Lofi(d) => d.reset(),
             DeviceKind::Eq(e) => e.reset(),
+            DeviceKind::Mix(_) => {}
             DeviceKind::Unknown => {}
         }
     }
@@ -266,6 +275,7 @@ impl Device {
             DeviceKind::Tremolo(t) => t.process(l, r, sample_rate),
             DeviceKind::Delay(d) => d.process(l, r),
             DeviceKind::Eq(e) => e.process(l, r, sample_rate),
+            DeviceKind::Mix(m) => m.process(l, r),
             DeviceKind::Synth(s) => {
                 for (l, r) in l.chunks_mut(dsp::finnwave::SUB_BLOCK).zip(r.chunks_mut(dsp::finnwave::SUB_BLOCK)) {
                     let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
@@ -542,6 +552,63 @@ impl EqDevice {
             for v in l.iter_mut().chain(r.iter_mut()) {
                 *v *= g;
             }
+        }
+    }
+}
+
+/// Kind 9: the track's (or the master bus's) fader. Params: 0 gain (linear, 0..2), 1 pan (-1..1). Both are smoothed, and
+/// the output coefficients ramp linearly across the run between the values at its edges, so a knob move or a lane never
+/// zippers. A track pans with the equal-power law (centre -3 dB, as tracks always have); the master bus uses `balance`
+/// (centre unity), so a fresh master is a bit-exact passthrough.
+pub struct MixDevice {
+    smooth_samples: f64,
+    gain: Ramp,
+    pan: Ramp,
+    master: bool,
+    /// Params not yet set once: the first value snaps, so a loaded project doesn't glide in from the defaults.
+    unset: [bool; 2],
+}
+
+impl MixDevice {
+    pub fn new(sample_rate: f32, master: bool) -> Self {
+        Self { smooth_samples: sample_rate as f64 * SMOOTH_MS * 1e-3, gain: Ramp::new(1.0), pan: Ramp::new(0.0), master, unset: [true; 2] }
+    }
+
+    pub fn set_param(&mut self, param: u32, value: f32) {
+        let first = self.unset.get_mut(param as usize).is_some_and(|u| std::mem::take(u));
+        self.set_param_smooth(param, value, if first { 0.0 } else { self.smooth_samples });
+    }
+
+    pub fn set_param_smooth(&mut self, param: u32, value: f32, s: f64) {
+        if !value.is_finite() {
+            return;
+        }
+        match param {
+            0 => self.gain.set_target(value.clamp(0.0, 2.0) as f64, s),
+            1 => self.pan.set_target(value.clamp(-1.0, 1.0) as f64, s),
+            _ => {}
+        }
+    }
+
+    fn coefs(&self, g: f64, pan: f64) -> (f32, f32) {
+        let (pl, pr) = if self.master { dsp::pan::balance(pan as f32) } else { dsp::pan::equal_power(pan as f32) };
+        (g as f32 * pl, g as f32 * pr)
+    }
+
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        let n = l.len();
+        let (g0, p0) = (self.gain.value(), self.pan.value());
+        let (g1, p1) = (self.gain.advance(n), self.pan.advance(n));
+        let ((l0, r0), (l1, r1)) = (self.coefs(g0, p0), self.coefs(g1, p1));
+        if (l0, r0, l1, r1) == (1.0, 1.0, 1.0, 1.0) {
+            return;
+        }
+        let (dl, dr) = ((l1 - l0) / n as f32, (r1 - r0) / n as f32);
+        for (j, x) in l.iter_mut().enumerate() {
+            *x *= l0 + dl * (j as u32 + 1) as f32;
+        }
+        for (j, x) in r.iter_mut().enumerate() {
+            *x *= r0 + dr * (j as u32 + 1) as f32;
         }
     }
 }

@@ -134,7 +134,7 @@ algorithm relies on exact identities. Rules:
 |---|---|---|
 | LFOs: tremolo, warble, lane LFOs | `sin2pi`/`cos2pi`, or a `u32`-phase LUT | ~1e-3 shape error on a sub-audio modulator is inaudible. A `u32` phase wraps exactly with no `fract` or `fmod`. |
 | Compressor dB↔linear, envelope gain | fast `exp`/`log2` | A 0.1 % gain error is ~0.01 dB. |
-| Fade and pan curves | either | Evaluated per block, or error-tolerant. |
+| Fade and pan curves | either | Evaluated per block, or error-tolerant. The mix device evaluates its pan law at the two edges of each run and ramps the coefficients linearly between them. |
 | Filter coefficients (`tan` prewarp) | **exact** | Computed per run, not per sample, so it costs nothing to be exact. Errors near Nyquist detune the filter. |
 | **finnwave** sin/cos | **exact (or exact-seeded rotation)** | The closed form relies on cancellation in the geometric-series numerator, divided by a denominator that is small near θ = 0. Approximate sines break the cancellation, and the error is amplified and spread above the harmonics as aliasing. The waveform is audibly degraded (as found with wade's `shapes.h`). Keep the f64 seed plus complex rotation. An f32 inner loop fails too, even with a cancellation-free denominator: rounding drift in the rotated phasors is amplified by about 1/b, reaching 2e-3 of peak (a −70 dB floor) at b = 0.001. Keep the loop in f64. |
 | Saturators in the audio path | smooth shapes with a known slope (§8) | Bit-trick `tanh` has derivative kinks at every power of two, which add low-level harmonics and alias. In a feedback loop its slope at 0 must match `unity_gain`, or the decay rate shifts. |

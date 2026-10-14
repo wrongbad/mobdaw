@@ -211,7 +211,7 @@ pub extern "C" fn scene(tracks: u32, clips_per_track: u32, device_mask: u32) {
     e.load_source(1, &[&src, &src]);
     let (mut ch, mut dh) = (100u32, 10000u32);
     for t in 0..tracks {
-        e.track_upsert(t + 1, 0, 1.0, 0.0, false, false, false);
+        e.track_upsert(t + 1, 0, false, false, false);
         for c in 0..clips_per_track {
             let start = c as i64 * 48000;
             let clen = if clips_per_track == 1 { SCENE_LEN as i64 } else { 48000 };

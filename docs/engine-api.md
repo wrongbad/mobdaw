@@ -132,20 +132,17 @@ A live source is a source that grows while it is recorded. It is playable from `
 
 ## Tracks
 ```
-engine_track_upsert(e, h, kind: u32 /*0 audio, 1 midi*/, gain: f32, pan: f32 /*-1..1*/,
+engine_track_upsert(e, h, kind: u32 /*0 audio, 1 midi*/,
                     muted: u32, soloed: u32, solo_safe: u32)
 engine_track_remove(e, h)       // also stops rendering its clips/devices (bridge removes those too)
 ```
-- **Gain:** linear. Changes are smoothed with a 10 ms linear ramp.
-- **Pan:** equal-power, with −3 dB at center:
-  - `L = cos((pan+1)·π/4)`
-  - `R = sin((pan+1)·π/4)`
-  - smoothed the same way as gain.
+- **No fader or pan on the track:** those are the track's **mix device** (kind 9, below), pinned last in its chain
+  by the document schema. The engine only applies mute/solo, as a 10 ms linear ramp of a 0/1 gain.
 - **Solo:** if any track is soloed, non-soloed tracks are silent. Mute always wins.
   A `solo_safe` track (the metronome's click track) ignores other tracks' solo, so it stays audible;
   its own mute still applies.
 - **Signal flow:** clips (audio) or instrument outputs (midi, summed) → effects in `order` →
-  gain/pan → master sum → **global fx chain**.
+  (the mix device is the last effect) → mute/solo gain → master sum → **global fx chain**.
 - **Global fx:** a device upserted with `track = 0xFFFFFFFF` (`MASTER_TRACK`) sits on the master
   bus instead of a track. Those devices run in `order` over the summed mix, before the test voice.
   In the doc this is a device whose `trackId` is `'master'`.
@@ -366,6 +363,22 @@ run in one fused per-sample loop (L and R interleaved).
 | output | 12 | -24..24 dB | 0 | Smoothed (segment-start value); 0 dB is skipped. |
 
 - All bands at 0 dB and output 0 dB is a bit-exact passthrough.
+
+**kind 9: mix** (effect). The track's (or, on `MASTER_TRACK`, the master bus's) fader and pan. The document pins one as the
+last device of every chain; the engine does not require it.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| gain | 0 | 0..2 (linear) | 1 | Smoothed. 1 is unity, 2 is +6 dB (the fader's top). |
+| pan | 1 | -1..1 | 0 | Smoothed. |
+
+- Pan law, left/right gains: on a track equal-power, `L = cos((pan+1)·π/4)`, `R = sin((pan+1)·π/4)` (−3 dB at centre, applied
+  to each side of a stereo signal, as tracks always had). On the master bus a balance, the same curve times √2 capped at 1:
+  centre is unity, hard left is `(1, 0)`, hard right `(0, 1)`, so a fresh master mix is a bit-exact passthrough.
+- The output gains ramp linearly across each run between the smoothed values at its edges (the old per-track gain ramp).
+- The first value set on a new device snaps (a loaded project does not fade in from the defaults); later ones glide 10 ms.
+- Reports glides (`is_ramping`) and is asleep (zero in, zero out) when at rest, like the other effects.
+- The track meter is post-mix-device and post-mute.
 
 **kind 3: Reverb** (effect). A Freeverb-style stereo reverb, `dsp::reverb`: 8 damped combs into 4
 allpasses per channel (right channel offset for width), summed from a mono input.

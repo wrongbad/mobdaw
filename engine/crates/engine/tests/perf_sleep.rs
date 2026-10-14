@@ -27,7 +27,7 @@ fn render(kinds: &[(u32, &[(u32, f32)])], sleep: bool) -> (Vec<f32>, u64) {
     let mut e = Engine::new(48000.0);
     e.set_sleep(sleep);
     e.load_source(1, &[&src]);
-    e.track_upsert(1, 0, 1.0, -1.0, false, false, false);
+    e.track_upsert(1, 0, false, false, false);
     e.clip_audio_upsert(1, 1, 1, 0, TOTAL as i64, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     for (i, (kind, params)) in kinds.iter().enumerate() {
         e.device_upsert(i as u32 + 1, 1, *kind, i as f64, false);

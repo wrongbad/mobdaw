@@ -19,7 +19,7 @@ fn knob_glide_steps_at_32_frames() {
     for (kind, param, value) in [(KIND_REVERB, 0u32, 0.9f32), (KIND_COMPRESSOR, 4, 12.0), (KIND_TREMOLO, 1, 0.9)] {
         let mut e = Engine::new(48000.0);
         e.load_source(1, &[&src]);
-        e.track_upsert(1, 0, 1.0, -1.0, false, false, false);
+        e.track_upsert(1, 0, false, false, false);
         // Starts before 0 and runs on, so there are no clip fades in the rendered range.
         e.clip_audio_upsert(1, 1, 1, -100_000, 300_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
         e.device_upsert(1, 1, kind, 0.0, false);

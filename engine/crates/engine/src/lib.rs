@@ -224,13 +224,11 @@ pub unsafe extern "C" fn engine_track_upsert(
     e: *mut Engine,
     h: u32,
     kind: u32,
-    gain: f32,
-    pan: f32,
     muted: u32,
     soloed: u32,
     solo_safe: u32,
 ) {
-    (*e).track_upsert(h, kind, gain, pan, muted != 0, soloed != 0, solo_safe != 0);
+    (*e).track_upsert(h, kind, muted != 0, soloed != 0, solo_safe != 0);
 }
 
 #[no_mangle]
