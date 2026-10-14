@@ -117,3 +117,10 @@ Open questions for the calibration phase:
    | Growl lead | reed | open | 0.15 | max stiffness, high breath, overblown |
 
 5. **Tuning by ear** (user): adjust presets and, if needed, the calibration targets.
+- 2026-10-14-pinned: same grid with stiffness/damping/decay held at 0.5/0.3/0.7 (`sweep --pin`). The spread of the band edges and the level collapses (lo edge 0.03-0.14 ln units, from 0.3-0.7), so the earlier poor fits were interaction, not model error in note/position/bore. Two other findings: (1) an open bore below MIDI 33 is a different regime (band top runs off the grid, level flips), so the fit now leaves it out (`OPEN_NOTE_MIN`); (2) a few cells per row flip to another mode ("wolf" notes), so the fits are now robust (IRLS, near-L1) instead of plain least squares. Next: one-factor-at-a-time sweeps (2026-10-14-factors) to model stiffness / damping / decay.
+
+## Where we left off (2026-10-14)
+
+- Playable draft landed: engine device (kind 10), ten presets, SLOW regression, and fitted calibration from the pinned sweep (1a69c36).
+- Started a factor sweep (`docs/bore/runs/2026-10-14-factors/`) varying stiffness and damping one at a time with the others pinned, to model them as separate correction terms. Results saved but not analysed or fitted; decay wasn't swept yet.
+- Next: analyse the factor runs, add stiffness/damping correction terms if they move the band, re-emit, and verify by render. Then the user tunes the presets by ear.
