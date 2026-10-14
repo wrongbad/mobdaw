@@ -920,4 +920,34 @@ fn fit(args: &[String]) {
     }
 }
 
-fn verify() {}
+/// Render the fitted table the way the engine will (default knobs except the swept ones) and
+/// print, per anchor / bore / position, which notes speak at breath 0, 0.5 and 1.
+fn verify() {
+    let notes: Vec<i32> = (24..=96).step_by(6).collect();
+    println!("notes: {notes:?}   (S = speaks at breath 0/.5/1 -> count 0..3)");
+    let mut total = 0;
+    let mut ok = 0;
+    for (ai, name) in ANCHOR_NAMES.iter().enumerate() {
+        for open in [true, false] {
+            for pos in [0.1f32, 0.3, 0.5] {
+                let mut line = format!("{name:9} {:6} pos {pos:.1}: ", if open { "open" } else { "closed" });
+                for &n in &notes {
+                    let mut c = 0;
+                    for breath in [0.0f32, 0.5, 1.0] {
+                        let k = bore_cal::Knobs { character: ai as f32 * 0.25, open, position: pos, breath, ..Default::default() };
+                        let r = bore_cal::resolve(n as f32, &k);
+                        let setup = NoteSetup { freq_hz: midi_hz(n as f32), open, position: r.position, tune_cents: r.tune_cents, attack_ms: 10.0, ..NoteSetup::default() };
+                        total += 1;
+                        if measure(&r.raw, &setup).speaks {
+                            c += 1;
+                            ok += 1;
+                        }
+                    }
+                    line.push_str(&format!("{c:2}"));
+                }
+                println!("{line}");
+            }
+        }
+    }
+    println!("speaks {ok}/{total}");
+}
