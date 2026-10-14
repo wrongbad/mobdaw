@@ -803,18 +803,18 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const name = h('span', { className: 'name', ondblclick: () => readOnly || rename(t.id) })
     const mute = h('button', { className: 'mute', title: 'mute', onclick: () => {
       updateTrack(doc, t.id, { muted: !tracksMap(doc).get(t.id)?.get('muted') })
-    } }, 'm')
+    } }, 'M')
     mute.disabled = readOnly
     const solo = h('button', { className: 'solo', title: 'solo', onclick: () => {
       updateTrack(doc, t.id, { soloed: !tracksMap(doc).get(t.id)?.get('soloed') })
-    } }, 's')
+    } }, 'S')
     solo.disabled = readOnly
-    const record = t.kind === 'audio' ? h('button', { className: 'record', title: 'arm for recording', onclick: () => void arm(t.id) }, 'r') : null
+    const record = t.kind === 'audio' ? h('button', { className: 'record', title: 'arm for recording', onclick: () => void arm(t.id) }, 'R') : null
     if (record) record.disabled = readOnly
     const listen = record ? h('button', { className: 'listen', hidden: true, title: 'monitor the input through this track\'s effects (use headphones)', onclick: () => {
       monitoring = !monitoring
       draw()
-    } }, 'i') : null
+    } }, 'I') : null
     const meter = record ? h('i', { className: 'meter', hidden: true, title: 'input level' }) : null
     const gain = h('input', { type: 'range', min: 0, max: 1, step: 'any', title: 'gain', disabled: readOnly })
     ticks(gain, [UNITY_POS]) // 0 dB; the top of the range is +6 dB
