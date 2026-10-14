@@ -29,7 +29,7 @@ export function aboutColumn(): { el: HTMLElement; toggle(): void } {
       h('li', {}, h('strong', {}, 'yours. '), 'free and open source. export to audio, or take your whole project as a file.')),
 
     h('h3', {}, 'how it feels'),
-    h('p', {}, 'the interface puts things where they belong: a track\'s effects live on the track, global effects sit at the top of the mix, and everything you can do to a clip is under your cursor on the clip. no hunting through menus, no modes to remember.'))
+    h('p', {}, 'the interface puts things where they belong: a track\'s effects live on the track, master effects sit at the top of the mix, and everything you can do to a clip is under your cursor on the clip. no hunting through menus, no modes to remember.'))
   el.hidden = localStorage.getItem(KEY) !== 'open'
   return {
     el,

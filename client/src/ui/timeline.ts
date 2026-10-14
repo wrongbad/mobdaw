@@ -288,7 +288,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
   overlay.append(playhead, snapLine)
   const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio files here, or use + track.')
-  const masterAuto = makeAutoSection(MASTER_TRACK, 'global automation')
+  const masterAuto = makeAutoSection(MASTER_TRACK, 'master automation')
   const master = h('div', { className: 'lane master' }) // like a track's lane: the fx row, then its automation, as one block (filled below)
   const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, readOnly ? null : addLink, bgPicker, overlay)
   const scroll = h('div', { className: 'scroll' }, content)
@@ -301,14 +301,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
   // The global fx lane: the master bus chain. It closes the track list, directly above the global automation (one unit, after every track).
   const masterCards = new Map<string, ReturnType<typeof deviceCard>>()
-  const masterMore = h('div', { className: 'fx-toggle' }, 'global fx')
+  const masterMore = h('div', { className: 'fx-toggle' }, 'master fx')
   const masterFx = h('div', { className: 'fx', hidden: true })
   const masterAdd = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
     popover(masterAdd, EFFECTS.map((d) => [d.name, () => addDevice(doc, MASTER_TRACK, d.type)] as [string, () => void])) }, '+')
   masterFx.append(masterAdd)
   const masterTabs = makeTabs(MASTER_TRACK, TABS.master)
   const masterFxRow = h('div', { className: 'fx-row', hidden: true }, masterMore, masterFx)
-  master.append(h('div', { className: 'lane-row master-row' }, h('div', { className: 'head' }, h('div', { className: 'head-top' }, h('span', { className: 'name' }, 'global')), masterTabs.el)), masterFxRow, masterAuto.el)
+  master.append(h('div', { className: 'lane-row master-row' }, h('div', { className: 'head' }, h('div', { className: 'head-top' }, h('span', { className: 'name' }, 'master')), masterTabs.el)), masterFxRow, masterAuto.el)
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
 
   const x = (smp: number) => (smp / rate) * pps
@@ -1023,7 +1023,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     masterFxRow.hidden = !open
     masterFx.hidden = !open
     masterMore.classList.toggle('on', open)
-    masterMore.textContent = n ? `global fx (${n})` : 'global fx'
+    masterMore.textContent = n ? `master fx (${n})` : 'master fx'
     syncTabs(MASTER_TRACK, masterTabs.btns)
     if (!open) return
     const ids = new Set(mine.map((d) => d.id))
