@@ -1,6 +1,16 @@
 # Bore: a unified waveguide wind/string synth
 
-Status: planned. This doc is the plan of record across sessions; update it as phases land.
+Status: **draft playable; calibration rough.** Phases 1-4 have landed: DSP core (`bore.rs`), calibration (`bore_cal.rs`, linear fits, 5 character anchors), engine device kind 10 (`boresynth.rs`), and ten presets (winds / strings groups). Calibration quality: about 70% of (anchor, bore, position, note, breath 0/.5/1) test points speak with the first linear fit (`bore_calibrate verify`, docs/bore/runs/2026-10-14-draft/verify.txt); the drive band edges and loudness are only roughly modelled, so levels vary between notes and the extremes of `breath` can fall silent or squeal. Next: refine the calibration (see "Calibration log").
+This doc is the plan of record across sessions; update it as phases land.
+
+### Deviations from the plan
+- `bore` is a two-way selector (closed / open), not a continuous 0..1; the calibration is per bore.
+- Eight voices per device.
+- Position and bore are read at note start; the other knobs glide.
+- The fit is per character anchor (reed, reed/jet, jet, jet/bow, bow) with linear interpolation in `character`, features `note, fold, open, stiffness, damping, ln loss(decay)`.
+
+### Calibration log
+- 2026-10-14-draft: first sweep with the current tool (1000 cells, 920 live) and linear fit emitted into `bore_cal.rs`. Run files: docs/bore/runs/2026-10-14-draft/. The earlier runs in docs/bore/runs/2026-10-14-first used an older CSV format.
 
 Sources: wade `wip/simple_bow.h` and `wip/simple_flute.h` (our own code, free to reuse), and STK `Saxofony.cpp` (MIT-style). The implementation is new Rust in `engine/crates/dsp`, using these as reference.
 
