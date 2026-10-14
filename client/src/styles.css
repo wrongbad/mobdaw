@@ -135,7 +135,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 
 /* lanes: header, clip row, FX chain */
 .lane { --lane: var(--panel); background: var(--lane); position: relative; margin: var(--gutter) 0 0 var(--gutter); border-radius: var(--r-md); overflow: clip; } /* clip, not hidden: the sticky headers must still stick to the scroller */
-.lane-row { display: flex; height: 84px; }
+.lane-row { display: flex; height: 72px; }
 .lane.editing .lane-row { height: 320px; }
 /* the drum grid: header, a row per drum, the "add drum" button */
 .lane.editing.drums .lane-row { height: calc(20px + var(--dg-rows, 0) * 18px + 32px + 2px); }
@@ -166,11 +166,12 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
    written by the timeline's meter loop), the handle on top */
 input[type=range].gain {
   --f: linear-gradient(color-mix(in srgb, var(--tc, var(--accent)) 80%, var(--raise)), color-mix(in srgb, var(--tc, var(--accent)) 80%, var(--raise)));
-  height: 18px; border-radius: var(--r-sm);
-  background: var(--ticks, linear-gradient(transparent, transparent)), var(--f) 0 3px / calc(var(--l, 0) * 100%) 5px no-repeat,
-    var(--f) 0 10px / calc(var(--r, 0) * 100%) 5px no-repeat, var(--raise);
+  height: 20px; /* the hit area; the trough is thinner than the handle, which overhangs it */
+  background: var(--ticks, linear-gradient(transparent, transparent)), var(--f) 0 6px / calc(var(--l, 0) * 100%) 3px no-repeat,
+    var(--f) 0 11px / calc(var(--r, 0) * 100%) 3px no-repeat, linear-gradient(var(--raise), var(--raise)) 0 5px / 100% 10px no-repeat;
 }
-input[type=range].gain::-webkit-slider-thumb { height: 18px; margin-top: 0; width: 3px; border-radius: 1px; box-shadow: 0 0 0 1px var(--raise); }
+input[type=range].gain::-webkit-slider-runnable-track { height: 20px; }
+input[type=range].gain::-webkit-slider-thumb { height: 18px; margin-top: 1px; width: 3px; border-radius: 1px; box-shadow: 0 0 0 1px var(--raise); }
 input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radius: 1px; box-shadow: 0 0 0 1px var(--raise); }
 /* pan knob, beside the gain slider */
 .gain-row { gap: 6px; height: 20px; }
@@ -183,12 +184,12 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .knob.disabled { opacity: .5; cursor: default; }
 /* drawer tabs: the bottom edge of the header column (never the clip area). Shut ones are recessed, open ones lit and in the track colour */
 .tabs { display: flex; margin: auto -8px 0 -9px; height: 16px; }
-.tab { flex: 1; min-width: 0; padding: 0; border: 0; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-radius: 0; background: color-mix(in srgb, var(--bg) 60%, var(--lane)); color: var(--faint); font-size: 10px; line-height: 15px; }
-.tab:last-child { border-right: 0; }
+.tab { flex: 1; min-width: 0; padding: 0; border: 0; border-radius: 0; background: none; color: var(--faint); font-size: 10px; line-height: 16px; }
 .tab:hover { color: var(--dim); }
-.tab.on { background: var(--lane); color: var(--fg); box-shadow: inset 0 2px 0 var(--tc, var(--accent)); border-top-color: transparent; }
+.tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.tab.on { color: var(--tc, var(--accent)); box-shadow: inset 0 -1px 0 var(--tc, var(--accent)); }
 .tab[hidden] { display: none; }
-.lane.master .lane-row { height: 52px; }
+.lane.master .lane-row { height: 48px; }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {
@@ -390,7 +391,7 @@ button.danger:hover { color: var(--danger); }
 .rec.on::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent); }
 .clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); pointer-events: none; z-index: 1; }
 /* M S R I: small square toggles, lit in their own colour; the strip after them is the armed track's input meter */
-.ctl.track-btns { background: none; gap: 2px; }
+.ctl.track-btns { background: none; gap: 2px; flex: none; }
 .ctl.track-btns button { flex: none; width: 16px; height: 16px; padding: 0; font-size: 10px; font-weight: 600; line-height: 1; border-radius: var(--r-sm); background: var(--raise); }
 .ctl.track-btns button:hover:not(:disabled) { color: var(--fg); }
 .ctl.track-btns button.mute.on { color: var(--on-accent); background: var(--accent); }
@@ -398,7 +399,7 @@ button.danger:hover { color: var(--danger); }
 .ctl.track-btns button.record:hover:not(:disabled) { color: var(--rec); }
 .ctl.track-btns button.record.on { color: var(--on-rec); background: var(--rec); }
 .ctl.track-btns button.listen.on { color: var(--bg); background: var(--ok); }
-.ctl.track-btns .meter { height: 16px; border-radius: var(--r-sm); }
+.ctl.track-btns .meter { flex: none; width: 22px; height: 16px; border-radius: var(--r-sm); }
 .ctl button.listen[hidden] { display: none; }
 .ctl .meter { background: var(--line); flex: 1; align-self: stretch; position: relative; overflow: hidden; }
 .ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: var(--ok); transition: width 60ms linear; }

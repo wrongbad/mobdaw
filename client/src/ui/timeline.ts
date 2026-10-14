@@ -49,7 +49,7 @@ const HEADER = 146 // the track header (140) plus the gutter to its left; keep i
 const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
 const REARM_PX = 24 // ...and, once pulled free, only snaps to it again after moving this far away
 const MIN_SEC = 0.05
-const LANE_H = 84
+const LANE_H = 72
 const NO_DRAGS = new Map<number, number>()
 
 const accepts = (trackKind: string, clipKind: string) => trackKind === clipKind
@@ -884,7 +884,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const tabs = makeTabs(t.id, TABS[t.kind] ?? TABS.audio)
     const more = h('div', { className: 'fx-toggle' }, 'fx')
     const delTrack = () => !locks.has(t.id) && confirm('delete this track and its clips?') && deleteTrack(doc, t.id)
-    const head = h('div', { className: 'head' }, h('div', { className: 'head-top' }, kind, name), h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter), h('div', { className: 'ctl gain-row' }, gain, pan.el), tabs.el)
+    const head = h('div', { className: 'head' }, h('div', { className: 'head-top' }, kind, name, h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter)), h('div', { className: 'ctl gain-row' }, gain, pan.el), tabs.el)
     // Click or right-click on the header (not on its controls) offers the track's menu.
     let menuClosed = false // this press just closed the menu: don't open it again
     head.addEventListener('pointerdown', (e) => (menuClosed = closedBy(e)), true)
