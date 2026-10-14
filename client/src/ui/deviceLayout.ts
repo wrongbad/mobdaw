@@ -12,7 +12,7 @@ const ROWS: Record<number, [string, number[]][]> = {
   [LOFI_DRUM]: [['filter', [0, 1]], ['voice', [2, 3]]],
   [COMPRESSOR]: [['detector', [0, 1]], ['timing', [2, 3]], ['output', [4]]],
   [DELAY]: [['delay', [0, 1, 2]], ['filter', [5]], ['', [6, 7]], ['tape', [3, 4]]],
-  [REVERB]: [['reverb', [0, 1, 2, 3]]],
+  [REVERB]: [['reverb', [0, 1]], ['', [2, 3]]],
   [TREMOLO]: [['', [2]], ['tremolo', [0, 1, 3]]],
 }
 
@@ -33,10 +33,11 @@ function byPrefix(params: ParamDef[]): Section[] | null {
   return named.length >= 2 ? out.map((s) => (s.params.length === 1 && !s.title ? { ...s, title: '' } : s)) : null
 }
 
-/** Split a group into balanced rows of at most 4 knob widths. */
+/** Split a group into balanced rows of at most 3 knob widths (4 only for an ADSR-style envelope), so cards stay near square. */
 function chunk(title: string, params: ParamDef[]): Row[] {
   const units = params.reduce((n, p) => n + span(p), 0)
-  const rows = Math.ceil(units / 4)
+  const max = params.every((p) => ENV.includes(p.name)) ? 4 : 3
+  const rows = Math.ceil(units / max)
   const per = Math.ceil(units / rows)
   const out: Row[] = []
   let cur: ParamDef[] = [], w = 0

@@ -180,7 +180,11 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     slot,
     h('div', { className: 'krows' }, ...rows_(def ?? { type: dev.type, name: '', instrument: false, params: [] }).map((row) =>
       h('div', { className: 'krow' }, row.title ? h('div', { className: 'ktitle' }, row.title) : null,
-        h('div', { className: 'kcells' }, ...row.params.map((p) => rows.find((r) => r.p === p)!.cell))))),
+        h('div', { className: 'kcells' }, ...row.params.map((p) => {
+          const c = rows.find((r) => r.p === p)!.cell
+          c.classList.toggle('same', row.title === p.name) // the caption already says it
+          return c
+        }))))),
     range)
   if (slot) el.classList.add("filter")
   if (slot) el.style.width = `${CARD_W}px` // filters stay narrow: their run shares one curve view, a card wide per filter

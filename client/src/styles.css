@@ -517,3 +517,4 @@ button.danger:hover { color: var(--danger); }
 .dev.drum { box-shadow: inset 3px 0 0 var(--rc); }
 .dev.drum .dev-head strong { color: var(--rc); }
 .dev.drum .prm.keys input { color: var(--rc); }
+.dev .kn.same > .dim { display: none; }
