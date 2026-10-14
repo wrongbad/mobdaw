@@ -178,7 +178,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .gain-row { gap: 6px; height: 20px; }
 .knob { flex: none; display: flex; cursor: ns-resize; touch-action: none; user-select: none; -webkit-user-select: none; border-radius: 50%; outline-offset: 1px; }
 .knob-track { fill: none; stroke: var(--line-strong); stroke-width: 3.5; stroke-linecap: round; }
-.knob-fill { fill: none; stroke: var(--tc, var(--accent)); stroke-width: 3.5; stroke-linecap: round; }
+.knob-fill { fill: none; stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round; }
 .knob-cap { fill: var(--raise); stroke: var(--line-strong); }
 .knob-pointer { stroke: var(--fg); stroke-width: 3; stroke-linecap: round; }
 .knob:hover .knob-cap, .knob.active .knob-cap { stroke: var(--dim); }
@@ -301,9 +301,10 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .automatable:hover { color: var(--fg); text-decoration: underline dotted; }
 .dev .prm .auto { color: var(--accent); }
 /* device knobs: titled sections side by side, each a grid of knob + name cells */
-.dev .kgrps { display: flex; align-items: stretch; padding: 2px 4px 4px; }
+.dev .kgrps { display: grid; grid-auto-flow: column; grid-template-rows: repeat(var(--rows, 1), auto); align-items: start; padding: 2px 4px 4px; }
 .dev .kgrp { display: flex; flex-direction: column; padding: 0 6px; border-left: 1px solid var(--line); }
-.dev .kgrp:first-child { border-left: 0; }
+.dev .kgrp:nth-child(n) { border-left: 0; }
+.dev .kgrp { padding-bottom: 3px; }
 .dev .ktitle { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; line-height: 12px; padding-bottom: 1px; }
 .dev .kcells { display: grid; grid-template-columns: repeat(var(--cols, 4), 46px); gap: 2px 0; align-content: start; grid-auto-flow: row dense; }
 .dev .kn { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; }
@@ -311,9 +312,14 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .dev .kn > .dim { max-width: 46px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 12px; }
 .dev .kn .auto { color: var(--accent); }
 .dev .kn .driven { opacity: .7; }
-.dev .kn.sel { grid-column: span 2; justify-content: center; gap: 4px; }
+.dev .kn.sel { grid-column: span var(--span, 2); justify-content: center; gap: 2px; }
 .dev.filter .kn.sel { grid-column: 1 / -1; }
-.dev .kn.sel select { min-width: 0; width: 88px; max-width: 100%; padding: 1px 2px; font-size: 11px; }
+.dev .kn.sel select { min-width: 0; width: 88px; max-width: 100%; height: 20px; padding: 0 2px; font-size: 10px; }
+.dev .kn .seg { width: calc(100% - 6px); height: 18px; --tc: var(--accent); }
+.dev .kn .seg button { min-width: 0; padding: 0 2px; height: auto; border: 0; border-radius: 8px; background: none; color: var(--dim); font-size: 9px; line-height: 14px; position: relative; overflow: hidden; text-overflow: ellipsis; }
+.dev .kn .seg button.on { color: var(--on-accent); }
+.dev .kn .seg button:hover:not(:disabled) { background: none; color: var(--fg); }
+.dev .kn .seg.off { opacity: .5; pointer-events: none; }
 
 /* note editor (lives inside the open clip; x scale follows timeline zoom via --beat) */
 .ne { display: flex; flex-direction: column; height: 100%; }

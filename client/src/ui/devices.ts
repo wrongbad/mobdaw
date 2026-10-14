@@ -9,7 +9,8 @@ import { noteName, parseNote } from './noteName'
 import { inUse } from './held'
 import { dragToReorder } from './reorder'
 import { knob } from './knob'
-import { columns, sections } from './deviceLayout'
+import { segmented, type Seg } from './segmented'
+import { SEG_MAX, columns, sections, span } from './deviceLayout'
 import { formatParam, isBipolar } from './knobMath'
 
 export type CardDeps = {
@@ -42,7 +43,10 @@ export type CardDeps = {
   autoMenu(label: HTMLElement, target: ParamTarget, clickToo?: boolean): void
 }
 
-type Row = { p: ParamDef; input: HTMLSelectElement | null; knob: ReturnType<typeof knob> | null; cell: HTMLElement; label: HTMLElement }
+type Row = { p: ParamDef; input: HTMLSelectElement | null; seg: Seg | null; knob: ReturnType<typeof knob> | null; cell: HTMLElement; label: HTMLElement }
+
+/** Sections stack in two rows once a card has more than two (so it is closer to square than a long strip). */
+const rowsFor = (type: number, d?: { params: ParamDef[] }) => (type === SIMPLE_FILTER ? 1 : sections({ type, name: '', instrument: false, params: d?.params ?? [] }).length > 2 ? 2 : 1)
 
 export function deviceCard(dev: Device, deps: CardDeps) {
   const def = DEVICES[dev.type]
@@ -114,6 +118,16 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     // drop-downs can't be automated; a click on the name offers it, a right-click on the knob too
     const target: ParamTarget = { scope: dev.trackId, kind: def?.instrument ? 'synth' : 'effect', owner: id, param: String(p.id) }
     if (!p.options) deps.autoMenu(label, target)
+    if (p.options && p.options.length <= SEG_MAX) {
+      const seg = segmented(p.options.map((o, i) => ({ value: String(i), label: o })), String(p.def), (sv) => {
+        const v = Number(sv)
+        deps.live(id, p.id, v)
+        deps.commit(id, p.id, v)
+        shown.set(p.id, v)
+        showCurve()
+      }, p.name)
+      return { p, input: null, seg, knob: null, cell: h('div', { className: 'kn sel', 'data-param': p.id, style: `--span:${span(p)}` }, seg.el, label), label }
+    }
     if (p.options) {
       const input = h('select', { onchange: () => {
         const v = Number(input.value)
@@ -124,7 +138,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
       } }, ...p.options.map((o, i) => h('option', { value: String(i) }, o)))
       input.disabled = deps.readOnly
       input.title = p.name
-      return { p, input, knob: null, cell: h('label', { className: 'kn sel', 'data-param': p.id }, input, label), label }
+      return { p, input, seg: null, knob: null, cell: h('label', { className: 'kn sel', 'data-param': p.id, style: `--span:${span(p)}` }, input, label), label }
     }
     const k = knob({
       min: p.min, max: p.max, value: p.def, def: p.def, size: 30, disabled: deps.readOnly,
@@ -142,7 +156,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
       },
     })
     deps.autoMenu(k.el, target, false)
-    return { p, input: null, knob: k, cell: h('div', { className: 'kn', 'data-param': p.id }, k.el, label), label }
+    return { p, input: null, seg: null, knob: k, cell: h('div', { className: 'kn', 'data-param': p.id }, k.el, label), label }
   })
 
   // Instruments take the notes inside their range: two note-name fields, lo and hi (c2, f#3, or a pitch number).
@@ -167,11 +181,11 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   const el = h('div', { className: 'dev', 'data-device': id },
     head,
     slot,
-    h('div', { className: 'kgrps' }, ...((secs) => secs.map((sec) => {
+    h('div', { className: 'kgrps', style: `--rows:${rowsFor(dev.type, def)}` }, ...((secs) => secs.map((sec) => {
       const cells = sec.params.map((p) => rows.find((r) => r.p === p)!.cell)
-      const units = sec.params.reduce((n, p) => n + (p.options ? 2 : 1), 0) // a drop-down takes two knob widths
+      const units = sec.params.reduce((n, p) => n + span(p), 0)
       return h('div', { className: 'kgrp' }, sec.title && secs.length > 1 ? h('div', { className: 'ktitle' }, sec.title) : null,
-        h('div', { className: 'kcells', style: `--cols:${dev.type === SIMPLE_FILTER ? 3 : columns(units)}` }, ...cells))
+        h('div', { className: 'kcells', style: `--cols:${dev.type === SIMPLE_FILTER ? 3 : columns(units, Math.max(...sec.params.map(span)))}` }, ...cells))
     }))(sections(def ?? { type: dev.type, name: '', instrument: false, params: [] }))),
     range)
   if (slot) el.classList.add("filter")
@@ -195,20 +209,21 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     if (dc) el.style.setProperty('--rc', dc)
     else el.style.removeProperty('--rc')
     showKeys(d.keyLo ?? KEY_MIN, d.keyHi ?? KEY_MAX)
-    for (const { p, input, knob: k, label } of rows) {
+    for (const { p, input, seg, knob: k, label } of rows) {
       const a = auto.get(String(p.id))
       const driven = !!a?.on && a.value != null
       label.classList.toggle('auto', !!a)
       label.classList.toggle('driven', driven)
       const dis = deps.readOnly || driven
       if (input) input.disabled = dis
+      if (seg) { seg.el.classList.toggle('off', dis); seg.el.querySelectorAll('button').forEach((b) => (b.disabled = dis)) }
       k?.setDisabled(dis)
       const v = (driven ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def
       const mine = nodeDrag?.get(p.id) // the pointer is on this card's curve
       const free = driven || ((input ? !inUse(input) : true) && mine == null) // a driven knob follows the lane even while focused
       if (free) shown.set(p.id, v)
       if (p.id >= 1 && p.id <= 3) locks[(['cutoff', 'damping', 'gain'] as const)[p.id - 1]] = deps.readOnly || driven
-      if (free) input ? (input.value = String(Math.round(v))) : k!.set(v)
+      if (free) input ? (input.value = String(Math.round(v))) : seg ? seg.set(String(Math.round(v))) : k!.set(v)
     }
     // the gain row only matters to a bell or shelf
     const gainRow = rows.find((r) => r.p.id === 3 && dev.type === SIMPLE_FILTER)

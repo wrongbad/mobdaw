@@ -54,5 +54,9 @@ export function sections(def: DeviceDef): Section[] {
   return all.filter((s) => s.params.length)
 }
 
-/** Columns for a section of n cells: one row up to 4, otherwise two balanced rows (three at most per row past 8). */
-export const columns = (n: number) => (n <= 4 ? Math.max(1, n) : Math.ceil(n / (n > 8 ? 3 : 2)))
+/** How many knob widths a param's cell takes: a knob 1; a radio selector 2 (two options) or 3; a drop-down 2. */
+export const SEG_MAX = 4
+export const span = (p: ParamDef) => (!p.options ? 1 : p.options.length <= SEG_MAX ? (p.options.length <= 2 ? 2 : 3) : 2)
+
+/** Columns for a section of `units` knob widths: at most 4 per row, rows balanced (7 -> 4 + 3, 5 -> 3 + 2), never narrower than its widest cell. */
+export const columns = (units: number, widest = 1) => Math.max(widest, Math.ceil(units / Math.ceil(Math.max(1, units) / 4)))
