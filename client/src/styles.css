@@ -140,7 +140,9 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 /* the drum grid: header, a row per drum, the "add drum" button */
 .lane.editing.drums .lane-row { height: calc(20px + var(--dg-rows, 0) * 18px + 32px + 2px); }
 .head { background: var(--lane); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 0 12px; border-right: 1px solid var(--line); }
-.name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; padding-right: 14px; }
+.head-top { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.kind { flex: none; display: flex; color: var(--tc, var(--dim)); }
+.name { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; padding-right: 14px; }
 .rename { width: 100%; padding: 0 4px; }
 .ctl { display: flex; gap: 1px; align-items: center; background: var(--line); }
 .ctl button { border: 0; padding: 0 6px; font-size: 11px; line-height: 18px; color: var(--dim); }

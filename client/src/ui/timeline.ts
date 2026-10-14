@@ -40,6 +40,8 @@ import { fmt, transportControls, type TransportControls } from './transport'
 import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
 import { inUse } from './held'
 import { valueTip } from './valueTip'
+import { trackKind } from './trackKind'
+import { icon, setIcon } from '../theme/icons'
 
 const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in styles.css
 const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
@@ -57,7 +59,7 @@ type Card = ReturnType<typeof deviceCard>
 /** A scope's automation: one collapsible section holding a lane per automated param (absent when there are none). */
 type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
-  el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; mute: HTMLButtonElement; solo: HTMLButtonElement
+  el: HTMLElement; row: HTMLElement; body: HTMLElement; name: HTMLElement; kind: HTMLElement; mute: HTMLButtonElement; solo: HTMLButtonElement
   record: HTMLButtonElement | null; listen: HTMLButtonElement | null; meter: HTMLElement | null; gain: HTMLInputElement; more: HTMLButtonElement; fxRow: HTMLElement; fx: HTMLElement
   synthMore: HTMLButtonElement; synthRow: HTMLElement; synth: HTMLElement; cards: Map<string, Card>
   loopMore: HTMLButtonElement; loopRow: HTMLElement; loops: HTMLElement
@@ -797,6 +799,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function laneFor(t: Track): Lane {
     let l = lanes.get(t.id)
     if (l) return l
+    const kind = h('span', { className: 'kind' }, icon('wave', 14))
     const name = h('span', { className: 'name', ondblclick: () => readOnly || rename(t.id) })
     const mute = h('button', { className: 'mute', title: 'mute', onclick: () => {
       updateTrack(doc, t.id, { muted: !tracksMap(doc).get(t.id)?.get('muted') })
@@ -823,7 +826,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     } }, 'fx')
     const delTrack = () => !locks.has(t.id) && confirm('delete this track and its clips?') && deleteTrack(doc, t.id)
-    const head = h('div', { className: 'head' }, name, h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter), h('div', { className: 'ctl' }, gain))
+    const head = h('div', { className: 'head' }, h('div', { className: 'head-top' }, kind, name), h('div', { className: 'ctl track-btns' }, mute, solo, record, listen, meter), h('div', { className: 'ctl' }, gain))
     // Click or right-click on the header (not on its controls) offers the track's menu.
     let menuClosed = false // this press just closed the menu: don't open it again
     head.addEventListener('pointerdown', (e) => (menuClosed = closedBy(e)), true)
@@ -904,7 +907,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const auto = makeAutoSection(t.id)
     const presets = makePresetsDrawer(t.id)
     l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, name, mute, solo, record, listen, meter, gain, more,
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, name, kind, mute, solo, record, listen, meter, gain, more,
       fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
       pads: new Map(), auto, presets, loopTc, src,
     }
@@ -1373,6 +1376,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       l.el.classList.toggle('drums', t.id === editTrack && gridRows >= 0) // the lane fits the drum grid instead of the piano roll
       if (t.id === editTrack && gridRows >= 0) l.el.style.setProperty('--dg-rows', String(gridRows))
       if (l.name.textContent !== t.name) l.name.textContent = t.name
+      const k = trackKind(t, devices, clips)
+      if (l.kind.dataset.icon !== k.icon) {
+        l.kind.dataset.icon = k.icon
+        setIcon(l.kind.firstElementChild as SVGSVGElement, k.icon)
+      }
+      l.kind.title = k.label
       l.el.classList.toggle('locked', locks.has(t.id))
       l.record?.classList.toggle('on', armedTrack === t.id)
       if (l.meter) l.meter.hidden = armedTrack !== t.id
