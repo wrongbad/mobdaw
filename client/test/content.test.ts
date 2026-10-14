@@ -261,7 +261,8 @@ function bands(L: Float32Array, R: Float32Array, from: number, to: number) {
   }
 }
 
-describe('demo render', () => {
+// Slow (about 6 s): runs under SLOW=1 (npm test at the root, or npm run test:slow).
+describe.runIf(process.env.SLOW)('demo render', () => {
   it('renders a balanced, unclipped mix with no dropouts', async () => {
     const doc = new Y.Doc()
     buildDemo(doc)

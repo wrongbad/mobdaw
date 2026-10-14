@@ -15,3 +15,7 @@ lto = "fat"
 codegen-units = 1
 # No unwinding machinery in the wasm: a panic traps. The engine must never panic on the audio thread anyway.
 panic = "abort"
+
+# Tests render a lot of audio; unoptimised DSP makes them ~10x slower than the compile time this costs.
+[profile.test]
+opt-level = 2
