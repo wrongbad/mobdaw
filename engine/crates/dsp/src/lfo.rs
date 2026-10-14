@@ -87,4 +87,14 @@ mod tests {
             assert!((wave(u, 0) as f64 - exact).abs() < 1.1e-3, "at {u}");
         }
     }
+
+    #[test]
+    fn a_position_weeks_in_reads_the_same_wave_as_one_cycle_in() {
+        // 2 Hz at 48 kHz: 24000 samples a cycle. A quarter-cycle point is a peak at any cycle count.
+        for k in [0i64, 1, 1_000_000, 40_000_000_000 / 24_000, 400_000_000_000 / 24_000] {
+            let pos = k * 24_000 + 6000;
+            assert!((at_position(pos, 48000.0, 2.0, 0) - 1.0).abs() < 1e-5, "cycle {k}");
+            assert!((at_position(pos, 48000.0, 2.0, 1) - 1.0).abs() < 1e-5, "tri, cycle {k}");
+        }
+    }
 }

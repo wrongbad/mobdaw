@@ -207,3 +207,36 @@ impl Finnwave {
         self.phase = (self.phase + f * n_samples as f64).fract();
     }
 }
+
+#[cfg(test)]
+mod long_run {
+    use super::*;
+
+    /// The phase stays wrapped however long it runs, and tracks the exact (f64) phase.
+    #[test]
+    fn the_phase_stays_in_a_cycle_and_keeps_the_exact_frequency() {
+        let sr = 48_000.0f32;
+        let mut o = Finnwave::new(sr);
+        o.set_freq_hz(440.0);
+        o.set_rolloff(0.3);
+        o.set_amp(1.0);
+        o.snap_params();
+        o.phase = 0.3;
+        let f = o.freq;
+        let mut buf = vec![0.0f32; SUB_BLOCK];
+        let blocks = 20_000; // 53 s, a stand-in for a long session: the invariant is per step
+        for _ in 0..blocks {
+            buf.fill(0.0);
+            o.render_add(&mut buf);
+            assert!((0.0..1.0).contains(&o.phase));
+            assert!(buf.iter().all(|v| v.is_finite()));
+        }
+        let want = (0.3 + f * (SUB_BLOCK * blocks) as f64).fract();
+        let d = (o.phase - want).abs();
+        assert!(d.min(1.0 - d) < 1e-6, "phase {} vs {}", o.phase, want);
+        // an absurdly large seeded phase is folded back on the next block
+        o.phase = 4.0e9 + 0.25;
+        o.render_add(&mut buf);
+        assert!((0.0..1.0).contains(&o.phase));
+    }
+}

@@ -158,4 +158,23 @@ mod tests {
         let (l, r) = gains(&wild, 1000);
         assert!(l.iter().chain(&r).all(|g| g.is_finite() && (0.0..=1.0).contains(g)));
     }
+
+    #[test]
+    fn skipping_hours_of_silence_lands_where_running_through_them_would() {
+        let p = TremParams { rate_hz: 5.3, depth: 1.0, shape: 0, spread: 0.3 };
+        let mut a = Tremolo::new();
+        let mut b = Tremolo::new();
+        let (mut l, mut r) = (vec![1.0f32; 1000], vec![1.0f32; 1000]);
+        for _ in 0..600 {
+            a.process(&mut l, &mut r, &p, SR);
+            l.fill(1.0);
+            r.fill(1.0);
+        }
+        b.skip(600_000, &p, SR);
+        assert_eq!(a.phase, b.phase);
+        // and a phase near the u32 wrap is seamless: the gain is always in range, never NaN
+        a.phase = u32::MAX - 500;
+        a.process(&mut l, &mut r, &p, SR);
+        assert!(l.iter().chain(&r).all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+    }
 }

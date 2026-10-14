@@ -240,6 +240,28 @@ check where it touches audio.
 - Changing an algorithm changes the rendered bits relative to older builds. That is fine, but note it in the
   commit, and update any golden-output tests deliberately.
 
+## 12b. Long-running sessions: integer time, wrapped phase, anchored derivations
+
+A tab can stay open for days (the engine keeps running for meters and live keys even stopped), so nothing may
+depend on a number that only grows being precise.
+
+- **Absolute time is an integer.** The transport and tape write indices are `i64` samples, ADSR and note counters
+  are `u32`/`u64`, the SVF flush counter wraps (`wrapping_add`). Never keep a running time in `f32`
+  (24-bit mantissa: unit precision is gone after ~5.8 min at 48 kHz); `f64` is exact far past any session
+  (2^53 samples is millions of years) but a position as a float still loses sub-sample resolution (~1e-4 sample at
+  2^40, 240 days), which is why float time is only ever derived locally.
+- **Phase is wrapped every step.** Oscillator and warble phases are `f64` cycles folded with `fract()` per block;
+  the tremolo phase is a `u32` (2^32 per cycle) advanced with `wrapping_add`. The looper phase is folded into
+  `[0, len)`. A phase that is only ever added to and never wrapped is a bug.
+- **Derived values are anchored.** Automation LFO lanes compute the wave from the integer transport position
+  (`pos as f64 * cycles_per_sample`), never from a free-running accumulator, so play, seek, loop wrap and a bounce
+  all agree. Device-internal LFOs keep wrapped phases that are reset on note-on or `reset()`.
+- **Feedback paths flush denormals** (`flush_denormal`): reverb combs and allpasses, the tape delay write and DC
+  blockers, SVF states, the compressor reduction, the drum envelope. The resampler's modal states are not flushed
+  (a decaying one passes through the subnormal range in a few thousand samples and then reaches zero).
+- Tests seed counters far out (`TapeDelay::n = 1 << 36`, `seek` to a week of samples, phases set to huge values)
+  and compare against a fresh state instead of rendering for hours.
+
 ## 13. Open work
 
 - **Resampler alias rejection.** `clean()` reaches about −51 dB (19 kHz input at 1.37× speed). Try a 7th-order

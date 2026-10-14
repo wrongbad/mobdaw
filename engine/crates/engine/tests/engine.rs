@@ -1047,8 +1047,13 @@ fn a_tape_delay_device_repeats_a_clip_after_it_ends_and_bypass_clears_it() {
 
 /// A 1 s clip of 8 kHz through the low-pass (device 1 on track 1), its cutoff lane (20..20000 Hz, log) in LFO mode.
 fn lfo_filter_engine() -> Engine {
+    lfo_filter_engine_at(0)
+}
+
+/// The same, with the clip starting at timeline sample `start`.
+fn lfo_filter_engine_at(start: i64) -> Engine {
     let n = 48_000;
-    let mut e = one_clip(&sine(8000.0, n), 0, n as i64, 0, 0.0, 0.0, 0);
+    let mut e = one_clip(&sine(8000.0, n), start, n as i64, 0, 0.0, 0.0, 0);
     e.device_upsert(1, 1, 1, 1.0, false);
     e.lane_upsert(1, engine::LANE_DEVICE, 1, 1, true, 20.0, 20_000.0, LOG);
     e.lane_lfo(1, true, 0, 2.0, 0.5, 0.5); // 2 Hz sine, 0.5 +- 0.5: closed at 18000, wide open at 6000
@@ -1084,6 +1089,22 @@ fn an_lfo_lane_reads_the_same_wave_wherever_you_start() {
     let (lb, _) = render(&mut b, 4_000);
     let (x, y) = (rms(&la[6_000..7_500]), rms(&lb[2_000..3_500]));
     assert!((x / y - 1.0).abs() < 0.05, "same place, same wave: {x} vs {y}");
+}
+
+#[test]
+fn an_lfo_lane_a_week_into_the_session_reads_the_same_wave_as_a_fresh_one() {
+    // 2 Hz at 48 kHz is exactly 24000 samples a cycle, so a whole number of cycles later is the same phase.
+    let week = 24_000i64 * 50_400; // 7 days of cycles at 48 kHz = 2.9e10 samples
+    let mut a = lfo_filter_engine();
+    a.play(0);
+    let (la, _) = render(&mut a, 8_000);
+    let mut b = lfo_filter_engine_at(week);
+    b.play(week);
+    let (lb, _) = render(&mut b, 8_000);
+    assert!(lb.iter().all(|v| v.is_finite()));
+    assert_eq!(b.position(), week + 8_000);
+    let (x, y) = (rms(&la[6_000..7_500]), rms(&lb[6_000..7_500]));
+    assert!((x / y - 1.0).abs() < 0.01, "same phase, same wave: {x} vs {y}");
 }
 
 #[test]

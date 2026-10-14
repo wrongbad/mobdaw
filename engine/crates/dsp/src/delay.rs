@@ -419,4 +419,26 @@ mod tests {
         d.process(&mut l, &mut r, &p);
         assert!(l.iter().chain(&r).all(|&v| v == 0.0));
     }
+
+    /// A session left open for weeks: the tape index is far past anything a short test reaches.
+    /// The output must match a fresh delay's (the warble and the head are anchored the same way).
+    #[test]
+    fn a_tape_index_weeks_in_gives_the_same_signal_as_a_fresh_one() {
+        let x = sine(1000.0, 24_000, 0.5);
+        let p = DelayParams { time_ms: 100.0, feedback: 0.5, warble: 1.0, ..Default::default() };
+        let go = |start: i64| {
+            let mut d = TapeDelay::new(SR);
+            d.n = start;
+            let (mut l, mut r) = (x.clone(), x.clone());
+            for (a, b) in l.chunks_mut(64).zip(r.chunks_mut(64)) {
+                d.process(a, b, &p);
+            }
+            l
+        };
+        let fresh = go(0);
+        let late = go(1 << 36); // ~16 days at 48 kHz
+        assert!(late.iter().all(|v| v.is_finite()));
+        let worst = fresh.iter().zip(&late).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 2e-3, "diverged by {worst}");
+    }
 }

@@ -30,6 +30,10 @@ what we chose, why, and what we gave up.
   - Chosen at project creation from 44100, 48000, 88200 or 96000. The default is 48000.
   - **Immutable.** Changing it would mean rescaling every position, which isn't worth
     supporting.
+- **Running time is an integer; phase is wrapped (see dsp.md 12b).** The transport position is `i64`; the worklet
+  and bridge hold positions as JS numbers (f64) and extrapolate only from the last report (`pos + dt * rate`, with
+  `dt` since that report), so no float grows without bound. Nothing crosses the wasm boundary as `f32` except
+  audio and parameter values.
 - **Global positions** are integer samples:
   - clip start and length
   - audio source offset
