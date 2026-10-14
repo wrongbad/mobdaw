@@ -331,12 +331,10 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .ne-bar.ignored { opacity: .35; }
 .ne-c { position: absolute; left: 6px; font-size: 9px; color: var(--dim); pointer-events: none; transform: translateY(-1px); }
 .ne-tint { position: absolute; inset: 0; pointer-events: none; }
-.ne-keys { position: absolute; left: 0; top: 0; bottom: 0; width: 18px; z-index: 2; cursor: pointer; box-shadow: 1px 0 0 var(--line-strong); }
-.ne-key { position: relative; height: var(--row, 10px); box-sizing: border-box; border-bottom: 1px solid rgba(0, 0, 0, .35); color: #3a342c; line-height: calc(var(--row, 10px) - 1px); padding-left: 2px; overflow: hidden; user-select: none; }
-.ne-key.w { background: #e9e3d8; }
-.ne-key.b { background: #1a1612; }
-.ne-key.lit { background: var(--tc-1); color: #000; }
-.note { position: absolute; height: calc(var(--row, 10px) - 1px); border-radius: 2px; background: var(--tc-1); opacity: var(--vel, 1); cursor: grab; }
+.ne-keys { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; z-index: 1; pointer-events: none; }
+.ne-oct { position: absolute; left: 6px; font-size: 9px; color: rgba(235, 230, 220, .28); pointer-events: none; user-select: none; }
+.note { position: absolute; overflow: hidden; white-space: nowrap; box-sizing: border-box; height: calc(var(--row, 10px) - 1px); border-radius: 2px; background: var(--tc-1); opacity: var(--vel, 1); cursor: grab; }
+.note.named::after { content: attr(data-n); padding-left: 2px; font-size: 8px; line-height: calc(var(--row, 10px) - 1px); color: rgba(0, 0, 0, .65); pointer-events: none; }
 .note.sel { background: var(--accent); opacity: 1; }
 .note.ignored { opacity: .35; }
 .ne-loop { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid var(--line-strong); pointer-events: none; }
@@ -348,8 +346,9 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .dg-row { position: relative; height: 18px; cursor: crosshair; border-bottom: 1px solid var(--line); background-color: var(--bg);
   background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to right, var(--grid-beat) 1px, transparent 1px);
   background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, calc(var(--beat) / 4) 100%; }
-.dg-label { position: absolute; left: 4px; top: 3px; font-size: 9px; color: var(--dim); pointer-events: none; white-space: nowrap; }
-.dg-hit { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--tc-1); pointer-events: none; }
+.dg-edge { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--rc, var(--tc-1)); transform: translateX(var(--stick, 0px)); pointer-events: none; z-index: 1; }
+.dg-label { position: absolute; left: 7px; top: 3px; transform: translateX(var(--stick, 0px)); font-size: 9px; color: var(--rc, var(--dim)); opacity: .55; z-index: 1; pointer-events: none; white-space: nowrap; }
+.dg-hit { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--rc, var(--tc-1)); pointer-events: none; }
 .dg-rep { position: absolute; top: 0; bottom: 0; right: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid var(--line-strong); pointer-events: none; }
 .dg-add { display: block; position: sticky; left: 0; margin: 6px 4px; height: 20px; padding: 0 10px; font-size: 11px; color: var(--dim); background: none; border: 1px dashed var(--line); }
 .dg-add:hover { color: var(--fg); border-color: var(--dim); background: none; }

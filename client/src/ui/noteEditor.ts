@@ -1,4 +1,4 @@
-// Piano-roll panel for one MIDI clip, inline in the track view: pitch x tick at the clip's own bpm/ppq, a keyboard down the
+// Piano-roll panel for one MIDI clip, inline in the track view: pitch x tick at the clip's own bpm/ppq, a 3px key hint down the
 // left edge, bar/beat/sub-beat lines with snap, box select, group edits, a velocity lane and key shortcuts (the pure
 // edits are in noteOps.ts). A bar is 4 beats of the clip's ppq: there is no project tempo or meter.
 import { addNote, isLooping, patternTicks, setMidiView, updateClip, updateNote, type MidiClip, type Note } from '@mobdaw/shared'
@@ -16,7 +16,6 @@ import {
 
 const ROW_MIN = 6, ROW_MAX = 40
 const EDGE = 6
-const KEYW = 18 // the piano keyboard's width
 const VELH = 44 // the velocity lane's height
 const SLOP = 3 // px before a press becomes a drag
 const BLACK = [1, 3, 6, 8, 10]
@@ -26,7 +25,7 @@ export type NoteEditorDeps = {
   undo: Y.UndoManager
   readOnly: boolean
   selectNote(id: string | null): void
-  /** Gate a key on the clip's track's instruments (on) or let it go: the sound while a note is drawn or dragged, or a key is clicked. */
+  /** Gate a key on the clip's track's instruments (on) or let it go: the sound while a note is drawn or dragged. */
   noteLive?(trackId: string, pitch: number, velocity: number, on: boolean): void
 }
 
@@ -62,48 +61,30 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   // inputs must not start a clip drag / zoom-out click on the clip underneath
   head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button, select, .seg') && e.stopPropagation()
   const grid = h('div', { className: 'ne-grid' })
-  // the keyboard: a key per pitch, sticky at the left edge of what is visible; a click auditions the pitch
+  // the keyboard as a 3px edge: black and white keys, one octave of rows repeated down from the top row (PMAX is a C), with a faint
+  // octave label on each C row; both hug the left edge of what is visible
   const keys = h('div', { className: 'ne-keys' })
-  const keyEls = new Map<number, HTMLElement>()
-  for (let p = PMAX; p >= PMIN; p--) {
-    const k = h('div', { className: BLACK.includes(p % 12) ? 'ne-key b' : 'ne-key w' }, p % 12 === 0 ? noteName(p) : null)
-    keyEls.set(p, k)
-    keys.append(k)
-  }
-  const lit = new Map<number, number>() // pitch -> how many things hold it down
-  function light(pitch: number, on: boolean) {
-    const n = (lit.get(pitch) ?? 0) + (on ? 1 : -1)
-    if (n > 0) lit.set(pitch, n)
-    else lit.delete(pitch)
-    keyEls.get(pitch)?.classList.toggle('lit', n > 0)
-  }
-  /** Sound a pitch (and light its key) until released. */
+  const octs = new Map<number, HTMLElement>()
+  for (let p = PMAX; p >= PMIN; p--) if (p % 12 === 0) { const c = h('span', { className: 'ne-oct' }, noteName(p)); octs.set(p, c); keys.append(c) }
+  /** Sound a pitch until released. */
   function audition(pitch: number, velocity: number) {
     if (!clip) return () => {}
     const trackId = clip.trackId
     noteLive?.(trackId, pitch, velocity, true)
-    light(pitch, true)
-    return () => { noteLive?.(trackId, pitch, velocity, false); light(pitch, false) }
-  }
-  keys.onpointerdown = (e) => {
-    e.stopPropagation()
-    const k = (e.target as HTMLElement).closest<HTMLElement>('.ne-key')
-    if (!k || e.button !== 0 || !clip) return
-    e.preventDefault()
-    const stop = audition(PMAX - Math.floor((e.clientY - grid.getBoundingClientRect().top) / row), 0.8)
-    const up = () => { stop(); removeEventListener('pointerup', up); removeEventListener('pointercancel', up) }
-    addEventListener('pointerup', up)
-    addEventListener('pointercancel', up)
+    return () => noteLive?.(trackId, pitch, velocity, false)
   }
   const tint = h('div', { className: 'ne-tint' })
-  const stripe = (on: boolean) => (on ? 'rgba(255, 235, 230, .04)' : 'transparent')
+  const white = (i: number) => !BLACK.includes((12 - i) % 12)
+  const stripes = (on: string, off: string) =>
+    `linear-gradient(to bottom, ${Array.from({ length: 12 }, (_, i) => `${white(i) ? on : off} ${i * row}px, ${white(i) ? on : off} ${(i + 1) * row}px`).join(', ')})`
   function layoutRows() {
     grid.style.height = `${(PMAX - PMIN + 1) * row}px`
     grid.style.setProperty('--row', `${row}px`)
-    keys.style.setProperty('--row', `${row}px`)
+    for (const [p, c] of octs) { c.style.top = `${(PMAX - p) * row}px`; c.style.height = `${row}px`; c.style.lineHeight = `${row}px` }
     keys.style.fontSize = `${Math.min(9, Math.max(6, row - 3))}px`
-    const white = (i: number) => !BLACK.includes((12 - i) % 12)
-    tint.style.backgroundImage = `linear-gradient(to bottom, ${Array.from({ length: 12 }, (_, i) => `${stripe(white(i))} ${i * row}px, ${stripe(white(i))} ${(i + 1) * row}px`).join(', ')})`
+    keys.style.backgroundImage = stripes('#f4eeee', '#000')
+    keys.style.backgroundSize = `3px ${12 * row}px`
+    tint.style.backgroundImage = stripes('rgba(255, 235, 230, .04)', 'transparent')
     tint.style.backgroundSize = `100% ${12 * row}px`
   }
   layoutRows()
@@ -112,9 +93,17 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   function stickKeys() {
     const scroller = grid.closest<HTMLElement>('.scroll')
     if (!scroller) return
+    if (scroller !== watched) { watched?.removeEventListener('scroll', stickKeys); scroller.addEventListener('scroll', stickKeys, { passive: true }); watched = scroller }
     const hd = scroller.querySelector<HTMLElement>('.head')
     const visible = hd ? hd.getBoundingClientRect().right : scroller.getBoundingClientRect().left + 146
     keys.style.transform = `translateX(${Math.max(0, visible - grid.getBoundingClientRect().left)}px)`
+  }
+  let watched: HTMLElement | null = null
+  /** A note's name inside its block, when the block is big enough to hold it. */
+  function labelNote(e: HTMLElement, n: Note) {
+    const ok = row >= 10 && parseFloat(e.style.width) >= 24
+    e.dataset.n = ok ? noteName(n.pitch) : ''
+    e.classList.toggle('named', ok)
   }
   const loopEnd = h('div', { className: 'ne-loop', hidden: true }) // the pattern's end: the notes past it are ignored
   const grip = h('i', { className: 'ne-grip', title: readOnly ? '' : 'drag to change the loop length' }) // ...and its handle
@@ -131,7 +120,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     const at = (scroll.scrollTop + y) / row
     row = Math.min(ROW_MAX, Math.max(ROW_MIN, row * Math.exp(-e.deltaY * 0.01)))
     layoutRows()
-    for (const [id, n] of notes) els.get(id)!.style.top = `${(PMAX - n.pitch) * row}px`
+    for (const [id, n] of notes) { const e = els.get(id)!; e.style.top = `${(PMAX - n.pitch) * row}px`; labelNote(e, n) }
     scroll.scrollTop = at * row - y
   }, { passive: false })
   const vel = h('div', { className: 'ne-vel', title: 'velocity: drag a bar (with several notes selected the change is relative)' })
@@ -443,6 +432,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
       e.style.left = `${px(n.tick)}px`
       e.style.top = `${(PMAX - n.pitch) * row}px`
       e.style.width = `${Math.max(3, px(n.durTicks))}px`
+      labelNote(e, n)
       e.style.setProperty('--vel', String(0.45 + 0.55 * clampVelocity(n.velocity)))
       e.classList.toggle('ignored', looping && n.tick >= c.loopTicks!)
       const b = bars.get(n.id)!
@@ -463,7 +453,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { centre(); stickKeys() })
   ro?.observe(scroll)
   /** Call when the editor is closed so the next open re-centres. */
-  const reset = () => { centered = false; sel = new Set(); reported = null; lit.clear(); keyEls.forEach((k) => k.classList.remove('lit')) }
-  const destroy = () => { removeEventListener('keydown', key); ro?.disconnect() }
+  const reset = () => { centered = false; sel = new Set(); reported = null }
+  const destroy = () => { removeEventListener('keydown', key); ro?.disconnect(); watched?.removeEventListener('scroll', stickKeys) }
   return { el, update, reset, destroy }
 }

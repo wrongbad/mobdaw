@@ -4,6 +4,7 @@ import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, isDrum, isLooping, patt
 import type * as Y from 'yjs'
 import { h } from '../dom'
 import { noteName } from './noteName'
+import { FILTER_COLORS } from './filterCurve'
 import { clampVelocity, gmDrum, hitOpacity, nextVelocity } from './noteOps'
 
 const STEPS = 4 // steps per beat (a 1/16 note)
@@ -90,12 +91,14 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
 
     // a row per drum, in the synths lane's order (a wide-range instrument has none)
     const drums = instruments.filter(isDrum)
-    const rows = drums.map((d) => {
+    const rows = drums.map((d, i) => {
       const key = d.keyLo ?? KEY_MIN
       const row = h('div', { className: 'dg-row' })
       row.style.width = `${px(extent)}px`
       row.onpointerdown = (e) => toggle(e, row, key)
-      row.append(h('span', { className: 'dg-label' }, `${d.name ?? gmDrum(key) ?? DEVICES[d.type]?.name ?? 'drum'} · ${noteName(key)}`))
+      const color = FILTER_COLORS[i % FILTER_COLORS.length] // the same palette as the loopers and the EQ bands
+      row.style.setProperty('--rc', color)
+      row.append(h('i', { className: 'dg-edge' }), h('span', { className: 'dg-label' }, `${d.name ?? gmDrum(key) ?? DEVICES[d.type]?.name ?? 'drum'} · ${noteName(key)}`))
       const passes = looping ? Math.ceil(extent / pattern) : 1
       for (const n of notes) {
         if (n.pitch !== key || n.tick < 0 || n.tick >= pattern) continue
@@ -120,8 +123,19 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
     add.onpointerdown = (e) => e.stopPropagation()
     grid.replaceChildren(...rows, add)
     grid.style.width = `${px(extent)}px`
+    stick()
+  }
+  /** The row hints and names hug the left edge of what is visible: the clip scrolls under the timeline's sticky track header. */
+  let watched: HTMLElement | null = null
+  function stick() {
+    const scroller = grid.closest<HTMLElement>('.scroll')
+    if (!scroller) return
+    if (scroller !== watched) { watched?.removeEventListener('scroll', stick); scroller.addEventListener('scroll', stick, { passive: true }); watched = scroller }
+    const hd = scroller.querySelector<HTMLElement>('.head')
+    const visible = hd ? hd.getBoundingClientRect().right : scroller.getBoundingClientRect().left + 146
+    grid.style.setProperty('--stick', `${Math.max(0, visible - grid.getBoundingClientRect().left)}px`)
   }
   /** Call when the editor is closed. */
-  const reset = () => {}
+  const reset = () => { watched?.removeEventListener('scroll', stick); watched = null }
   return { el, update, reset }
 }
