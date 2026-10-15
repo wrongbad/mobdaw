@@ -92,7 +92,7 @@ export function autoRow(deps: RowDeps) {
   let lane!: Lane
   let pts: Point[] = []
   let view!: RowView
-  let sig = ''
+  let sig = '' // what the surface shows: the driving effect also re-runs for a label or a param value the drawing doesn't read, which must not rebuild the svg
 
   const name = h('span', { className: 'name' })
   const modes: [LaneState, string][] = [['off', 'disabled'], ['keyframes', 'keyframes'], ['lfo', 'lfo']]
