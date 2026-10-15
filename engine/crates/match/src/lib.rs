@@ -48,7 +48,7 @@ pub fn normalise(x: &mut [f32]) {
 }
 
 /// Bore parameters in calibrated knob space; indices match `PARAMS`.
-pub const PARAMS: [(&str, f32, f32); 12] = [
+pub const PARAMS: [(&str, f32, f32); 14] = [
     ("character", 0.0, 1.0),
     ("stiffness", 0.0, 1.0),
     ("aperture", 0.0, 1.0),
@@ -61,6 +61,8 @@ pub const PARAMS: [(&str, f32, f32); 12] = [
     ("attack_ms", 2.0, 600.0),
     ("release_ms", 20.0, 1500.0),
     ("pitch_vibrato", 0.0, 1.0),
+    ("vibrato_delay_ms", 0.0, 1500.0),
+    ("bell", 0.0, 1.0),
 ];
 
 /// `x` is normalised 0..1 per PARAMS (attack/release log-scaled); `open` is a discrete choice.
@@ -427,7 +429,7 @@ pub fn render_voice(c: &Chain, p: Probe) -> Option<Vec<f32>> {
     let mut b = BoreSynth::new(SR as f32);
     for (id, v) in [(P_CHARACTER, rp[0]), (P_STIFFNESS, rp[1]), (P_APERTURE, rp[2]), (P_POSITION, rp[3]), (P_BORE, c.open as u8 as f32),
         (P_DAMPING, rp[4]), (P_DECAY, rp[5]), (P_BREATH, rp[6]), (P_NOISE, rp[7]), (P_VIBRATO_DEPTH, rp[8]), (P_ATTACK_MS, rp[9]), (P_RELEASE_MS, rp[10]),
-        (P_VIBRATO_PITCH, rp[11]), (P_VIBRATO_RATE, c.vibrato_hz)] {
+        (P_VIBRATO_PITCH, rp[11]), (P_VIBRATO_DELAY_MS, rp[12]), (P_BELL, rp[13]), (P_VIBRATO_RATE, c.vibrato_hz)] {
         b.set_param_smooth(id, v, 0.0);
     }
     if !b.accepts(p.key) {
@@ -568,6 +570,9 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
 
 /// Violin body peaks (air mode, body modes, bridge hill); the cello's sit roughly 0.4x lower.
 pub const VIOLIN_BODY: [f32; 8] = [275.0, 400.0, 460.0, 540.0, 700.0, 1000.0, 2500.0, 3200.0];
+/// Winds: no instrument data behind these, just peaks spread over the range where bell / tone-hole radiation shapes the
+/// tone (the clarinet target peaks near 1.4 kHz); each searches ±40%.
+pub const WIND_BODY: [f32; 8] = [300.0, 500.0, 800.0, 1100.0, 1500.0, 2000.0, 2800.0, 4000.0];
 pub const PENALTY: f32 = 60.0;
 
 pub struct Prog { pub gm: i32, pub name: &'static str, pub keys: [u32; 3], pub strings: bool }
@@ -581,7 +586,7 @@ pub const PROGRAMS: [Prog; 5] = [
 
 pub fn setup(p: &Prog) -> Setup {
     if !p.strings {
-        return Setup { character: (0.0, 1.0), body: None };
+        return Setup { character: (0.0, 1.0), body: Some(WIND_BODY) };
     }
     let k = if p.name == "cello" { 0.4 } else { 1.0 };
     Setup { character: (0.75, 1.0), body: Some(VIOLIN_BODY.map(|f| f * k)) }
