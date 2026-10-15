@@ -57,7 +57,7 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
       return
     }
     // an existing hit: a click removes it, alt-click steps its velocity down (full, 3/4, 1/2, 1/4), a vertical drag sets it
-    const x0 = e.clientX, y0 = e.clientY
+    const y0 = e.clientY
     const v0 = here.map((n) => n.velocity)
     let dragged = false
     const move = (m: PointerEvent) => {

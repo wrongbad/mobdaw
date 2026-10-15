@@ -917,7 +917,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const offPeaks = onPeaks(() => setPeakVer((n) => n + 1))
   const onStatus = ({ status: st }: { status: string }) => (bar.dataset.status = st)
   s.provider?.on('status', onStatus)
-  s.provider?.on('authenticationFailed', () => say('no access'))
+  const onDenied = () => say('no access')
+  s.provider?.on('authenticationFailed', onDenied)
   // After the first sync: migrate old projects (editors only: a viewer's writes never reach the server),
   // then start the engine at the project's sample rate.
   void s.synced.then(() => {
@@ -961,6 +962,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       rec.destroy()
       metaMap(doc).unobserve(rateChanged)
       offPeaks()
+      s.provider?.off('status', onStatus)
+      s.provider?.off('authenticationFailed', onDenied)
       chat.destroy()
       pb?.destroy()
       disposers.forEach((d) => d())
