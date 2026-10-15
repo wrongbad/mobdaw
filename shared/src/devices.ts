@@ -128,6 +128,7 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 11, name: 'attack', min: 0, max: 2000, def: 30, scale: 'pow', unit: 'ms' },
       { id: 12, name: 'release', min: 1, max: 5000, def: 120, scale: 'pow', unit: 'ms' },
       { id: 13, name: 'gain', min: 0, max: 2, def: 1, scale: 'lin' },
+      { id: 14, name: 'vibrato pitch', min: 0, max: 1, def: 0, scale: 'lin' }, // pitch wobble (strings, voice), 60 cents peak at 1; 'vibrato depth' is breath
     ],
   },
   [FINNWAVE]: {

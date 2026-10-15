@@ -244,7 +244,7 @@ impl Device {
     fn is_smoothed(&self, param: u32) -> bool {
         match &self.kind {
             DeviceKind::Filter(_) => matches!(param, 1..=3),
-            DeviceKind::Bore(_) => matches!(param, 0 | 1 | 2 | 5 | 6 | 7 | 8 | 10 | 13),
+            DeviceKind::Bore(_) => matches!(param, 0 | 1 | 2 | 5 | 6 | 7 | 8 | 10 | 13 | 14),
             DeviceKind::Synth(_) => matches!(param, dsp::synth::P_ROLLOFF | dsp::synth::P_ENV_TO_ROLLOFF | dsp::synth::P_SUSTAIN | dsp::synth::P_GAIN),
             DeviceKind::Reverb(_) => matches!(param, 0..=2),
             DeviceKind::Compressor(_) => matches!(param, 0 | 1 | 4),

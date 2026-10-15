@@ -171,11 +171,13 @@ pub struct Knobs {
     pub breath: f32,
     pub noise: f32,
     pub vibrato_depth: f32,
+    /// Pitch vibrato (0..1), see [`crate::bore::Raw::pitch_vibrato`]. Not part of the calibration.
+    pub pitch_vibrato: f32,
 }
 
 impl Default for Knobs {
     fn default() -> Self {
-        Self { character: 0.0, stiffness: 0.5, aperture: 0.5, position: 0.3, open: true, damping: 0.3, decay: 0.7, breath: 0.5, noise: 0.0, vibrato_depth: 0.0 }
+        Self { character: 0.0, stiffness: 0.5, aperture: 0.5, position: 0.3, open: true, damping: 0.3, decay: 0.7, breath: 0.5, noise: 0.0, vibrato_depth: 0.0, pitch_vibrato: 0.0 }
     }
 }
 
@@ -205,6 +207,7 @@ pub fn resolve(note: f32, k: &Knobs) -> Resolved {
             reflection: reflection(k.decay),
             noise: k.noise,
             vibrato_depth: k.vibrato_depth,
+            pitch_vibrato: k.pitch_vibrato,
         },
         gain,
         tune_cents: cal.tune_cents,

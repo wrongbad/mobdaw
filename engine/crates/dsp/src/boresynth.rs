@@ -27,6 +27,7 @@ pub const P_VIBRATO_DEPTH: u32 = 10;
 pub const P_ATTACK_MS: u32 = 11;
 pub const P_RELEASE_MS: u32 = 12;
 pub const P_GAIN: u32 = 13;
+pub const P_VIBRATO_PITCH: u32 = 14;
 
 #[derive(Clone, Copy)]
 struct Pending {
@@ -71,6 +72,7 @@ pub struct BoreSynth {
     breath: Ramp,
     noise: Ramp,
     vibrato_depth: Ramp,
+    pitch_vibrato: Ramp,
     gain: Ramp,
     position: f32,
     open: bool,
@@ -104,6 +106,7 @@ impl BoreSynth {
             breath: Ramp::new(d.breath as f64),
             noise: Ramp::new(d.noise as f64),
             vibrato_depth: Ramp::new(d.vibrato_depth as f64),
+            pitch_vibrato: Ramp::new(d.pitch_vibrato as f64),
             gain: Ramp::new(1.0),
             position: d.position,
             open: d.open,
@@ -135,6 +138,7 @@ impl BoreSynth {
             P_NOISE => self.noise.set_target(unit(value), s),
             P_VIBRATO_RATE => self.vibrato_hz = value.clamp(0.0, 20.0),
             P_VIBRATO_DEPTH => self.vibrato_depth.set_target(unit(value), s),
+            P_VIBRATO_PITCH => self.pitch_vibrato.set_target(unit(value), s),
             P_ATTACK_MS => self.attack_ms = value.clamp(0.0, 5000.0),
             P_RELEASE_MS => self.release_ms = value.clamp(1.0, 10000.0),
             P_GAIN => self.gain.set_target(value.clamp(0.0, 2.0) as f64, s),
@@ -155,6 +159,7 @@ impl BoreSynth {
             breath: self.breath.value() as f32,
             noise: self.noise.value() as f32,
             vibrato_depth: self.vibrato_depth.value() as f32,
+            pitch_vibrato: self.pitch_vibrato.value() as f32,
         }
     }
 
@@ -311,6 +316,7 @@ impl BoreSynth {
             || self.breath.is_moving()
             || self.noise.is_moving()
             || self.vibrato_depth.is_moving()
+            || self.pitch_vibrato.is_moving()
             || self.gain.is_moving()
     }
 
@@ -324,7 +330,7 @@ impl BoreSynth {
         let len = out.len();
         let mut knobs = self.knobs();
         let g0 = self.gain.value() as f32;
-        for r in [&mut self.character, &mut self.stiffness, &mut self.aperture, &mut self.damping, &mut self.decay, &mut self.breath, &mut self.noise, &mut self.vibrato_depth] {
+        for r in [&mut self.character, &mut self.stiffness, &mut self.aperture, &mut self.damping, &mut self.decay, &mut self.breath, &mut self.noise, &mut self.vibrato_depth, &mut self.pitch_vibrato] {
             r.advance(len);
         }
         let g1 = self.gain.advance(len) as f32;

@@ -41,6 +41,11 @@
 //! `drive = D · gate · (1 + burst) · (1 + noise·white + vibrato·sin)`. The gate slews linearly
 //! (attack up, release down); `burst` is wade's `velbias`, a velocity-sized extra push that
 //! decays into the sustained level. White noise is a xorshift, seeded per note.
+//!
+//! # Pitch vibrato
+//! The same LFO can also retune the loop (`pitch_vibrato` cents peak): both legs are rescaled once
+//! per sub-block, the junction staying at the same fraction. This is a string player's (or a
+//! singer's) vibrato; the drive vibrato above is a wind player's breath vibrato.
 
 use crate::util::flush_denormal;
 
@@ -59,6 +64,8 @@ const BURST_GAIN: f32 = 0.25;
 /// Scales for the noise and vibrato drive modulation at knob 1.
 const NOISE_SCALE: f32 = 0.5;
 const VIBRATO_SCALE: f32 = 0.25;
+/// Pitch vibrato peak deviation at knob 1, in cents.
+pub const PITCH_VIBRATO_CENTS: f32 = 60.0;
 const DC_POLE: f32 = 0.995;
 
 /// The longest leg the delay lines can hold.
@@ -84,11 +91,13 @@ pub struct Raw {
     pub noise: f32,
     /// 0..1.
     pub vibrato_depth: f32,
+    /// 0..1: pitch vibrato, [`PITCH_VIBRATO_CENTS`] peak at 1.
+    pub pitch_vibrato: f32,
 }
 
 impl Default for Raw {
     fn default() -> Self {
-        Self { character: 0.0, stiffness: 0.5, aperture: 0.7, drive: 1.0, damping: 0.3, reflection: 0.95, noise: 0.0, vibrato_depth: 0.0 }
+        Self { character: 0.0, stiffness: 0.5, aperture: 0.7, drive: 1.0, damping: 0.3, reflection: 0.95, noise: 0.0, vibrato_depth: 0.0, pitch_vibrato: 0.0 }
     }
 }
 
@@ -229,6 +238,11 @@ pub struct Bore {
     dc_y1: f32,
     silent_blocks: u32,
     right_sign_open: bool,
+    /// The note's leg lengths (samples), before pitch vibrato.
+    len_l: f64,
+    len_r: f64,
+    /// Whether the legs currently differ from `len_l`/`len_r` (so they are reset when vibrato stops).
+    detuned: bool,
 }
 
 /// Everything that fixes a note's loop: frequency, bore, junction position.
@@ -273,6 +287,9 @@ impl Bore {
             dc_y1: 0.0,
             silent_blocks: 0,
             right_sign_open: true,
+            len_l: MIN_LEG,
+            len_r: MIN_LEG,
+            detuned: false,
         }
     }
 
@@ -299,8 +316,11 @@ impl Bore {
         // Keep each leg at least MIN_LEG long by moving the junction, never by detuning.
         let min_p = (MIN_LEG / rt).min(0.5);
         let p = (n.position as f64).clamp(min_p, 1.0 - min_p);
-        self.left.set_len(rt * p);
-        self.right.set_len(rt * (1.0 - p));
+        self.len_l = rt * p;
+        self.len_r = rt * (1.0 - p);
+        self.left.set_len(self.len_l);
+        self.right.set_len(self.len_r);
+        self.detuned = false;
         let ms = self.sample_rate * 1e-3;
         self.attack_step = (1.0 / (n.attack_ms as f64 * ms).max(1.0)) as f32;
         self.release_step = (1.0 / (n.release_ms as f64 * ms).max(1.0)) as f32;
@@ -379,6 +399,14 @@ impl Bore {
         let noise = NOISE_SCALE * raw.noise.clamp(0.0, 1.0);
         let vib = VIBRATO_SCALE * raw.vibrato_depth.clamp(0.0, 1.0);
         let mut lfo = lfo_prev;
+        // Pitch vibrato: retune the loop at the sub-block's LFO value (positive LFO is sharp, a shorter loop).
+        let pv = raw.pitch_vibrato.clamp(0.0, 1.0);
+        if pv > 0.0 || self.detuned {
+            let k = (-(PITCH_VIBRATO_CENTS * pv * lfo_now) as f64 / 1200.0).exp2();
+            self.left.set_len(self.len_l * k);
+            self.right.set_len(self.len_r * k);
+            self.detuned = pv > 0.0;
+        }
 
         let mut peak = 0.0f32;
         for i in 0..len {
@@ -439,6 +467,34 @@ mod tests {
     fn tail_rms(x: &[f32]) -> f32 {
         let t = &x[x.len() / 2..];
         (t.iter().map(|v| v * v).sum::<f32>() / t.len() as f32).sqrt()
+    }
+
+    /// Per-frame period (samples) of the second half of a render: the autocorrelation peak within
+    /// ±10% of `expect`, parabolically interpolated.
+    fn periods(x: &[f32], expect: f32) -> Vec<f32> {
+        let t = &x[x.len() / 2..];
+        let (n, lo, hi) = (2048, (expect * 0.9) as usize, (expect * 1.1) as usize + 1);
+        let ac = |f: &[f32], l: usize| f[..n - l].iter().zip(&f[l..n]).map(|(a, b)| a * b).sum::<f32>();
+        (0..).map(|k| k * 512).take_while(|s| s + n <= t.len()).map(|s| {
+            let f = &t[s..s + n];
+            let l = (lo..=hi).max_by(|&a, &b| ac(f, a).total_cmp(&ac(f, b))).unwrap();
+            let (a, b, c) = (ac(f, l - 1), ac(f, l), ac(f, l + 1));
+            l as f32 + 0.5 * (a - c) / (a - 2.0 * b + c)
+        }).collect()
+    }
+
+    #[test]
+    fn pitch_vibrato_wobbles_the_period() {
+        let setup = NoteSetup { freq_hz: 220.0, vibrato_hz: 6.0, ..NoteSetup::default() };
+        let raw = Raw { character: 1.0, aperture: 0.6, drive: 0.5, ..Raw::default() };
+        let spread = |pv: f32| {
+            let p = periods(&render(&Raw { pitch_vibrato: pv, ..raw }, &setup, 1.0), SR / 220.0);
+            let m = p.iter().sum::<f32>() / p.len() as f32;
+            (p.iter().map(|v| (v - m).powi(2)).sum::<f32>() / p.len() as f32).sqrt() / m
+        };
+        let (still, wobbly) = (spread(0.0), spread(1.0));
+        // 60 cents peak is about 3.5% period swing; the still note's period hardly varies.
+        assert!(wobbly > 0.01 && wobbly > 4.0 * still, "still {still}, wobbly {wobbly}");
     }
 
     #[test]
