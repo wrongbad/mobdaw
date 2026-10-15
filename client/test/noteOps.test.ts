@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addMidiClip, addNote, getNotes, undoScope } from '@mobdaw/shared'
+import { addMidiClip, addNote, getNotes, undoScope, updateNote } from '@mobdaw/shared'
 import {
-  applyPatches, centrePitch, clampVelocity, gmDrum, gridTicks, hitOpacity, inMarquee, moveGroup, nextVelocity, nudgeVelocity, quantize,
+  applyPatches, cancelNoteDrag, centrePitch, clampVelocity, gmDrum, gridTicks, hitOpacity, inMarquee, moveGroup, nextVelocity, nudgeVelocity, quantize,
   resizeGroup, shift, snapStep, snapTick, subPx, transpose, velocityAt,
 } from '../src/ui/noteOps'
 
@@ -105,5 +105,61 @@ describe('a group edit is one undo step', () => {
     expect(getNotes(doc).map((x) => x.tick).sort((a, b) => a - b)).toEqual([0, 240, 480])
     undo.undo()
     expect(getNotes(doc).map((x) => x.tick).sort((a, b) => a - b)).toEqual([10, 250, 490])
+  })
+})
+
+describe('cancelling a note drag', () => {
+  const rig = () => {
+    const doc = new Y.Doc()
+    const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
+    const clip = addMidiClip(doc, { trackId: 't', start: 0 })
+    undo.stopCapturing()
+    const a = addNote(doc, { clipId: clip, tick: 0, durTicks: 240, pitch: 60, velocity: 1 })
+    undo.stopCapturing()
+    return { doc, undo, clip, a }
+  }
+  const note = (doc: Y.Doc, id: string) => getNotes(doc).find((x) => x.id === id)
+  it('puts the notes back and leaves the earlier undo step alone', () => {
+    const { doc, undo, a } = rig()
+    const before = getNotes(doc).map((x) => ({ ...x }))
+    const depth = undo.undoStack.length // the add of `a`
+    undo.stopCapturing()
+    doc.transact(() => updateNote(doc, a, { tick: 480, pitch: 64 })) // the drag
+    expect(undo.undoStack.length).toBe(depth + 1)
+    cancelNoteDrag(doc, undo, before, [], depth)
+    expect(note(doc, a)).toMatchObject({ tick: 0, pitch: 60 })
+    expect(undo.undoStack.length).toBe(depth)
+    undo.undo() // the user's previous edit (adding the note) is still the one on top
+    expect(note(doc, a)).toBeUndefined()
+  })
+  it('does not undo the previous edit when the drag never wrote anything', () => {
+    const { doc, undo, a } = rig()
+    const before = getNotes(doc).map((x) => ({ ...x }))
+    const depth = undo.undoStack.length
+    cancelNoteDrag(doc, undo, before, [], depth)
+    expect(note(doc, a)).toBeDefined()
+    expect(undo.undoStack.length).toBe(depth)
+  })
+  it('deletes the copies a drag made and keeps the originals', () => {
+    const { doc, undo, clip, a } = rig()
+    const before = getNotes(doc).map((x) => ({ ...x }))
+    const depth = undo.undoStack.length
+    undo.stopCapturing()
+    let copy = ''
+    doc.transact(() => (copy = addNote(doc, { clipId: clip, tick: 480, durTicks: 240, pitch: 60, velocity: 1 })))
+    cancelNoteDrag(doc, undo, before, [copy], depth)
+    expect(getNotes(doc).map((x) => x.id)).toEqual([a])
+    expect(undo.undoStack.length).toBe(depth)
+  })
+  it('keeps a step the user added since', () => {
+    const { doc, undo, a } = rig()
+    const before = getNotes(doc).map((x) => ({ ...x }))
+    const depth = undo.undoStack.length
+    undo.stopCapturing()
+    doc.transact(() => updateNote(doc, a, { tick: 480 }))
+    undo.stopCapturing()
+    doc.transact(() => updateNote(doc, a, { velocity: 0.5 }))
+    cancelNoteDrag(doc, undo, before, [], depth)
+    expect(undo.undoStack.length).toBe(depth + 2) // not ours to drop
   })
 })

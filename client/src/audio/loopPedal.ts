@@ -4,7 +4,7 @@
 // is a step in the track's volume automation. Pure of the browser: positions come in as numbers and the recorder and engine are
 // behind `LoopIO`, so the whole thing is tested with a fake clock (client/test/loopPedal.test.ts).
 import {
-  addAudioClip, addLane, addPoint, addTrack, deleteClip, ensureMixDevice, evalPoints, getClips, getLanes, getMixDevice, getPoints, getTracks, MIX_GAIN, nextTrackColor, paramToPos, resolveTarget,
+  addAudioClip, clipsMap, addLane, addPoint, addTrack, deleteClip, ensureMixDevice, evalPoints, getClips, getLanes, getMixDevice, getPoints, getTracks, MIX_GAIN, nextTrackColor, paramToPos, resolveTarget,
   updateClip, updatePoint, updateTrack, type AudioClip, type ParamTarget,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
@@ -41,19 +41,40 @@ export const audioTracks = (doc: Y.Doc) => getTracks(doc).filter((t) => t.kind =
 
 /**
  * End the loops playing on `trackId` at timeline sample `at`: a loop that started earlier stops exactly there (forever off,
- * extent cut), so its history stays on the timeline; one that starts at or after `at` is replaced outright. Returns whether
- * anything changed.
+ * extent cut), so its history stays on the timeline; one that starts at or after `at` is replaced outright. Returns what it
+ * changed, so `restoreLoops` can put it back (empty when nothing changed).
  */
-export function endLoopsAt(doc: Y.Doc, trackId: string, at: number): boolean {
+export function endLoopsAt(doc: Y.Doc, trackId: string, at: number): LoopRestore[] {
   const hit = loopClips(doc).filter((c) => c.trackId === trackId && (c.start === at || (c.start < at && (c.forever || c.start + c.length > at))))
-  if (!hit.length) return false
+  const was: LoopRestore[] = hit.map((c) => (c.start >= at ? { deleted: c } : { id: c.id, length: c.length, fadeOut: c.fadeOut, forever: !!c.forever, cutTo: at - c.start }))
+  if (!hit.length) return was
   doc.transact(() => {
     for (const c of hit) {
       if (c.start >= at) deleteClip(doc, c.id)
       else updateClip(doc, c.id, { length: at - c.start, fadeOut: 0, forever: false })
     }
   })
-  return true
+  return was
+}
+
+/** What `endLoopsAt` changed: an earlier loop's extent (and the length it was cut to), or a loop it deleted. */
+export type LoopRestore = { id: string; length: number; fadeOut: number; forever: boolean; cutTo: number } | { deleted: AudioClip }
+
+/** Give back what `endLoopsAt` changed, straight into the doc (untracked: no undo step, and nothing else on the undo stack is touched). A loop edited since stays as the edit left it. */
+export function restoreLoops(doc: Y.Doc, was: LoopRestore[]) {
+  doc.transact(() => {
+    for (const r of was) {
+      if ('deleted' in r) {
+        if (!clipsMap(doc).has(r.deleted.id)) {
+          const { id: _id, kind: _kind, ...rest } = r.deleted
+          addAudioClip(doc, rest) // (a new id: nothing else refers to a clip)
+        }
+        continue
+      }
+      const cur = getClips(doc).find((c) => c.id === r.id)
+      if (cur?.kind === 'audio' && cur.length === r.cutTo && !cur.forever) updateClip(doc, r.id, { length: r.length, fadeOut: r.fadeOut, forever: r.forever })
+    }
+  }, 'loop-restore')
 }
 
 /** What a finished loop take becomes: where it starts on the timeline, its pass, and the take's timeline start. */
@@ -140,7 +161,7 @@ export interface LoopIO {
   say(msg: string): void
 }
 
-type Rec = { trackId: string; start: number; grid: Grid | null; recstart?: number; end?: number; pass?: number; undoDepth: number | null }
+type Rec = { trackId: string; start: number; grid: Grid | null; recstart?: number; end?: number; pass?: number; undoDepth: number | null; was: LoopRestore[] }
 
 export class LoopPedal {
   /** The current track: where record and mute act, which prev/next move. */
@@ -212,8 +233,9 @@ export class LoopPedal {
     if (!io.playing()) io.play()
     // overwrite only: the loop already playing here ends exactly where this one starts
     this.stopGroup()
-    const changed = endLoopsAt(doc, trackId, start)
-    this.rec = { trackId, start, grid, undoDepth: changed && undo ? undo.undoStack.length : null }
+    const was = endLoopsAt(doc, trackId, start)
+    const changed = was.length > 0
+    this.rec = { trackId, start, grid, undoDepth: changed && undo ? undo.undoStack.length : null, was }
     if (changed) this.stopGroup()
   }
 
@@ -241,7 +263,10 @@ export class LoopPedal {
     const { io, undo } = this.d
     this.rec = null
     io.cancelTake()
-    if (undo && r.undoDepth != null && undo.undoStack.length === r.undoDepth) undo.undo() // give the earlier loop back
+    if (r.was.length) { // give the earlier loop back: restore it directly, whatever else has been edited since
+      restoreLoops(this.d.doc, r.was)
+      if (undo && r.undoDepth != null && undo.undoStack.length === r.undoDepth) undo.undoStack.pop() // (its cut is the top step: nothing left to undo)
+    }
     if (tooShort) io.say('loop: too short')
   }
 

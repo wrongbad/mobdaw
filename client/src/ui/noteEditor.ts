@@ -10,7 +10,7 @@ import { segmented } from './segmented'
 import { deleteMenu } from './popover'
 import { noteName } from './noteName'
 import {
-  DEFAULT_GRID, GRIDS, PITCH_MAX as PMAX, PITCH_MIN as PMIN, applyPatches, centrePitch, clampVelocity, gridTicks, inMarquee, moveGroup,
+  DEFAULT_GRID, GRIDS, PITCH_MAX as PMAX, PITCH_MIN as PMIN, applyPatches, cancelNoteDrag, centrePitch, clampVelocity, gridTicks, inMarquee, moveGroup,
   nudgeVelocity, quantize, removeNotes, resizeGroup, shift, snapTick, subPx, transpose, velocityAt, type Grid,
 } from './noteOps'
 
@@ -201,6 +201,9 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     let release: (() => void) | null = resize ? null : audition(n.pitch, n.velocity)
     let sounding = n.pitch
     undo.stopCapturing()
+    const depth = undo.undoStack.length // (the drag's first write is the next step)
+    const original = group.map((g) => ({ ...g }))
+    let copies: string[] = []
     let last: PointerEvent | null = null
     let pending = 0
     const apply = () => {
@@ -214,6 +217,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
           const ids: string[] = []
           doc.transact(() => group.forEach(({ id: _id, ...g }) => ids.push(addNote(doc, g))))
           group = group.map((g, i) => ({ ...g, id: ids[i] }))
+          copies = ids
           setSel(ids)
         }
       }
@@ -245,12 +249,12 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
       removeEventListener('pointerup', up)
       removeEventListener('pointercancel', up)
     }
-    active = { id: e.pointerId, cancel() { // a second finger: undo whatever the gesture did, without leaving an undo step
+    active = { id: e.pointerId, cancel() { // a second finger: put back whatever the gesture did, without leaving an undo step or touching earlier ones
       cancelAnimationFrame(pending)
       last = null
       stop()
       release?.()
-      if (moved) { undo.undo(); undo.clear(false, true) }
+      if (moved) cancelNoteDrag(doc, undo, original, copies, depth)
       undo.stopCapturing()
       setSel(before)
     } }

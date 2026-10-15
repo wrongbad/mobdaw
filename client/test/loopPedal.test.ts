@@ -122,6 +122,50 @@ describe('loop record', () => {
     expect(r.clips()).toHaveLength(0)
   })
 
+  describe('cancelled before it begins', () => {
+    const cancelled = () => {
+      const r = rig(1)
+      r.p.current = r.ids[0]
+      r.loop(5000, 8200)
+      const before = r.clips()[0]
+      r.p.press('record', 12000) // starts at 14600, cutting the earlier loop there
+      expect(r.p.recording).toBe(true)
+      return { r, before }
+    }
+    it('gives the earlier loop back and leaves no stale undo step', () => {
+      const { r, before } = cancelled()
+      const depth = r.undo.undoStack.length
+      r.p.press('record', 13000) // stopped before it began
+      expect(r.p.recording).toBe(false)
+      expect(r.clips()).toEqual([before])
+      expect(r.undo.undoStack.length).toBe(depth - 1) // the cut's step went with it
+      expect(r.undo.redoStack.length).toBe(0)
+    })
+    it('does not undo another edit that landed in between', () => {
+      const { r, before } = cancelled()
+      r.undo.stopCapturing()
+      const t = addTrack(r.doc, 'later', 'audio') // an unrelated edit after the press
+      r.undo.stopCapturing()
+      r.p.press('record', 13000)
+      expect(r.clips()).toEqual([before])
+      expect(getTracks(r.doc).some((x) => x.id === t)).toBe(true) // still there
+      r.undo.undo() // the user's own undo takes back their edit, as it should
+      expect(getTracks(r.doc).some((x) => x.id === t)).toBe(false)
+      expect(r.clips()).toEqual([before])
+    })
+    it('brings back a loop that was replaced outright', () => {
+      const r = rig(1)
+      r.p.current = r.ids[0]
+      r.loop(5000, 8200)
+      const before = r.clips()[0]
+      r.p.press('record', 5000) // the same start: replaces it
+      expect(r.clips()).toHaveLength(0)
+      r.p.press('record', 5000 - 10) // stopped before it began
+      expect(r.clips()).toHaveLength(1)
+      expect(r.clips()[0]).toMatchObject({ start: before.start, length: before.length, loopLength: before.loopLength, forever: true })
+    })
+  })
+
   it('a recording that cannot begin changes nothing', () => {
     const r = rig(1)
     r.p.current = r.ids[0]
