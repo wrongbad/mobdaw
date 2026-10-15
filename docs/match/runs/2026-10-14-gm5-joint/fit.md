@@ -19,7 +19,7 @@ The bore-only column is `match_bore ... 160 48` (docs/match/runs/2026-10-14-gm5-
 ## Reading it
 
 - Joint fit beats bore-only by 0.6-1.0 on every program. Fitted EQ gains stay small (|g| <= 2.3 dB): the lowpass and bore knobs carry the tone, as intended.
-- Reverb settles consistently at mix 0.06-0.17, size ~0.5, low damping. Tails match the soundfont's by eye (compare_best_wet.png). Violin predelay hit the 50 ms the grid allows… check by ear.
+- Reverb settles consistently at mix 0.06-0.17, size ~0.5, low damping. Tails match the soundfont's by eye (compare_best_wet.png). Violin predelay is 50 ms (range 0-80), much longer than the others; check by ear.
 - Still missing: vibrato. Fitted rates are 2.8-4 Hz with small depth; the 40-band log loss averages out pitch wobble, so it can't see it. Needs a pitch-track (f0 contour) term.
 - Clarinet now fits with open bore and character 0.91 (bow anchor) plus a 2.5 kHz lowpass, instead of a closed reed. FluidR3's clarinet has strong even harmonics, so this may be honest, but it's a candidate to listen to against the closed-reed variant.
 - Flute aperture at 0, violin breath 0.04 and noise 0.99: still on bounds.
