@@ -108,6 +108,13 @@ export function createProjectStore(s: { doc: Y.Doc; awareness: Pick<Awareness, '
     const locks = createMemo(() => new Map(remote().flatMap((r) => (r.recording ? [[r.recording.trackId, r.user.username] as [string, string]] : []))),
       undefined, { equals: (a, b) => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v) })
 
+    /** The clips the peers have selected, id -> the colour of the last one to (their outline). */
+    const outlines = createMemo(() => {
+      const m = new Map<string, string>()
+      for (const r of remote()) for (const id of r.selection ?? []) m.set(id, r.user.color)
+      return m
+    }, undefined, { equals: (a, b) => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v) })
+
     /** The peers' in-progress knob drags: what goes to the engine as overrides (only fires when a drag changes), and per device, param -> value. */
     type Drag = { deviceId: string; paramId: number; value: number }
     const overrides = createMemo(() => remote().flatMap((r) => [r.dragging ?? []].flat()) as Drag[], [] as Drag[],
@@ -136,7 +143,7 @@ export function createProjectStore(s: { doc: Y.Doc; awareness: Pick<Awareness, '
       devicesByTrack, clipsByTrack, notesByClip, pointsByLane,
       /** A track's mix device (its fader and pan), or the master bus's. */
       mixDevice: (scope: string) => devicesByTrack(scope)().find((d) => d.type === MIX),
-      remote, locks,
+      remote, locks, outlines,
       dispose() {
         s.awareness.off('change', onAware)
         mirrors.forEach((m) => m.off())

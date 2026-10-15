@@ -47,12 +47,21 @@ export type Drawers = ReturnType<typeof createDrawers>
 
 /** What is selected or being edited. The fields are read directly; every change goes through a method. */
 export function createSelection() {
+  // (signals behind the fields, so the clips, pads and loop boxes follow the selection without a draw)
+  const [clips, setClips] = createSignal<string[]>([])
+  const [editing, setEditing] = createSignal<string | null>(null)
+  const [note, setNote] = createSignal<string | null>(null)
+  const [pad, setPad] = createSignal<string | null>(null)
+  const [armedLooper, setArmedLooper] = createSignal<string | null>(null)
   return {
-    clips: [] as string[],
-    editing: null as string | null, // MIDI clip zoomed into its note editor
-    note: null as string | null,
-    pad: null as string | null, // selected soundscape region
-    armedLooper: null as string | null, // looper whose region is being drawn
+    get clips() { return clips() }, set clips(v: string[]) { setClips(v) },
+    /** MIDI clip zoomed into its note editor. */
+    get editing() { return editing() }, set editing(v: string | null) { setEditing(v) },
+    get note() { return note() }, set note(v: string | null) { setNote(v) },
+    /** Selected soundscape region. */
+    get pad() { return pad() }, set pad(v: string | null) { setPad(v) },
+    /** Looper whose region is being drawn. */
+    get armedLooper() { return armedLooper() }, set armedLooper(v: string | null) { setArmedLooper(v) },
 
     /** The clip selection changed (the caller publishes it). */
     selectClips(ids: string[]) { this.clips = ids },
@@ -85,8 +94,8 @@ export function createSelection() {
     forgetLooper(id: string) { if (this.armedLooper === id) this.armedLooper = null },
     /** The drawn region was set: the looper is no longer armed. */
     doneDrawing() { this.armedLooper = null },
-    /** Drop whatever points at something that has gone from the doc (each is called where the draw notices). */
-    pruneClips(has: (id: string) => boolean) { this.clips = this.clips.filter(has) },
+    /** Drop whatever points at something that has gone from the doc (run as effects, so each fires when what it reads changes). */
+    pruneClips(has: (id: string) => boolean) { const keep = this.clips.filter(has); if (keep.length !== this.clips.length) this.clips = keep },
     pruneEditing(isMidi: (id: string) => boolean) { if (this.editing && !isMidi(this.editing)) this.editing = null },
     prunePad(has: (id: string) => boolean) { if (this.pad && !has(this.pad)) this.pad = null },
     pruneNote(has: (id: string) => boolean) { if (this.note && !has(this.note)) this.note = null },
