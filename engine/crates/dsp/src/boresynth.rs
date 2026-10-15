@@ -30,6 +30,9 @@ pub const P_GAIN: u32 = 13;
 pub const P_VIBRATO_PITCH: u32 = 14;
 pub const P_VIBRATO_DELAY_MS: u32 = 15;
 pub const P_BELL: u32 = 16;
+pub const P_VALVE_NOISE: u32 = 17;
+pub const P_AIR: u32 = 18;
+pub const P_WANDER: u32 = 19;
 
 #[derive(Clone, Copy)]
 struct Pending {
@@ -76,6 +79,9 @@ pub struct BoreSynth {
     vibrato_depth: Ramp,
     pitch_vibrato: Ramp,
     bell: Ramp,
+    valve_noise: Ramp,
+    air: Ramp,
+    wander: Ramp,
     gain: Ramp,
     position: f32,
     open: bool,
@@ -112,6 +118,9 @@ impl BoreSynth {
             vibrato_depth: Ramp::new(d.vibrato_depth as f64),
             pitch_vibrato: Ramp::new(d.pitch_vibrato as f64),
             bell: Ramp::new(d.bell as f64),
+            valve_noise: Ramp::new(d.valve_noise as f64),
+            air: Ramp::new(d.air as f64),
+            wander: Ramp::new(d.wander as f64),
             gain: Ramp::new(1.0),
             position: d.position,
             open: d.open,
@@ -148,6 +157,9 @@ impl BoreSynth {
             P_ATTACK_MS => self.attack_ms = value.clamp(0.0, 5000.0),
             P_VIBRATO_DELAY_MS => self.vibrato_delay_ms = value.clamp(0.0, 5000.0),
             P_BELL => self.bell.set_target(unit(value), s),
+            P_VALVE_NOISE => self.valve_noise.set_target(unit(value), s),
+            P_AIR => self.air.set_target(unit(value), s),
+            P_WANDER => self.wander.set_target(unit(value), s),
             P_RELEASE_MS => self.release_ms = value.clamp(1.0, 10000.0),
             P_GAIN => self.gain.set_target(value.clamp(0.0, 2.0) as f64, s),
             _ => {}
@@ -169,6 +181,9 @@ impl BoreSynth {
             vibrato_depth: self.vibrato_depth.value() as f32,
             pitch_vibrato: self.pitch_vibrato.value() as f32,
             bell: self.bell.value() as f32,
+            valve_noise: self.valve_noise.value() as f32,
+            air: self.air.value() as f32,
+            wander: self.wander.value() as f32,
         }
     }
 
@@ -328,6 +343,9 @@ impl BoreSynth {
             || self.vibrato_depth.is_moving()
             || self.pitch_vibrato.is_moving()
             || self.bell.is_moving()
+            || self.valve_noise.is_moving()
+            || self.air.is_moving()
+            || self.wander.is_moving()
             || self.gain.is_moving()
     }
 
@@ -341,7 +359,7 @@ impl BoreSynth {
         let len = out.len();
         let mut knobs = self.knobs();
         let g0 = self.gain.value() as f32;
-        for r in [&mut self.character, &mut self.stiffness, &mut self.aperture, &mut self.damping, &mut self.decay, &mut self.breath, &mut self.noise, &mut self.vibrato_depth, &mut self.pitch_vibrato, &mut self.bell] {
+        for r in [&mut self.character, &mut self.stiffness, &mut self.aperture, &mut self.damping, &mut self.decay, &mut self.breath, &mut self.noise, &mut self.vibrato_depth, &mut self.pitch_vibrato, &mut self.bell, &mut self.valve_noise, &mut self.air, &mut self.wander] {
             r.advance(len);
         }
         let g1 = self.gain.advance(len) as f32;

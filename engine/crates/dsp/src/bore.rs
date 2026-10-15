@@ -52,6 +52,19 @@
 //! high; the sum is high-passed again so no low products leak. (Squaring the output would not do:
 //! a square wave squared is constant.) Outside the loop, so tuning and calibration are untouched.
 //!
+//! # Noise paths
+//! Besides the drive noise above, three knobs make the tone less static, each with its own noise
+//! source (so the drive noise's sequence, and a preset that doesn't use them, are unchanged):
+//! * `valve_noise`: relative jitter of the valve itself (reed/jet opening, bow force), inside
+//!   `g(Δ)`. The valve only acts for part of each cycle, so this noise comes out pulsed at the
+//!   note's period (reed-slit turbulence, bow scratch), not as a flat hiss.
+//! * `wander`: slow random drift (a one-pole low-pass at [`WANDER_HZ`]) of the drive and the
+//!   opening: the small level and timbre fluctuation of a real breath or bow.
+//! * `air`: radiated breath noise outside the loop, high-passed at [`AIR_HZ`] and shaped by the
+//!   junction flow: `|y| / env(|y|) · env(|out|)`, a pulse at the note's period at the output's
+//!   level, so it pulses with the oscillation and follows the note's level. The
+//!   loop filters anything injected into it, so in-loop noise can't reach a flute's 4-12 kHz hiss.
+//!
 //! # Pitch vibrato
 //! The same LFO can also retune the loop (`pitch_vibrato` cents peak): both legs are rescaled once
 //! per sub-block, the junction staying at the same fraction. This is a string player's (or a
@@ -80,6 +93,17 @@ pub const BELL_HZ: f32 = 1200.0;
 /// (a clarinet's do, above ~1.5 kHz).
 pub const BELL_GAIN: f32 = 4.0;
 const BELL_ENV_MS: f64 = 10.0;
+/// Valve noise: relative jitter of the opening / bow force at knob 1.
+pub const VALVE_NOISE_REL: f32 = 0.3;
+/// Wander: corner of the slow noise, and its relative depth on the drive and on the opening at knob 1.
+pub const WANDER_HZ: f64 = 8.0;
+pub const WANDER_DRIVE: f32 = 0.15;
+pub const WANDER_VALVE: f32 = 0.1;
+/// Air: high-pass corner (Hz) and gain at knob 1, relative to the junction flow.
+pub const AIR_HZ: f32 = 2500.0;
+/// (High-passed uniform white is ~0.5 RMS, so knob 1 puts the air ~6 dB under the tone overall; a flute's breath
+/// noise is far under its tone overall but rivals the weak harmonics above 4 kHz.)
+pub const AIR_GAIN: f32 = 1.0;
 /// Pitch vibrato peak deviation at knob 1, in cents.
 pub const PITCH_VIBRATO_CENTS: f32 = 60.0;
 const DC_POLE: f32 = 0.995;
@@ -111,11 +135,15 @@ pub struct Raw {
     pub pitch_vibrato: f32,
     /// 0..1: even harmonics up high, see the module docs.
     pub bell: f32,
+    /// 0..1: noise paths, see the module docs.
+    pub valve_noise: f32,
+    pub air: f32,
+    pub wander: f32,
 }
 
 impl Default for Raw {
     fn default() -> Self {
-        Self { character: 0.0, stiffness: 0.5, aperture: 0.7, drive: 1.0, damping: 0.3, reflection: 0.95, noise: 0.0, vibrato_depth: 0.0, pitch_vibrato: 0.0, bell: 0.0 }
+        Self { character: 0.0, stiffness: 0.5, aperture: 0.7, drive: 1.0, damping: 0.3, reflection: 0.95, noise: 0.0, vibrato_depth: 0.0, pitch_vibrato: 0.0, bell: 0.0, valve_noise: 0.0, air: 0.0, wander: 0.0 }
     }
 }
 
@@ -161,16 +189,22 @@ impl Valve {
     /// | bow | `min(1, force·(0.3 + 1/(1 + fall·|Δ|)) / |Δ|)`: stick-slip friction |
     #[inline(always)]
     pub fn opening(&self, d: f32) -> f32 {
+        self.opening_jit(d, 1.0)
+    }
+
+    /// [`Valve::opening`] with the reed/jet opening and the bow force scaled by `k` (valve noise and wander).
+    #[inline(always)]
+    pub fn opening_jit(&self, d: f32, k: f32) -> f32 {
         let mut g = 0.0;
         if self.w_reed > 0.0 {
-            g += self.w_reed * (self.aperture - self.reed_slope * d).clamp(0.0, 1.0);
+            g += self.w_reed * (k * self.aperture - self.reed_slope * d).clamp(0.0, 1.0);
         }
         if self.w_jet > 0.0 {
-            g += self.w_jet * (self.aperture - self.jet_curve * d * d).clamp(0.0, 1.0);
+            g += self.w_jet * (k * self.aperture - self.jet_curve * d * d).clamp(0.0, 1.0);
         }
         if self.w_bow > 0.0 {
             let a = d.abs();
-            let f = self.bow_force * (0.3 + 1.0 / (1.0 + self.bow_fall * a));
+            let f = k * self.bow_force * (0.3 + 1.0 / (1.0 + self.bow_fall * a));
             g += self.w_bow * if f >= a { 1.0 } else { f / a };
         }
         g
@@ -249,6 +283,15 @@ pub struct Bore {
     burst: f32,
     burst_decay: f32,
     rng: u32,
+    /// Separate noise sources for the valve noise / wander and for the air.
+    rng2: u32,
+    rng3: u32,
+    /// Wander: the slow noise's state and per-sub-block coefficient.
+    wander_s: f32,
+    wander_a: f32,
+    air_hp: crate::svf::Svf,
+    air_env_y: f32,
+    air_env_o: f32,
     lfo_phase: f64,
     lfo_inc: f64,
     lfo_prev: f32,
@@ -309,6 +352,17 @@ impl Bore {
             burst: 0.0,
             burst_decay: 1.0,
             rng: 1,
+            rng2: 1,
+            rng3: 1,
+            wander_s: 0.0,
+            wander_a: (1.0 - (-std::f64::consts::TAU * WANDER_HZ * SUB_BLOCK as f64 / sample_rate as f64).exp()) as f32,
+            air_env_y: 0.0,
+            air_env_o: 0.0,
+            air_hp: {
+                let mut f = crate::svf::Svf::new();
+                f.set_hz(AIR_HZ, std::f32::consts::FRAC_1_SQRT_2, sample_rate);
+                f
+            },
             lfo_phase: 0.0,
             lfo_inc: 0.0,
             lfo_prev: 0.0,
@@ -373,6 +427,12 @@ impl Bore {
         self.burst = n.velocity.clamp(0.0, 1.0);
         self.burst_decay = (-1.0 / (BURST_MS * ms)).exp() as f32;
         self.rng = n.seed.wrapping_mul(2_654_435_761) | 1;
+        self.rng2 = n.seed.wrapping_mul(2_246_822_519).wrapping_add(0x9e37_79b9) | 1;
+        self.rng3 = n.seed.wrapping_mul(3_266_489_917).wrapping_add(0x7f4a_7c15) | 1;
+        self.wander_s = 0.0;
+        self.air_hp.reset();
+        self.air_env_y = 0.0;
+        self.air_env_o = 0.0;
         self.lfo_phase = 0.0;
         self.lfo_inc = n.vibrato_hz.max(0.0) as f64 / self.sample_rate;
         self.lfo_prev = 0.0;
@@ -419,6 +479,16 @@ impl Bore {
     }
 
     #[inline(always)]
+    fn xorshift(r: &mut u32) -> f32 {
+        let mut x = *r;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *r = x;
+        (x as i32) as f32 * (1.0 / 2_147_483_648.0)
+    }
+
+    #[inline(always)]
     fn white(&mut self) -> f32 {
         let mut x = self.rng;
         x ^= x << 13;
@@ -451,6 +521,20 @@ impl Bore {
         let dl = (lfo_now - lfo_prev) / len as f32;
         let noise = NOISE_SCALE * raw.noise.clamp(0.0, 1.0);
         let bell = BELL_GAIN * raw.bell.clamp(0.0, 1.0);
+        let valve_noise = VALVE_NOISE_REL * raw.valve_noise.clamp(0.0, 1.0);
+        let air = AIR_GAIN * raw.air.clamp(0.0, 1.0);
+        // Wander: one step of the slow noise per sub-block, scaled to unit RMS (uniform white has variance 1/3; a
+        // one-pole with coefficient a passes a/(2-a) of it).
+        let wander = raw.wander.clamp(0.0, 1.0);
+        let wn = if wander > 0.0 {
+            let a = self.wander_a;
+            self.wander_s += a * (Self::xorshift(&mut self.rng2) - self.wander_s);
+            self.wander_s * (3.0 * (2.0 - a) / a).sqrt()
+        } else {
+            0.0
+        };
+        let drive_k = 1.0 + WANDER_DRIVE * wander * wn;
+        let valve_k = 1.0 + WANDER_VALVE * wander * wn;
         let vib = VIBRATO_SCALE * raw.vibrato_depth.clamp(0.0, 1.0);
         let mut lfo = lfo_prev;
         // Pitch vibrato: retune the loop at the sub-block's LFO value (positive LFO is sharp, a shorter loop).
@@ -473,13 +557,14 @@ impl Bore {
             self.burst *= self.burst_decay;
             lfo += dl;
             let w = self.white();
-            let drive = raw.drive * self.gate * (1.0 + BURST_GAIN * self.burst) * (1.0 + noise * w + vib * lfo);
+            let drive = raw.drive * drive_k * self.gate * (1.0 + BURST_GAIN * self.burst) * (1.0 + noise * w + vib * lfo);
 
             let a_l = self.left.pull(c);
             let a_r = self.right.pull(c);
             let v = a_l + a_r;
             let delta = drive - v;
-            let y = delta * valve.opening(delta);
+            let k = if valve_noise > 0.0 { valve_k * (1.0 + valve_noise * Self::xorshift(&mut self.rng2)) } else { valve_k };
+            let y = delta * valve.opening_jit(delta, k);
             self.left.push(a_r + 0.5 * y);
             self.right.push(a_l + 0.5 * y);
 
@@ -497,6 +582,15 @@ impl Bore {
                 let carrier = fund * std::f32::consts::FRAC_2_PI / (self.bell_env + 1e-6);
                 let up = self.bell_hp.process(o).hp();
                 o + bell * self.bell_hp2.process(up * carrier).hp()
+            } else {
+                o
+            };
+            let o = if air > 0.0 {
+                let a = self.bell_a;
+                self.air_env_y = flush_denormal(self.air_env_y + a * (y.abs() - self.air_env_y));
+                self.air_env_o = flush_denormal(self.air_env_o + a * (o.abs() - self.air_env_o));
+                let shape = y.abs() / (self.air_env_y + 1e-9) * self.air_env_o;
+                o + air * shape * self.air_hp.process(Self::xorshift(&mut self.rng3)).hp()
             } else {
                 o
             };
@@ -619,6 +713,64 @@ mod tests {
         let per = |x: &[f32]| { let p = periods(x, SR / f); p.iter().sum::<f32>() / p.len() as f32 };
         let cents = 1200.0 * (per(&plain) / per(&bell)).log2();
         assert!(cents.abs() < 2.0, "{cents} cents");
+    }
+
+    /// A calibrated note (knobs through `bore_cal`, as the device does) for any anchor and bore.
+    fn note(character: f32, open: bool, key: f32) -> (Raw, NoteSetup) {
+        let k = crate::bore_cal::Knobs { character, open, position: 0.3, ..Default::default() };
+        let r = crate::bore_cal::resolve(key, &k);
+        let f = 440.0 * ((key - 69.0) / 12.0).exp2();
+        (r.raw, NoteSetup { freq_hz: f, open, position: r.position, tune_cents: r.tune_cents, ..NoteSetup::default() })
+    }
+
+    #[test]
+    fn noise_paths_keep_notes_speaking_and_in_tune() {
+        // valve noise and wander act inside the loop: at full scale every anchor still speaks, in tune, where it did
+        for c in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            for open in [false, true] {
+                for key in [50.0, 62.0, 74.0] {
+                    let (raw, setup) = note(c, open, key);
+                    let plain = render(&raw, &setup, 0.8);
+                    if tail_rms(&plain) < 0.01 {
+                        continue; // outside the calibrated region already (see bore_calibrate verify)
+                    }
+                    let noisy = render(&Raw { valve_noise: 1.0, wander: 1.0, ..raw }, &setup, 0.8);
+                    assert!(tail_rms(&noisy) > 0.3 * tail_rms(&plain), "c {c} open {open} key {key}: {} vs {}", tail_rms(&noisy), tail_rms(&plain));
+                    let per = |x: &[f32]| { let p = periods(x, SR / setup.freq_hz); p.iter().sum::<f32>() / p.len() as f32 };
+                    let cents = 1200.0 * (per(&plain) / per(&noisy)).log2();
+                    assert!(cents.abs() < 25.0, "c {c} open {open} key {key}: {cents} cents");
+                }
+            }
+        }
+    }
+
+    /// Energy above 4 kHz of the second half, by first differences filtered a few times (a crude high-pass is enough
+    /// for a with/without comparison).
+    fn hf_rms(x: &[f32]) -> f32 {
+        let mut f = crate::svf::Svf::new();
+        f.set_hz(4000.0, 0.7071, SR);
+        let y: Vec<f32> = x.iter().map(|&v| f.process(v).hp()).collect();
+        tail_rms(&y)
+    }
+
+    #[test]
+    fn air_adds_high_noise_and_wander_adds_shimmer() {
+        let (raw, setup) = note(0.5, true, 74.0);
+        let plain = render(&raw, &setup, 1.0);
+        let airy = render(&Raw { air: 1.0, ..raw }, &setup, 1.0);
+        let gain_db = 20.0 * (hf_rms(&airy) / hf_rms(&plain)).log10();
+        assert!(gain_db > 3.0, "air raises >4 kHz by {gain_db} dB");
+        // shimmer: spread of the 10 ms RMS level (dB) over the second half
+        let shimmer = |x: &[f32]| {
+            let t = &x[x.len() / 2..];
+            let e: Vec<f32> = t.chunks(480).map(|c| 10.0 * (c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).log10()).collect();
+            let m = e.iter().sum::<f32>() / e.len() as f32;
+            (e.iter().map(|v| (v - m).powi(2)).sum::<f32>() / e.len() as f32).sqrt()
+        };
+        let wandering = render(&Raw { wander: 1.0, ..raw }, &setup, 1.0);
+        assert!(shimmer(&wandering) > 2.0 * shimmer(&plain), "shimmer {} vs {}", shimmer(&wandering), shimmer(&plain));
+        let valve = render(&Raw { valve_noise: 1.0, ..raw }, &setup, 1.0);
+        assert_ne!(valve, plain);
     }
 
     #[test]

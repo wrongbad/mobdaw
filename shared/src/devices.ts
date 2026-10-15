@@ -135,6 +135,9 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 14, name: 'vibrato pitch', min: 0, max: 1, def: 0, scale: 'lin' }, // pitch wobble (strings, voice), 60 cents peak at 1; 'vibrato depth' is breath
       { id: 15, name: 'vibrato delay', min: 0, max: 3000, def: 0, scale: 'pow', unit: 'ms' }, // vibrato fades in over this long (read at note start)
       { id: 16, name: 'bell', min: 0, max: 1, def: 0, scale: 'lin' }, // even harmonics above ~1.2 kHz (a clarinet's upper register colour)
+      { id: 17, name: 'valve noise', min: 0, max: 1, def: 0, scale: 'lin' }, // jitter in the reed / bow itself: pulsed noise, bow scratch
+      { id: 18, name: 'air', min: 0, max: 1, def: 0, scale: 'lin' }, // radiated breath noise above ~2.5 kHz, pulsing with the tone
+      { id: 19, name: 'wander', min: 0, max: 1, def: 0, scale: 'lin' }, // slow random drift of breath / bow pressure
     ],
   },
   [FINNWAVE]: {

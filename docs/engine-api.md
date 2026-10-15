@@ -482,6 +482,9 @@ for the note, so any value in 0..1 speaks and levels out.
 | gain | 13 | 0..2 | 1 | Smoothed. |
 | vibrato pitch | 14 | 0..1 | 0 | Pitch vibrato (loop retuned per 32-sample sub-block at the vibrato rate), 60 cents peak at 1. Smoothed. |
 | vibrato delay | 15 | 0..3000 ms | 0 | Both vibratos fade in linearly over this long from the note start. Read when a note starts. |
+| valve noise | 17 | 0..1 | 0 | Relative jitter of the reed/jet opening and bow force inside the junction (±30% at 1): pulsed noise at the note's period, bow scratch. In the loop; small values stay in the calibrated region. Smoothed. |
+| air | 18 | 0..1 | 0 | Radiated breath noise: white noise high-passed at 2.5 kHz times the junction flow, added outside the loop. Smoothed. |
+| wander | 19 | 0..1 | 0 | Slow random drift (8 Hz one-pole) of the drive (±15% RMS at 1) and opening (±10%). Smoothed. |
 | bell | 16 | 0..1 | 0 | Even harmonics above ~1.2 kHz, added outside the loop (ring modulation of the upper partials by the fundamental; docs `dsp::bore`). No effect on tuning or calibration. Smoothed. |
 
 - Notes outside the working range of the current character, position and bore get no voice. When all 8 voices are
