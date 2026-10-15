@@ -44,6 +44,7 @@ import { knob } from './knob'
 import { follow, peakToFill } from './meter'
 import { icon, setIcon } from '../theme/icons'
 import { MIN_SEC, addImportedClip, automateParam, commitParam, commitParams, deleteClips, loopClip, loopForever, passClip, reorderDevice, trimClip, unloopClip } from '../project/actions'
+import { remoteKey } from '../project/presence'
 import { createRecorder } from '../project/recorder'
 import { createDrawers, createSelection, type TabName } from '../project/viewState'
 
@@ -437,6 +438,44 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   // --- rendering (keyed reuse; scheduled via rAF)
   function schedule() {
     if (!raf) raf = requestAnimationFrame(() => ((raf = 0), draw()))
+  }
+
+  // --- presence: awareness changes every 100 ms while anyone plays (our own playhead included), so only what draw() reads from
+  // others' state (their drags, take and selection) schedules a full draw; the rest (dots, playheads, growing regions) is patched.
+  let remoteSig = '' // the part of the others' state the last draw used
+  let presenceRaf = 0
+  function awarenessChanged() {
+    if (remoteKey(s.remoteStates()) !== remoteSig) return schedule()
+    if (!presenceRaf) presenceRaf = requestAnimationFrame(() => ((presenceRaf = 0), drawPresence(s.remoteStates()), drawRecRegions()))
+  }
+  const dots: HTMLElement[] = []
+  const heads: { overlay: HTMLElement; ruler: HTMLElement }[] = []
+  /** Set a style property only when it changed, so an element that is already right is not touched. */
+  const styled = new WeakMap<HTMLElement, Record<string, string>>() // (what we set: the browser normalises colours when read back)
+  const setStyle = (e: HTMLElement, k: 'left' | 'background', v: string) => {
+    const was = styled.get(e) ?? styled.set(e, {}).get(e)!
+    if (was[k] !== v) e.style[k] = was[k] = v
+  }
+  /** The presence dots and the others' playheads, patched in place (never rebuilt). */
+  function drawPresence(remote: AwarenessState[]) {
+    const users = [s.user, ...remote.map((r) => r.user)]
+    users.forEach((u, i) => {
+      const d = dots[i] ?? (dots[i] = presence.appendChild(h('span', { className: 'dot' })))
+      if (d.title !== u.username) d.title = u.username
+      setStyle(d, 'background', u.color)
+      const text = initials(u.username)
+      if (d.textContent !== text) d.textContent = text
+    })
+    for (const d of dots.splice(users.length)) d.remove()
+    const playing = remote.filter((r) => r.playhead != null)
+    playing.forEach((r, i) => {
+      const hd = heads[i] ?? (heads[i] = { overlay: overlay.appendChild(h('div', { className: 'remote-head' })), ruler: rulerHeads.appendChild(h('div', { className: 'remote-head' })) })
+      setStyle(hd.overlay, 'left', `${HEADER + x(r.playhead!)}px`)
+      setStyle(hd.ruler, 'left', `${x(r.playhead!)}px`)
+      setStyle(hd.overlay, 'background', r.user.color)
+      setStyle(hd.ruler, 'background', r.user.color)
+    })
+    for (const hd of heads.splice(playing.length)) hd.overlay.remove(), hd.ruler.remove()
   }
 
   const cardDeps = {
@@ -1200,6 +1239,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
 
     // remote live-param drags -> overrides on our engine, and the values shown on sliders
     const remote = s.remoteStates()
+    remoteSig = remoteKey(remote)
     remoteDrags = new Map()
     for (const r of remote) {
       for (const d of [r.dragging ?? []].flat()) remoteDrags.set(d.deviceId, (remoteDrags.get(d.deviceId) ?? new Map()).set(d.paramId, d.value))
@@ -1336,16 +1376,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       e.style.outline = o ? `2px solid ${o}` : ''
     }
 
-    // presence
-    presence.replaceChildren(...[s.user, ...remote.map((r) => r.user)].map((u) =>
-      h('span', { className: 'dot', title: u.username, style: `background:${u.color}` }, initials(u.username))))
-    for (const e of [...overlay.querySelectorAll('.remote-head'), ...rulerHeads.querySelectorAll('.remote-head')]) e.remove()
-    for (const r of remote) {
-      if (r.playhead == null) continue
-      const color = `background:${r.user.color}`
-      overlay.append(h('div', { className: 'remote-head', style: `left:${HEADER + x(r.playhead)}px;${color}` }))
-      rulerHeads.append(h('div', { className: 'remote-head', style: `left:${x(r.playhead)}px;${color}` }))
-    }
+    drawPresence(remote)
     // The playhead lines run through the ruler, the lanes and the master automation, not the empty space below them.
     const last = master
     overlay.style.height = `${last.offsetTop + last.offsetHeight}px`
@@ -1779,7 +1810,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   // --- sync
   const watched = [tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), loopersMap(doc), padsMap(doc), lanesMap(doc), pointsMap(doc), samplesMap(doc)]
   watched.forEach((m) => m.observeDeep(schedule))
-  s.awareness.on('change', schedule)
+  s.awareness.on('change', awarenessChanged)
   metaMap(doc).observe(rateChanged)
   const offPeaks = onPeaks(schedule)
   const onStatus = ({ status: st }: { status: string }) => (bar.dataset.status = st)
@@ -1824,7 +1855,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       removeEventListener('resize', schedule)
       rec.destroy()
       watched.forEach((m) => m.unobserveDeep(schedule))
-      s.awareness.off('change', schedule)
+      s.awareness.off('change', awarenessChanged)
+      cancelAnimationFrame(presenceRaf)
       metaMap(doc).unobserve(rateChanged)
       offPeaks()
       chat.destroy()
