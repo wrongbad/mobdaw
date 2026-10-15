@@ -48,7 +48,7 @@ pub fn normalise(x: &mut [f32]) {
 }
 
 /// Bore parameters in calibrated knob space; indices match `PARAMS`.
-pub const PARAMS: [(&str, f32, f32); 11] = [
+pub const PARAMS: [(&str, f32, f32); 12] = [
     ("character", 0.0, 1.0),
     ("stiffness", 0.0, 1.0),
     ("aperture", 0.0, 1.0),
@@ -60,13 +60,14 @@ pub const PARAMS: [(&str, f32, f32); 11] = [
     ("vibrato_depth", 0.0, 0.6),
     ("attack_ms", 2.0, 600.0),
     ("release_ms", 20.0, 1500.0),
+    ("pitch_vibrato", 0.0, 1.0),
 ];
 
 /// `x` is normalised 0..1 per PARAMS (attack/release log-scaled); `open` is a discrete choice.
 pub fn real(x: &[f64]) -> Vec<f32> {
     PARAMS.iter().zip(x).enumerate().map(|(i, ((_, lo, hi), &v))| {
         let v = v.clamp(0.0, 1.0) as f32;
-        if i >= 9 { (lo.ln() + v * (hi.ln() - lo.ln())).exp() } else { lo + v * (hi - lo) }
+        if i == 9 || i == 10 { (lo.ln() + v * (hi.ln() - lo.ln())).exp() } else { lo + v * (hi - lo) }
     }).collect()
 }
 
@@ -125,6 +126,8 @@ pub fn spec(x: &[f32], n: usize, bands: usize) -> Vec<Vec<f32>> {
 pub struct Target {
     pub specs: Vec<Vec<Vec<f32>>>,
     pub env: Vec<f32>,
+    /// Vibrato (depth cents, rate Hz) of the held part, when the pitch term is on.
+    pub vib: Option<(f32, f32)>,
 }
 
 fn envelope(x: &[f32]) -> Vec<f32> {
@@ -132,7 +135,12 @@ fn envelope(x: &[f32]) -> Vec<f32> {
 }
 
 pub fn target(x: &[f32]) -> Target {
-    Target { specs: [512, 2048].iter().map(|&n| spec(x, n, 40)).collect(), env: envelope(x) }
+    Target { specs: [512, 2048].iter().map(|&n| spec(x, n, 40)).collect(), env: envelope(x), vib: None }
+}
+
+/// As [`target`], plus the vibrato of the held part for the pitch term of [`loss`].
+pub fn target_pitched(x: &[f32], p: Probe) -> Target {
+    Target { vib: Some(vibrato(x, p)), ..target(x) }
 }
 
 /// Multi-resolution log-spectral L1 + dB envelope; lower is better.
@@ -154,6 +162,63 @@ pub fn loss(t: &Target, y: &[f32]) -> f32 {
     tot + 2.0 * e
 }
 
+/// Weights of the pitch term: per cent of vibrato depth error, per Hz of rate error (rate only counts when the target
+/// has a vibrato to speak of).
+pub const W_DEPTH: f32 = 0.08;
+pub const W_RATE: f32 = 0.25;
+
+/// [`loss`] plus, if the target has vibrato stats, the vibrato depth/rate mismatch.
+pub fn loss_pitched(t: &Target, y: &[f32], p: Probe) -> f32 {
+    let base = loss(t, y);
+    let Some((td, tr)) = t.vib else { return base };
+    let (yd, yr) = vibrato(y, p);
+    let rate_w = (td / 8.0).min(1.0);
+    base + W_DEPTH * (td - yd).abs() + W_RATE * rate_w * (tr - yr).abs()
+}
+
+/// f0 contour (cents vs the probe's note) of the held part, 0.25 s to the release, by autocorrelation within ±8% of
+/// the note's period, parabolically interpolated. 2048-sample frames, 256 hop.
+pub fn pitch_track(x: &[f32], p: Probe) -> Vec<f32> {
+    let f = 440.0 * ((p.key as f32 - 69.0) / 12.0).exp2();
+    let per = SR as f32 / f;
+    let (n, hop) = (2048usize, 256usize);
+    let (lo, hi) = (((per * 0.92) as usize).max(2), ((per * 1.08) as usize + 1).min(n / 2));
+    let (a, z) = ((0.25 * SR as f32) as usize, ((p.hold * SR as f32) as usize).min(x.len()));
+    let ac = |fr: &[f32], l: usize| fr[..n - l].iter().zip(&fr[l..n]).map(|(a, b)| a * b).sum::<f32>();
+    let mut out = vec![];
+    let mut s0 = a;
+    while s0 + n <= z {
+        let fr = &x[s0..s0 + n];
+        let l = (lo..=hi).max_by(|&a, &b| ac(fr, a).total_cmp(&ac(fr, b))).unwrap();
+        let (y0, y1, y2) = (ac(fr, l - 1), ac(fr, l), ac(fr, (l + 1).min(n - 1)));
+        let d = y0 - 2.0 * y1 + y2;
+        let lag = l as f32 + if d.abs() > 1e-12 { (0.5 * (y0 - y2) / d).clamp(-1.0, 1.0) } else { 0.0 };
+        out.push(1200.0 * (per / lag).log2());
+        s0 += hop;
+    }
+    out
+}
+
+/// (depth, rate): RMS cents of the detrended contour (×√2, so a sine's peak), and the rate from its zero crossings.
+pub fn vibrato(x: &[f32], p: Probe) -> (f32, f32) {
+    let c = pitch_track(x, p);
+    if c.len() < 8 {
+        return (0.0, 0.0);
+    }
+    // remove a linear trend (slow drift / intonation) before measuring the wobble
+    let n = c.len() as f32;
+    let mx = (n - 1.0) / 2.0;
+    let my = c.iter().sum::<f32>() / n;
+    let sxy: f32 = c.iter().enumerate().map(|(i, v)| (i as f32 - mx) * (v - my)).sum();
+    let sxx: f32 = (0..c.len()).map(|i| (i as f32 - mx).powi(2)).sum();
+    let k = sxy / sxx;
+    let d: Vec<f32> = c.iter().enumerate().map(|(i, v)| v - my - k * (i as f32 - mx)).collect();
+    let depth = (d.iter().map(|v| v * v).sum::<f32>() / n).sqrt() * std::f32::consts::SQRT_2;
+    let crossings = d.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count() as f32;
+    let secs = n * 256.0 / SR as f32;
+    (depth, 0.5 * crossings / secs)
+}
+
 pub fn write_wav(path: &Path, x: &[f32]) {
     use std::io::Write;
     let mut f = File::create(path).unwrap();
@@ -173,12 +238,12 @@ pub fn write_wav(path: &Path, x: &[f32]) {
     f.write_all(&data).unwrap();
 }
 
-// ---- Joint chain: bore -> lowpass filter -> 4-band EQ (gains solved per candidate) -> reverb ----
+// ---- Joint chain: bore -> body -> lowpass filter -> 4-band EQ -> reverb ----
+// Body and EQ gains are solved in closed form per candidate; everything else is searched.
 
-use engine::device::{Device, KIND_EQ, KIND_FILTER, KIND_REVERB};
+use engine::device::{Device, KIND_BODY, KIND_EQ, KIND_FILTER, KIND_REVERB};
 
-/// Searched dims beyond the bore knobs (normalised 0..1, log-mapped): vibrato rate, filter cutoff and
-/// damping, the two EQ bell centres. EQ gains are not searched; [`solve_eq`] fits them per candidate.
+/// Searched dims beyond the bore knobs (normalised 0..1, log-mapped).
 pub const CHAIN: [(&str, f32, f32); 5] = [
     ("vibrato_hz", 2.0, 8.0),
     ("filter_cutoff_hz", 300.0, 20000.0),
@@ -186,13 +251,42 @@ pub const CHAIN: [(&str, f32, f32); 5] = [
     ("eq_bell1_hz", 200.0, 1500.0),
     ("eq_bell2_hz", 1000.0, 8000.0),
 ];
-pub const DIMS: usize = PARAMS.len() + CHAIN.len();
 pub const EQ_HZ: [f32; 4] = [100.0, 500.0, 2000.0, 8000.0];
 pub const EQ_DAMPING: f32 = 0.7071;
-/// Ridge weight on EQ gains (per dB^2, in the same units as the band log-power residual), and a cap.
+/// Ridge weight (per dB^2, per solve band) and cap for the EQ gains; looser for the body's narrow peaks.
 pub const EQ_RIDGE: f64 = 0.02;
 pub const EQ_MAX_DB: f64 = 12.0;
-pub const BANDS: usize = 40;
+pub const BODY_RIDGE: f64 = 0.004;
+pub const BODY_MAX_DB: f64 = 18.0;
+pub const BODY_BANDS: usize = 8;
+/// Each body peak searches ±40% (log) around its starting frequency; the shared damping 0.04..0.3 (Q 12..1.7).
+pub const BODY_SPAN: f32 = 1.4;
+pub const BODY_DAMP: (f32, f32) = (0.04, 0.3);
+/// The gain solve's spectrum: finer than the loss's 40 bands, so narrow body peaks resolve.
+pub const SOLVE_N: usize = 4096;
+pub const SOLVE_BANDS: usize = 96;
+
+/// Per-program search setup.
+#[derive(Clone, Debug)]
+pub struct Setup {
+    /// Range for `character` (strings stay in the bow region).
+    pub character: (f32, f32),
+    /// Starting body peak frequencies, or no body stage.
+    pub body: Option<[f32; BODY_BANDS]>,
+}
+
+impl Setup {
+    pub fn dims(&self) -> usize {
+        PARAMS.len() + CHAIN.len() + if self.body.is_some() { BODY_BANDS + 1 } else { 0 }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Body {
+    pub hz: [f32; BODY_BANDS],
+    pub damping: f32,
+    pub db: [f32; BODY_BANDS],
+}
 
 #[derive(Clone, Debug)]
 pub struct Chain {
@@ -201,18 +295,31 @@ pub struct Chain {
     pub vibrato_hz: f32,
     pub cutoff: f32,
     pub fdamp: f32,
+    pub body: Option<Body>,
     pub eq_hz: [f32; 4],
     pub eq_db: [f32; 4],
     /// mix, size, damping, predelay ms
     pub reverb: Option<[f32; 4]>,
 }
 
-pub fn chain_from(x: &[f64], open: bool) -> Chain {
-    let c: Vec<f32> = CHAIN.iter().zip(&x[PARAMS.len()..]).map(|((_, lo, hi), &v)| {
-        let v = v.clamp(0.0, 1.0) as f32;
-        (lo.ln() + v * (hi.ln() - lo.ln())).exp()
-    }).collect();
-    Chain { bore: real(&x[..PARAMS.len()]), open, vibrato_hz: c[0], cutoff: c[1], fdamp: c[2], eq_hz: [EQ_HZ[0], c[3], c[4], EQ_HZ[3]], eq_db: [0.0; 4], reverb: None }
+fn logmap(v: f64, lo: f32, hi: f32) -> f32 {
+    (lo.ln() + v.clamp(0.0, 1.0) as f32 * (hi.ln() - lo.ln())).exp()
+}
+
+pub fn chain_from(x: &[f64], open: bool, su: &Setup) -> Chain {
+    let np = PARAMS.len();
+    let mut bore = real(&x[..np]);
+    bore[0] = su.character.0 + x[0].clamp(0.0, 1.0) as f32 * (su.character.1 - su.character.0);
+    let c: Vec<f32> = CHAIN.iter().zip(&x[np..]).map(|((_, lo, hi), &v)| logmap(v, *lo, *hi)).collect();
+    let body = su.body.map(|init| {
+        let b = &x[np + CHAIN.len()..];
+        Body {
+            hz: std::array::from_fn(|i| logmap(b[i], init[i] / BODY_SPAN, init[i] * BODY_SPAN)),
+            damping: logmap(b[BODY_BANDS], BODY_DAMP.0, BODY_DAMP.1),
+            db: [0.0; BODY_BANDS],
+        }
+    });
+    Chain { bore, open, vibrato_hz: c[0], cutoff: c[1], fdamp: c[2], body, eq_hz: [EQ_HZ[0], c[3], c[4], EQ_HZ[3]], eq_db: [0.0; 4], reverb: None }
 }
 
 fn dev(kind: u32, params: &[(u32, f32)]) -> Device {
@@ -234,21 +341,29 @@ fn run(d: &mut Device, x: &mut [f32]) {
     }
 }
 
-fn eq_device(hz: &[f32; 4], db: &[f32; 4]) -> Device {
+fn bands_device(kind: u32, hz: &[f32], db: &[f32], damping: f32) -> Device {
     let mut p = vec![];
-    for i in 0..4 {
-        p.extend([(i as u32 * 3, hz[i]), (i as u32 * 3 + 1, db[i]), (i as u32 * 3 + 2, EQ_DAMPING)]);
+    for i in 0..hz.len() {
+        p.extend([(i as u32 * 3, hz[i]), (i as u32 * 3 + 1, db[i]), (i as u32 * 3 + 2, damping)]);
     }
-    dev(KIND_EQ, &p)
+    dev(kind, &p)
 }
 
-/// The bore voice alone (no normalisation), with the chain's vibrato rate.
+fn eq_device(c: &Chain) -> Device {
+    bands_device(KIND_EQ, &c.eq_hz, &c.eq_db, EQ_DAMPING)
+}
+
+fn body_device(b: &Body) -> Device {
+    bands_device(KIND_BODY, &b.hz, &b.db, b.damping)
+}
+
+/// The bore voice alone (no normalisation).
 pub fn render_voice(c: &Chain, p: Probe) -> Option<Vec<f32>> {
     let rp = &c.bore;
     let mut b = BoreSynth::new(SR as f32);
     for (id, v) in [(P_CHARACTER, rp[0]), (P_STIFFNESS, rp[1]), (P_APERTURE, rp[2]), (P_POSITION, rp[3]), (P_BORE, c.open as u8 as f32),
         (P_DAMPING, rp[4]), (P_DECAY, rp[5]), (P_BREATH, rp[6]), (P_NOISE, rp[7]), (P_VIBRATO_DEPTH, rp[8]), (P_ATTACK_MS, rp[9]), (P_RELEASE_MS, rp[10]),
-        (P_VIBRATO_RATE, c.vibrato_hz)] {
+        (P_VIBRATO_PITCH, rp[11]), (P_VIBRATO_RATE, c.vibrato_hz)] {
         b.set_param_smooth(id, v, 0.0);
     }
     if !b.accepts(p.key) {
@@ -264,102 +379,8 @@ pub fn render_voice(c: &Chain, p: Probe) -> Option<Vec<f32>> {
     out.iter().all(|v| v.is_finite()).then_some(out)
 }
 
-/// Voice -> filter -> EQ (-> reverb), loudness-normalised.
-pub fn render_chain(c: &Chain, p: Probe) -> Option<Vec<f32>> {
-    let mut y = render_voice(c, p)?;
-    post(c, &mut y);
-    normalise(&mut y);
-    y.iter().all(|v| v.is_finite()).then_some(y)
-}
-
-fn post(c: &Chain, y: &mut [f32]) {
-    run(&mut dev(KIND_FILTER, &[(0, 0.0), (1, c.cutoff), (2, c.fdamp)]), y);
-    run(&mut eq_device(&c.eq_hz, &c.eq_db), y);
-    if let Some([mix, size, damp, pre]) = c.reverb {
-        run(&mut dev(KIND_REVERB, &[(0, mix), (1, size), (2, damp), (3, pre)]), y);
-    }
-}
-
-/// Long-term band log power (time-average of the 2048-point band spectrogram, frames weighted equally).
-fn ltas(x: &[f32]) -> Vec<f64> {
-    let s = spec(x, 2048, BANDS);
-    let mut m = vec![0.0; BANDS];
-    for row in &s { for (a, v) in m.iter_mut().zip(row) { *a += *v as f64 / s.len() as f64; } }
-    m
-}
-
-/// ln-power response per dB of each EQ band at the given centres, on the loss's band grid.
-fn eq_basis(hz: &[f32; 4]) -> Vec<[f64; 4]> {
-    let n = 2048;
-    let mut cols = vec![[0.0; 4]; BANDS];
-    for i in 0..4 {
-        let mut db = [0.0; 4];
-        db[i] = 6.0;
-        let mut x = vec![0f32; n * 4];
-        x[0] = 1.0;
-        run(&mut eq_device(hz, &db), &mut x);
-        let mut buf: Vec<Complex<f32>> = x[..n].iter().map(|&v| Complex::new(v, 0.0)).collect();
-        FftPlanner::<f32>::new().plan_fft_forward(n).process(&mut buf);
-        for b in 0..BANDS {
-            let (a, z) = band_edges(n, b);
-            let e: f32 = buf[a..z].iter().map(|c| c.norm_sqr()).sum::<f32>() / (z - a) as f32;
-            cols[b][i] = (e as f64).ln() / 6.0;
-        }
-    }
-    cols
-}
-
-fn band_edges(n: usize, b: usize) -> (usize, usize) {
-    let e = |b: usize| ((40.0 * (16000.0f32 / 40.0).powf(b as f32 / BANDS as f32) / SR as f32 * n as f32) as usize).clamp(1, n / 2);
-    let (a, z) = (e(b), e(b + 1).max(e(b) + 1));
-    (a, z.min(n / 2))
-}
-
-/// Closed-form EQ: ridge least squares of the mean (target - candidate) long-term log spectrum onto the four
-/// band responses, centred so overall level (normalised away anyway) doesn't count. Shared across probe notes.
-pub fn solve_eq(hz: &[f32; 4], targets: &[Vec<f64>], cands: &[Vec<f32>]) -> [f32; 4] {
-    let mut r = vec![0.0; BANDS];
-    for (t, y) in targets.iter().zip(cands) {
-        for (a, (u, v)) in r.iter_mut().zip(t.iter().zip(ltas(y))) { *a += (u - v) / cands.len() as f64; }
-    }
-    let basis = eq_basis(hz);
-    let mean = |f: &dyn Fn(usize) -> f64| (0..BANDS).map(f).sum::<f64>() / BANDS as f64;
-    let rm = mean(&|b| r[b]);
-    let bm: Vec<f64> = (0..4).map(|i| mean(&|b| basis[b][i])).collect();
-    let mut ata = [[0.0f64; 4]; 4];
-    let mut atb = [0.0f64; 4];
-    for b in 0..BANDS {
-        for i in 0..4 {
-            atb[i] += (basis[b][i] - bm[i]) * (r[b] - rm);
-            for j in 0..4 { ata[i][j] += (basis[b][i] - bm[i]) * (basis[b][j] - bm[j]); }
-        }
-    }
-    for i in 0..4 { ata[i][i] += EQ_RIDGE * BANDS as f64; }
-    let g = solve4(ata, atb);
-    g.map(|v| v.clamp(-EQ_MAX_DB, EQ_MAX_DB) as f32)
-}
-
-fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> [f64; 4] {
-    for c in 0..4 {
-        let p = (c..4).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs())).unwrap();
-        a.swap(c, p);
-        b.swap(c, p);
-        for r in 0..4 {
-            if r != c && a[c][c].abs() > 1e-12 {
-                let f = a[r][c] / a[c][c];
-                for k in 0..4 { a[r][k] -= f * a[c][k]; }
-                b[r] -= f * b[c];
-            }
-        }
-    }
-    std::array::from_fn(|i| if a[i][i].abs() > 1e-12 { b[i] / a[i][i] } else { 0.0 })
-}
-
-pub fn target_ltas(x: &[f32]) -> Vec<f64> {
-    ltas(x)
-}
-
-/// Pre-EQ signal (voice -> filter), normalised, for the EQ solve.
+/// Voice -> filter, normalised: the input to the gain solve. Body and EQ are linear and time-invariant, so applying them
+/// after the filter (in [`finish`]) is the same as the device order bore -> body -> filter -> EQ.
 pub fn pre_eq(c: &Chain, p: Probe) -> Option<Vec<f32>> {
     let mut y = render_voice(c, p)?;
     run(&mut dev(KIND_FILTER, &[(0, 0.0), (1, c.cutoff), (2, c.fdamp)]), &mut y);
@@ -367,15 +388,114 @@ pub fn pre_eq(c: &Chain, p: Probe) -> Option<Vec<f32>> {
     Some(y)
 }
 
-/// From a [`pre_eq`] signal: apply the chain's EQ (and reverb if set) and renormalise.
+/// From a [`pre_eq`] signal: body, EQ (and reverb if set), renormalised.
 pub fn finish(c: &Chain, y: &mut [f32]) {
-    run(&mut eq_device(&c.eq_hz, &c.eq_db), y);
+    if let Some(b) = &c.body {
+        run(&mut body_device(b), y);
+    }
+    run(&mut eq_device(c), y);
     if let Some(rv) = c.reverb {
         apply_reverb(rv, y);
     }
     normalise(y);
 }
 
+pub fn render_chain(c: &Chain, p: Probe) -> Option<Vec<f32>> {
+    let mut y = pre_eq(c, p)?;
+    finish(c, &mut y);
+    y.iter().all(|v| v.is_finite()).then_some(y)
+}
+
 pub fn apply_reverb([mix, size, damp, pre]: [f32; 4], y: &mut [f32]) {
     run(&mut dev(KIND_REVERB, &[(0, mix), (1, size), (2, damp), (3, pre)]), y);
+}
+
+fn solve_edges(b: usize) -> (usize, usize) {
+    let e = |b: usize| ((40.0 * (16000.0f32 / 40.0).powf(b as f32 / SOLVE_BANDS as f32) / SR as f32 * SOLVE_N as f32) as usize).clamp(1, SOLVE_N / 2);
+    let (a, z) = (e(b), e(b + 1).max(e(b) + 1));
+    (a, z.min(SOLVE_N / 2))
+}
+
+/// Long-term band log power on the solve grid (time-average of the band spectrogram).
+pub fn target_ltas(x: &[f32]) -> Vec<f64> {
+    let s = spec(x, SOLVE_N, SOLVE_BANDS);
+    let mut m = vec![0.0; SOLVE_BANDS];
+    for row in &s { for (a, v) in m.iter_mut().zip(row) { *a += *v as f64 / s.len() as f64; } }
+    m
+}
+
+/// ln-power response per dB of each band of a device, one column per band, on the solve grid.
+fn basis(make: &dyn Fn(usize) -> Device, n_bands: usize) -> Vec<Vec<f64>> {
+    let mut cols = vec![vec![0.0; n_bands]; SOLVE_BANDS];
+    let fft = FftPlanner::<f32>::new().plan_fft_forward(SOLVE_N);
+    for i in 0..n_bands {
+        let mut x = vec![0f32; SOLVE_N];
+        x[0] = 1.0;
+        run(&mut make(i), &mut x);
+        let mut buf: Vec<Complex<f32>> = x.iter().map(|&v| Complex::new(v, 0.0)).collect();
+        fft.process(&mut buf);
+        for b in 0..SOLVE_BANDS {
+            let (a, z) = solve_edges(b);
+            let e: f32 = buf[a..z].iter().map(|c| c.norm_sqr()).sum::<f32>() / (z - a) as f32;
+            cols[b][i] = (e as f64).ln() / 6.0;
+        }
+    }
+    cols
+}
+
+/// Closed-form body + EQ gains: ridge least squares of the mean (target - candidate) long-term log spectrum onto every
+/// band's response (log responses of cascaded filters add), centred so overall level doesn't count. Shared across
+/// probe notes, so the gains can only model fixed-frequency shaping. Fills `c.body.db` and `c.eq_db`.
+pub fn solve_gains(c: &mut Chain, targets: &[Vec<f64>], cands: &[Vec<f32>]) {
+    let mut r = vec![0.0; SOLVE_BANDS];
+    for (t, y) in targets.iter().zip(cands) {
+        for (a, (u, v)) in r.iter_mut().zip(t.iter().zip(target_ltas(y))) { *a += (u - v) / cands.len() as f64; }
+    }
+    let eq_cols = basis(&|i| { let mut db = [0.0; 4]; db[i] = 6.0; bands_device(KIND_EQ, &c.eq_hz, &db, EQ_DAMPING) }, 4);
+    let mut cols = eq_cols;
+    let mut ridge = vec![EQ_RIDGE; 4];
+    let mut cap = vec![EQ_MAX_DB; 4];
+    if let Some(b) = &c.body {
+        let bc = basis(&|i| { let mut db = [0.0; BODY_BANDS]; db[i] = 6.0; bands_device(KIND_BODY, &b.hz, &db, b.damping) }, BODY_BANDS);
+        for (row, extra) in cols.iter_mut().zip(bc) { row.extend(extra); }
+        ridge.extend([BODY_RIDGE; BODY_BANDS]);
+        cap.extend([BODY_MAX_DB; BODY_BANDS]);
+    }
+    let k = ridge.len();
+    let mean = |f: &dyn Fn(usize) -> f64| (0..SOLVE_BANDS).map(f).sum::<f64>() / SOLVE_BANDS as f64;
+    let rm = mean(&|b| r[b]);
+    let cm: Vec<f64> = (0..k).map(|i| mean(&|b| cols[b][i])).collect();
+    let mut ata = vec![vec![0.0f64; k]; k];
+    let mut atb = vec![0.0f64; k];
+    for b in 0..SOLVE_BANDS {
+        for i in 0..k {
+            atb[i] += (cols[b][i] - cm[i]) * (r[b] - rm);
+            for j in 0..k { ata[i][j] += (cols[b][i] - cm[i]) * (cols[b][j] - cm[j]); }
+        }
+    }
+    for i in 0..k { ata[i][i] += ridge[i] * SOLVE_BANDS as f64; }
+    let g = solve(ata, atb);
+    for i in 0..4 { c.eq_db[i] = g[i].clamp(-cap[i], cap[i]) as f32; }
+    if let Some(b) = &mut c.body {
+        for i in 0..BODY_BANDS { b.db[i] = g[4 + i].clamp(-cap[4 + i], cap[4 + i]) as f32; }
+    }
+}
+
+/// Gauss-Jordan with partial pivoting.
+fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
+    let n = b.len();
+    for c in 0..n {
+        let p = (c..n).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs())).unwrap();
+        a.swap(c, p);
+        b.swap(c, p);
+        if a[c][c].abs() < 1e-12 { continue; }
+        for r in 0..n {
+            if r != c {
+                let f = a[r][c] / a[c][c];
+                for k in 0..n { a[r][k] -= f * a[c][k]; }
+                b[r] -= f * b[c];
+            }
+        }
+    }
+    (0..n).map(|i| if a[i][i].abs() > 1e-12 { b[i] / a[i][i] } else { 0.0 }).collect()
 }

@@ -5,7 +5,7 @@ import { MATCHED_PRESETS } from '../src/content/presets.matched'
 import { applyPreset, clampParams, presetsFor } from '../src/content/presets'
 
 describe('matched presets', () => {
-  it('are offered on MIDI tracks and apply as bore -> filter -> EQ -> reverb', () => {
+  it('are offered on MIDI tracks and apply as bore -> (body ->) filter -> EQ -> reverb', () => {
     const doc = new Y.Doc()
     const t = addTrack(doc, 'midi', 'midi')
     expect(MATCHED_PRESETS).toHaveLength(5)
@@ -13,7 +13,7 @@ describe('matched presets', () => {
       expect(presetsFor(doc, t).find((x) => x.id === p.id)?.group).toBe('matched')
       applyPreset(doc, t, p.id)
       const devs = getDevices(doc).filter((d) => d.trackId === t && d.type !== MIX)
-      expect(devs).toHaveLength(4)
+      expect(devs).toHaveLength(1 + p.fx.length)
       expect(devs.map((d) => d.type)).toEqual([p.type, ...p.fx.map((f) => f.type)])
     }
   })
