@@ -49,6 +49,11 @@ const ICONS = {
   magnet: `<path d="M3.4 2.6h2.8v5.2a1.8 1.8 0 0 0 3.6 0V2.6h2.8v5.2a4.6 4.6 0 0 1-9.2 0Z"/><path d="M3.4 5.4h2.8M9.8 5.4h2.8"/>`,
   power: `<path d="M8 2.4v5"/><path d="M4.7 4.6a5 5 0 1 0 6.6 0"/>`,
   automation: `<path d="M2.2 12.2 5.4 5.6l4 3.8 4.4-5.6"/><circle cx="5.4" cy="5.6" r=".6" ${F}/><circle cx="9.4" cy="9.4" r=".6" ${F}/>`,
+  // (drawn on a 20 grid, scaled to this one)
+  phone: `<g transform="scale(.8)"><rect x="5.5" y="1.5" width="9" height="17" rx="2"/><path d="M9 15.5h2"/></g>`,
+  cloud: `<g transform="scale(.8)"><path d="M5.5 15.5a3.5 3.5 0 0 1-.4-6.98 5 5 0 0 1 9.7-.5A4 4 0 0 1 14.5 15.5z"/></g>`,
+  zoomOut: `<g transform="scale(.8)" stroke-width="1.8"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 18 18M6 8.5h5"/></g>`,
+  zoomIn: `<g transform="scale(.8)" stroke-width="1.8"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 18 18M6 8.5h5M8.5 6v5"/></g>`,
   chat: `<path d="M3.2 3.2h9.6a1.2 1.2 0 0 1 1.2 1.2v5.8a1.2 1.2 0 0 1-1.2 1.2H7.6L4.6 13.8v-2.4H3.2A1.2 1.2 0 0 1 2 10.2V4.4a1.2 1.2 0 0 1 1.2-1.2Z"/>`,
   users: `<circle cx="6" cy="5.4" r="2.4"/><path d="M1.8 13.2a4.2 4.2 0 0 1 8.4 0"/><path d="M10.6 3.1a2.4 2.4 0 0 1 0 4.6M12.2 9.4a4.2 4.2 0 0 1 2 3.8"/>`,
   // track controls

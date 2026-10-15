@@ -22,6 +22,8 @@ import { renderProject } from '../audio/render'
 import { exportDialog } from './exportDialog'
 import { projectMenu } from './projectMenu'
 import { h } from '../dom'
+import { icon } from '../theme/icons'
+import { HEADER, applyLayout } from './layout'
 import { importFile, PLAYBACK_MAX_BYTES } from '../samples'
 import { discardTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, uploadAll, uploadTake } from '../takes'
 import type { Session } from '../project/session'
@@ -46,7 +48,6 @@ import { createRecorder } from '../project/recorder'
 import { createProjectStore } from '../project/store'
 import { createAutoValues, createDrawers, createMixDrive, createSelection, createTabAvailability, type TabName } from '../project/viewState'
 
-const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in styles.css
 const audioFiles = (list: FileList | null | undefined) =>
   [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
 
@@ -70,6 +71,7 @@ type Src = SrcView & {
 export function mountTimeline(s: Session, projectName: string, readOnly = false, renameProject?: (name: string) => Promise<unknown> | void,
   cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean }) {
   const { doc, undo } = s
+  applyLayout()
   let pb: Playback | null = null // created once the doc has synced (needs meta.sampleRate)
   const sel = createSelection() // clips, the open MIDI editor, note, pad and armed looper (local UI state)
   const drawers = createDrawers() // which drawers each track (or MASTER_TRACK) has open (local UI state, all shut by default)
@@ -181,9 +183,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
   // Where the project lives: a phone for this device's browser storage, a cloud for the server.
   const where = h('span', { className: 'dim where', onpointerdown: (e) => e.stopPropagation(), title: s.local ? 'saved in this browser, on this device' : 'saved in the cloud' })
-  where.innerHTML = s.local
-    ? '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="1.5" width="9" height="17" rx="2"/><path d="M9 15.5h2"/></svg>'
-    : '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 15.5a3.5 3.5 0 0 1-.4-6.98 5 5 0 0 1 9.7-.5A4 4 0 0 1 14.5 15.5z"/></svg>'
+  where.append(s.local ? icon('phone', 16) : icon('cloud', 18))
   const bar = h('header', { className: 'bar' }) // (filled by `Bar` once the recorder exists)
   const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }, where, projectTitle()))
   const rulerBody = h('div', { className: 'ruler-body' })

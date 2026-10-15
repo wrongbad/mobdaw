@@ -5,9 +5,9 @@ import type { Accessor } from 'solid-js'
 import type { AwarenessState } from '@mobdaw/shared'
 import type { ProjectStore } from '../project/store'
 import { homeLink } from '../router'
+import { iconHtml } from '../theme/icons'
 
 const initials = (n: string) => n.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()
-const glass = (sign: string) => `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 18 18M6 8.5h5${sign}"/></svg>`
 
 export type BarProps = {
   store: ProjectStore
@@ -53,8 +53,8 @@ export function Bar(p: BarProps) {
           <Index each={users()}>{(u) => <span class="dot" title={u().username} style={{ background: u().color }}>{initials(u().username)}</span>}</Index>
         </span>
         <div class="bar-btns">
-          <button class="bar-btn zoom" title="zoom out (ctrl + scroll)" on:click={() => p.onZoom(1 / 1.5)} innerHTML={glass('')} />
-          <button class="bar-btn zoom" title="zoom in (ctrl + scroll)" on:click={() => p.onZoom(1.5)} innerHTML={glass('M8.5 6v5')} />
+          <button class="bar-btn zoom" title="zoom out (ctrl + scroll)" on:click={() => p.onZoom(1 / 1.5)} innerHTML={iconHtml('zoomOut', 18)} />
+          <button class="bar-btn zoom" title="zoom in (ctrl + scroll)" on:click={() => p.onZoom(1.5)} innerHTML={iconHtml('zoomIn', 18)} />
           <button class="bar-btn" title="render the whole project to a file" on:click={p.onExport}>export</button>
           <Show when={!p.local}>
             <button class="chat-btn" classList={{ on: p.chatOpen() }} title="chat" on:click={p.onChat}>{p.unread() ? `chat (${p.unread()})` : 'chat'}</button>

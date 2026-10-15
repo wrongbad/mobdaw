@@ -116,7 +116,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 /* the ruler's bottom line is a pseudo-element under the playhead copies (a real border would draw over them) */
 .ruler::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); z-index: 0; pointer-events: none; }
 /* tracks are tiles with a gutter around them: the ruler's corner is the track header plus the gutter, so its line meets the headers' */
-:root { --gutter: 6px; --head: 140px; }
+/* --gutter and --head are set from ui/layout.ts */
 .corner, .head { flex: none; position: sticky; z-index: 2; background: var(--panel); }
 .corner { left: 0; width: calc(var(--head) + var(--gutter)); border-bottom: 1px solid var(--line); }
 /* (the shadow keeps the gutter black while clips scroll under the pinned header) */

@@ -8,6 +8,7 @@ import { clamp, dragPointer } from './blocks'
 import { lift } from './lift'
 import { segmented } from './segmented'
 import { deleteMenu } from './popover'
+import { HEADER } from './layout'
 import { noteName } from './noteName'
 import {
   DEFAULT_GRID, GRIDS, PITCH_MAX as PMAX, PITCH_MIN as PMIN, applyPatches, cancelNoteDrag, centrePitch, clampVelocity, gridTicks, inMarquee, moveGroup,
@@ -96,7 +97,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     if (!scroller) return
     if (scroller !== watched) { watched?.removeEventListener('scroll', stickKeys); scroller.addEventListener('scroll', stickKeys, { passive: true }); watched = scroller }
     const hd = scroller.querySelector<HTMLElement>('.head')
-    const visible = hd ? hd.getBoundingClientRect().right : scroller.getBoundingClientRect().left + 146
+    const visible = hd ? hd.getBoundingClientRect().right : scroller.getBoundingClientRect().left + HEADER
     keys.style.transform = `translateX(${Math.max(0, visible - grid.getBoundingClientRect().left)}px)`
   }
   let watched: HTMLElement | null = null

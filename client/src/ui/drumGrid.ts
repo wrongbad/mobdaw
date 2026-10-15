@@ -6,6 +6,7 @@ import { h } from '../dom'
 import { drumColor } from './drumColor'
 import { segmented } from './segmented'
 import { clampVelocity, gmDrum, hitOpacity, nextVelocity } from './noteOps'
+import { HEADER } from './layout'
 
 const STEPS = 4 // steps per beat (a 1/16 note)
 
@@ -134,7 +135,7 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
     if (!scroller) return
     if (scroller !== watched) { watched?.removeEventListener('scroll', stick); scroller.addEventListener('scroll', stick, { passive: true }); watched = scroller }
     const hd = scroller.querySelector<HTMLElement>('.head')
-    const visible = hd ? hd.getBoundingClientRect().right : scroller.getBoundingClientRect().left + 146
+    const visible = hd ? hd.getBoundingClientRect().right : scroller.getBoundingClientRect().left + HEADER
     grid.style.setProperty('--stick', `${Math.max(0, visible - grid.getBoundingClientRect().left)}px`)
   }
   /** Call when the editor is closed. */
