@@ -1,6 +1,8 @@
 // Chat sidebar: an SMS-style view of the doc's append-only `chat` array (synced and persisted with the project).
 import { addChatMessage, chatLog, deleteChatMessage, type AwarenessState, type ChatMessage } from '@mobdaw/shared'
 import type * as Y from 'yjs'
+import { For, Show, createSignal } from 'solid-js'
+import { render } from 'solid-js/web'
 import { h } from '../dom'
 import { popover } from './popover'
 
@@ -36,32 +38,38 @@ export function chatPanel({ doc, user, readOnly, onUnread }: ChatDeps) {
   }
   const el = h('aside', { className: 'chat', hidden: true }, list, h('div', { className: 'chat-in' }, input, send))
 
-  function render() {
-    const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40
-    const msgs = log.toArray().slice(-SHOWN)
-    let prev: ChatMessage | undefined
-    list.replaceChildren(...msgs.flatMap((m) => {
+  const [msgs, setMsgs] = createSignal<ChatMessage[]>([])
+  const Msgs = () => (
+    <For each={msgs()}>{(m, i) => {
       const me = m.username === user.username
       const side = me ? 'me' : 'them'
-      const out: HTMLElement[] = []
-      if (!prev || prev.username !== m.username || m.ts - prev.ts > GAP_MS)
-        out.push(h('div', { className: `msg-meta ${side}` }, me ? clock(m.ts) : `${m.username} · ${clock(m.ts)}`))
-      const b = h('div', { className: `msg ${side}` }, m.text)
-      if (!me) b.style.boxShadow = `inset 2px 0 0 ${m.color}`
-      else if (!readOnly) b.oncontextmenu = (e) => { // own messages only: the server can't tell who wrote what
-        e.preventDefault()
-        popover(b, [['delete message', () => deleteChatMessage(doc, m.id)]], [e.clientX, e.clientY])
-      }
-      out.push(b)
-      prev = m
-      return out
-    }))
+      const prev = () => msgs()[i() - 1]
+      return <>
+        <Show when={!prev() || prev()!.username !== m.username || m.ts - prev()!.ts > GAP_MS}>
+          <div class={`msg-meta ${side}`}>{me ? clock(m.ts) : `${m.username} · ${clock(m.ts)}`}</div>
+        </Show>
+        <div
+          class={`msg ${side}`}
+          style={me ? undefined : { 'box-shadow': `inset 2px 0 0 ${m.color}` }}
+          oncontextmenu={me && !readOnly ? (e) => { // own messages only: the server can't tell who wrote what
+            e.preventDefault()
+            popover(e.currentTarget, [['delete message', () => deleteChatMessage(doc, m.id)]], [e.clientX, e.clientY])
+          } : undefined}
+        >{m.text}</div>
+      </>
+    }}</For>
+  )
+  const dispose = render(Msgs, list)
+
+  function sync() {
+    const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40
+    setMsgs(log.toArray().slice(-SHOWN)) // (the entries keep their identity, so <For> only adds and removes rows)
     if (atEnd) list.scrollTop = list.scrollHeight
     if (open) seen = log.length
     onUnread(open ? 0 : Math.max(0, log.length - seen))
   }
-  log.observe(render)
-  render()
+  log.observe(sync)
+  sync()
 
   return {
     el,
@@ -69,11 +77,11 @@ export function chatPanel({ doc, user, readOnly, onUnread }: ChatDeps) {
     setOpen(o: boolean) {
       open = o
       el.hidden = !o
-      render()
+      sync()
       if (o) { list.scrollTop = list.scrollHeight; if (!readOnly) input.focus() }
     },
     /** Treat everything already in the log as read (history loaded on sync). */
     markSeen() { seen = log.length; onUnread(0) },
-    destroy() { log.unobserve(render) },
+    destroy() { log.unobserve(sync); dispose() },
   }
 }
