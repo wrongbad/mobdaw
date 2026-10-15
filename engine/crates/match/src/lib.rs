@@ -128,6 +128,35 @@ pub struct Target {
     pub env: Vec<f32>,
     /// Vibrato (depth cents, rate Hz) of the held part, when the pitch term is on.
     pub vib: Option<(f32, f32)>,
+    /// The attack segment (first [`ATTACK_S`]): 256-point band spectrogram and 5 ms dB envelope.
+    pub att_spec: Vec<Vec<f32>>,
+    pub att_env: Vec<f32>,
+}
+
+/// Attack segment length and its weight in [`loss`]: the onset is a small part of a 1.8 s clip, so without its own
+/// term the search happily trades a wrong attack (a too-fast bow) for a slightly better sustain.
+pub const ATTACK_S: f32 = 0.3;
+pub const W_ATTACK: f32 = 1.0;
+
+fn attack_part(x: &[f32]) -> &[f32] {
+    &x[..((ATTACK_S * SR as f32) as usize).min(x.len())]
+}
+
+/// dB envelope in 5 ms chunks, in the same units as [`envelope`].
+fn fine_envelope(x: &[f32]) -> Vec<f32> {
+    x.chunks(SR / 200).map(|c| (c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32 + 1e-9).ln() * 0.5 * 8.686 / 20.0).collect()
+}
+
+/// 10%..90% rise time (s) to the sustained level (median 5 ms RMS from 0.4 to 1.0 s); robust to vibrato and to an
+/// onset overshoot, unlike rising to the peak.
+pub fn attack_time(x: &[f32]) -> f32 {
+    let c = SR / 200;
+    let e: Vec<f32> = x[..(SR as f32 * 1.0) as usize].chunks(c).map(|c| (c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).sqrt()).collect();
+    let mut sus: Vec<f32> = e[80..].to_vec();
+    sus.sort_by(f32::total_cmp);
+    let lvl = sus[sus.len() / 2];
+    let t = |f: f32| e.iter().position(|&v| v >= f * lvl).unwrap_or(e.len()) as f32 * 0.005;
+    t(0.9) - t(0.1)
 }
 
 fn envelope(x: &[f32]) -> Vec<f32> {
@@ -135,7 +164,8 @@ fn envelope(x: &[f32]) -> Vec<f32> {
 }
 
 pub fn target(x: &[f32]) -> Target {
-    Target { specs: [512, 2048].iter().map(|&n| spec(x, n, 40)).collect(), env: envelope(x), vib: None }
+    let a = attack_part(x);
+    Target { specs: [512, 2048].iter().map(|&n| spec(x, n, 40)).collect(), env: envelope(x), vib: None, att_spec: spec(a, 256, 24), att_env: fine_envelope(a) }
 }
 
 /// As [`target`], plus the vibrato of the held part for the pitch term of [`loss`].
@@ -159,11 +189,34 @@ pub fn loss(t: &Target, y: &[f32]) -> f32 {
     }
     let ye = envelope(y);
     let e: f32 = t.env.iter().zip(&ye).map(|(a, b)| (a - b).abs()).sum::<f32>() / t.env.len().max(1) as f32;
-    tot + 2.0 * e
+    tot + 2.0 * e + W_ATTACK * attack_loss(t, y)
 }
 
-/// Weights of the pitch term: per cent of vibrato depth error, per Hz of rate error (rate only counts when the target
-/// has a vibrato to speak of).
+/// The parts of [`loss_pitched`]: (spectral + envelope, attack, vibrato).
+pub fn loss_parts(t: &Target, y: &[f32], p: Probe) -> (f32, f32, f32) {
+    let a = W_ATTACK * attack_loss(t, y);
+    let base = loss(t, y) - a;
+    (base, a, loss_pitched(t, y, p) - base - a)
+}
+
+/// Attack segment: fine-time log band spectrum L1 plus 2x the 5 ms dB envelope L1.
+pub fn attack_loss(t: &Target, y: &[f32]) -> f32 {
+    let a = attack_part(y);
+    let ys = spec(a, 256, 24);
+    let (mut s, mut c) = (0.0, 0);
+    for (u, v) in t.att_spec.iter().zip(&ys) {
+        for (p, q) in u.iter().zip(v) {
+            s += (p - q).abs();
+            c += 1;
+        }
+    }
+    let ye = fine_envelope(a);
+    let e: f32 = t.att_env.iter().zip(&ye).map(|(p, q)| (p - q).abs()).sum::<f32>() / t.att_env.len().max(1) as f32;
+    s / c.max(1) as f32 + 2.0 * e
+}
+
+/// Weights of the pitch term: per cent of vibrato depth error, per Hz of rate error (rate only counts when both have a
+/// vibrato to speak of).
 pub const W_DEPTH: f32 = 0.08;
 pub const W_RATE: f32 = 0.25;
 
@@ -172,7 +225,8 @@ pub fn loss_pitched(t: &Target, y: &[f32], p: Probe) -> f32 {
     let base = loss(t, y);
     let Some((td, tr)) = t.vib else { return base };
     let (yd, yr) = vibrato(y, p);
-    let rate_w = (td / 8.0).min(1.0);
+    // a near-flat contour's "rate" is jitter: only compare rates when both have a vibrato to speak of
+    let rate_w = (td.min(yd) / 8.0).min(1.0);
     base + W_DEPTH * (td - yd).abs() + W_RATE * rate_w * (tr - yr).abs()
 }
 
@@ -499,4 +553,70 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
         }
     }
     (0..n).map(|i| if a[i][i].abs() > 1e-12 { b[i] / a[i][i] } else { 0.0 }).collect()
+}
+
+// ---- Programs and best.json ----
+
+/// Violin body peaks (air mode, body modes, bridge hill); the cello's sit roughly 0.4x lower.
+pub const VIOLIN_BODY: [f32; 8] = [275.0, 400.0, 460.0, 540.0, 700.0, 1000.0, 2500.0, 3200.0];
+pub const PENALTY: f32 = 60.0;
+
+pub struct Prog { pub gm: i32, pub name: &'static str, pub keys: [u32; 3], pub strings: bool }
+pub const PROGRAMS: [Prog; 5] = [
+    Prog { gm: 71, name: "clarinet", keys: [55, 62, 69], strings: false },
+    Prog { gm: 65, name: "alto-sax", keys: [57, 64, 71], strings: false },
+    Prog { gm: 73, name: "flute", keys: [67, 74, 81], strings: false },
+    Prog { gm: 42, name: "cello", keys: [41, 52, 62], strings: true },
+    Prog { gm: 40, name: "violin", keys: [60, 69, 79], strings: true },
+];
+
+pub fn setup(p: &Prog) -> Setup {
+    if !p.strings {
+        return Setup { character: (0.0, 1.0), body: None };
+    }
+    let k = if p.name == "cello" { 0.4 } else { 1.0 };
+    Setup { character: (0.75, 1.0), body: Some(VIOLIN_BODY.map(|f| f * k)) }
+}
+
+/// The dry probe notes for a program.
+pub fn probes(p: &Prog) -> Vec<Probe> {
+    p.keys.iter().map(|&k| Probe { key: k, vel: 90, hold: 1.2, dur: 1.8 }).collect()
+}
+
+fn num_after(s: &str, key: &str) -> Option<f32> {
+    let i = s.find(&format!("\"{key}\":"))? + key.len() + 3;
+    let t = s[i..].trim_start();
+    let end = t.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e')).unwrap_or(t.len());
+    t[..end].parse().ok()
+}
+
+fn bands_in(s: &str, key: &str) -> Vec<[f32; 3]> {
+    let Some(i) = s.find(&format!("\"{key}\": [")) else { return vec![] };
+    let body = &s[i..i + s[i..].find(']').unwrap()];
+    body.split('{').skip(1).map(|b| [num_after(b, "freq_hz").unwrap(), num_after(b, "gain_db").unwrap(), num_after(b, "damping").unwrap()]).collect()
+}
+
+/// A dry chain (no reverb) from a `match_chain` best.json (older files without pitch vibrato or body are fine).
+pub fn chain_from_json(s: &str) -> Chain {
+    let b = &s[s.find("\"bore\": {").unwrap() + 9..];
+    let b = &b[..b.find('}').unwrap()];
+    let bore = PARAMS.iter().map(|(n, _, _)| num_after(b, n).unwrap_or(0.0)).collect();
+    let body = bands_in(s, "body");
+    let eq = bands_in(s, "eq");
+    let f = &s[s.find("\"filter\":").unwrap()..];
+    Chain {
+        bore,
+        open: num_after(b, "bore").unwrap() > 0.5,
+        vibrato_hz: num_after(b, "vibrato_hz").unwrap_or(5.0),
+        cutoff: num_after(f, "cutoff_hz").unwrap(),
+        fdamp: num_after(f, "damping").unwrap(),
+        body: (!body.is_empty()).then(|| Body {
+            hz: std::array::from_fn(|i| body[i][0]),
+            damping: body[0][2],
+            db: std::array::from_fn(|i| body[i][1]),
+        }),
+        eq_hz: std::array::from_fn(|i| eq[i][0]),
+        eq_db: std::array::from_fn(|i| eq[i][1]),
+        reverb: None,
+    }
 }

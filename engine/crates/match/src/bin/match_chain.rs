@@ -6,27 +6,6 @@ use match_::*;
 use rayon::prelude::*;
 use std::{fmt::Write as _, fs, path::Path};
 
-/// Violin body peaks (air mode, body modes, bridge hill); the cello's sit roughly 0.4x lower.
-const VIOLIN_BODY: [f32; 8] = [275.0, 400.0, 460.0, 540.0, 700.0, 1000.0, 2500.0, 3200.0];
-
-struct Prog { gm: i32, name: &'static str, keys: [u32; 3], strings: bool }
-const PROGRAMS: [Prog; 5] = [
-    Prog { gm: 71, name: "clarinet", keys: [55, 62, 69], strings: false },
-    Prog { gm: 65, name: "alto-sax", keys: [57, 64, 71], strings: false },
-    Prog { gm: 73, name: "flute", keys: [67, 74, 81], strings: false },
-    Prog { gm: 42, name: "cello", keys: [41, 52, 62], strings: true },
-    Prog { gm: 40, name: "violin", keys: [60, 69, 79], strings: true },
-];
-const PENALTY: f32 = 60.0;
-
-fn setup(p: &Prog) -> Setup {
-    if !p.strings {
-        return Setup { character: (0.0, 1.0), body: None };
-    }
-    let k = if p.name == "cello" { 0.4 } else { 1.0 };
-    Setup { character: (0.75, 1.0), body: Some(VIOLIN_BODY.map(|f| f * k)) }
-}
-
 struct Rng(u64);
 impl Rng {
     fn u(&mut self) -> f64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; (self.0 >> 11) as f64 / (1u64 << 53) as f64 }
@@ -80,7 +59,7 @@ fn main() {
     let gens: usize = a.get(3).and_then(|s| s.parse().ok()).unwrap_or(120);
     let pop: usize = a.get(4).and_then(|s| s.parse().ok()).unwrap_or(32);
     let only: Option<Vec<String>> = a.iter().position(|s| s == "--only").map(|i| a[i + 1].split(',').map(String::from).collect());
-    let mut report = String::from("| program | GM | bore | dry loss (incl. vibrato term) | vibrato target / fit (cents, Hz) | other bore | wet: no reverb | wet: fitted reverb |\n|---|---|---|---|---|---|---|---|\n");
+    let mut report = String::from("| program | GM | bore | dry loss (incl. vibrato term) | vibrato target / fit (cents, Hz) | attack 10-90% target / fit (ms) | other bore | wet: no reverb | wet: fitted reverb |\n|---|---|---|---|---|---|---|---|---|\n");
     let mut params_md = String::new();
     for pr in PROGRAMS.iter().filter(|p| only.as_ref().map_or(true, |o| o.iter().any(|n| n == p.name))) {
         let (prog, name) = (pr.gm, pr.name);
@@ -105,6 +84,8 @@ fn main() {
         let vib_y: Vec<(f32, f32)> = probes.iter().map(|p| vibrato(&render_chain(&c, *p).unwrap(), *p)).collect();
         let avg = |v: &[(f32, f32)]| (v.iter().map(|x| x.0).sum::<f32>() / v.len() as f32, v.iter().map(|x| x.1).sum::<f32>() / v.len() as f32);
         let (vt, vy) = (avg(&vib_t), avg(&vib_y));
+        let att_t = tgt.iter().map(|t| attack_time(t)).sum::<f32>() / 3.0 * 1000.0;
+        let att_y = probes.iter().map(|p| attack_time(&render_chain(&c, *p).unwrap())).sum::<f32>() / 3.0 * 1000.0;
 
         // 2. reverb vs the soundfont's wet render, longer clips for the tail
         let wp: Vec<Probe> = pr.keys.iter().map(|&k| Probe { key: k, vel: 90, hold: 1.2, dur: 3.0 }).collect();
@@ -143,8 +124,8 @@ fn main() {
         write!(js, "],\n  \"reverb\": {{ \"mix\": {:.3}, \"size\": {:.3}, \"damping\": {:.3}, \"predelay_ms\": {:.1} }}\n}}\n", rv[0], rv[1], rv[2], rv[3]).unwrap();
         fs::write(dir.join("best.json"), &js).unwrap();
         writeln!(params_md, "### {name}\n```json\n{js}```").unwrap();
-        writeln!(report, "| {name} | {prog} | {} | {dry:.2} | {:.0} / {:.0}, {:.1} / {:.1} | {:.2} | {no_rv:.2} | {wet_l:.2} |", if open { "open" } else { "closed" }, vt.0, vy.0, vt.1, vy.1, res[1].2).unwrap();
-        eprintln!("{name}: dry {dry:.2} vib {vt:?} -> {vy:?} wet {no_rv:.2} -> {wet_l:.2}");
+        writeln!(report, "| {name} | {prog} | {} | {dry:.2} | {:.0} / {:.0}, {:.1} / {:.1} | {att_t:.0} / {att_y:.0} | {:.2} | {no_rv:.2} | {wet_l:.2} |", if open { "open" } else { "closed" }, vt.0, vy.0, vt.1, vy.1, res[1].2).unwrap();
+        eprintln!("{name}: dry {dry:.2} vib {vt:?} -> {vy:?} attack {att_t:.0} -> {att_y:.0} ms, wet {no_rv:.2} -> {wet_l:.2}");
     }
     fs::write(out.join("results.md"), format!("{report}\n{params_md}")).unwrap();
 }
