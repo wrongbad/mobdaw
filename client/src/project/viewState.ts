@@ -112,3 +112,30 @@ export function createMixDrive() {
     },
   }
 }
+
+/** What a param is driven to by its lane at the playhead (null `value`: the lane gives nothing, e.g. an LFO). */
+export type AutoInfo = { on: boolean; value: number | null }
+const NO_AUTO: ReadonlyMap<string, AutoInfo> = new Map()
+const sameInfos = (a: ReadonlyMap<string, AutoInfo>, b: ReadonlyMap<string, AutoInfo>) =>
+  a === b || (a.size === b.size && [...a].every(([k, v]) => b.get(k)?.on === v.on && b.get(k)?.value === v.value))
+
+/**
+ * What the automation lanes drive each device or looper's params to (owner id -> param -> info), as one signal per owner:
+ * written every frame while a lane plays, read by the cards. Only a change fires, so a card whose lanes hold still stays quiet.
+ */
+export function createAutoValues() {
+  const sigs = new Map<string, [Accessor<ReadonlyMap<string, AutoInfo>>, Setter<ReadonlyMap<string, AutoInfo>>]>()
+  const at = (owner: string) => sigs.get(owner) ?? sigs.set(owner, createSignal(NO_AUTO)).get(owner)!
+  return {
+    get: (owner: string) => at(owner)[0](),
+    /** The new reading of every driven owner; owners it leaves out go back to undriven. */
+    publish(next: ReadonlyMap<string, ReadonlyMap<string, AutoInfo>>) {
+      for (const [owner, [get, set]] of sigs) {
+        const n = next.get(owner) ?? NO_AUTO
+        if (!sameInfos(get(), n)) set(n)
+      }
+      for (const [owner, n] of next) if (!sigs.has(owner)) at(owner)[1](n)
+    },
+  }
+}
+export type AutoValues = ReturnType<typeof createAutoValues>

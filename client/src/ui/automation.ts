@@ -23,9 +23,7 @@ const PAD = 7 // the top and bottom of the surface stay reachable: 0 and 1 sit t
 const NS = 'http://www.w3.org/2000/svg'
 const FREEHAND_PX = 10
 
-/** An automated param as its control shows it: the lane is driving it (`on`), `value` being what it reads at the playhead. */
-export type AutoInfo = { on: boolean; value: number | null }
-export const NO_AUTO = new Map<string, AutoInfo>()
+export type { AutoInfo } from '../project/viewState'
 
 const svg = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}) => {
   const el = document.createElementNS(NS, tag)

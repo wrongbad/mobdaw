@@ -3,9 +3,9 @@
 import { MAX_PPS, MIN_PPS, fitPps } from './zoomFit'
 import { editZoomPps } from './autoZoom'
 import {
-  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, MIX, MIX_GAIN, MIX_PAN, getMixDevice, migrateToV3, FINNWAVE, SIMPLE_FILTER, addClickTrack, addDevice, addDrum, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
+  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, MIX_GAIN, MIX_PAN, migrateToV3, FINNWAVE, addClickTrack, addDevice, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToValue, pointsMap, resolveTarget, setLaneEnabled, 
-  deleteDevice, deleteLooper, addNextLooper, isDrum, isForever, passLength, deleteNote, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples, metaMap,
+  deleteDevice, deleteLooper, isDrum, isForever, passLength, deleteNote, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples, metaMap,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
   type Point, type SampleMeta, type Track,
@@ -15,7 +15,7 @@ import { drawWave, onPeaks, peaksFor, storedPeaks } from '../audio/peaks'
 import { shape } from '../audio/probe'
 import { getInputOffset, setInputOffset } from '../audio/recording'
 import { cmdForKey, getKeys } from '../midi'
-import { createSignal, createEffect, createRoot } from 'solid-js'
+import { batch, createSignal, createEffect, createRoot } from 'solid-js'
 import type { Meters, PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
 import { renderProject } from '../audio/render'
@@ -26,11 +26,9 @@ import { importFile, playable, PLAYBACK_MAX_BYTES } from '../samples'
 import { discardTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, uploadAll, uploadTake } from '../takes'
 import type { Session } from '../project/session'
 import { chatPanel } from './chat'
-import { NO_AUTO, autoRow, automateMenu, type AutoInfo } from './automation'
-import { deviceCard } from './devices'
-import { applyPreset, presetsFor } from '../content/presets'
-import type { FilterChange, FilterMember } from './filterCurve'
-import { LOOP_COLORS, looperCard } from './loopers'
+import { automateMenu, type AutoInfo } from './automation'
+import { LOOP_COLORS } from './loopers'
+import { mountLaneDrawers, mountMasterDrawers, type DrawCtx } from './drawers'
 import { drumGrid } from './drumGrid'
 import { noteEditor } from './noteEditor'
 import { clamp, dragPointer, grabAt, passBoundaries, snapTracker, trimBlock, type Grab } from './blocks'
@@ -44,29 +42,22 @@ import { MIN_SEC, addImportedClip, automateParam, commitParam, commitParams, del
 import { remoteKey } from '../project/presence'
 import { createRecorder } from '../project/recorder'
 import { createProjectStore } from '../project/store'
-import { createDrawers, createMixDrive, createSelection, createTabAvailability, type TabName } from '../project/viewState'
+import { createAutoValues, createDrawers, createMixDrive, createSelection, createTabAvailability, type TabName } from '../project/viewState'
 
 const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in styles.css
 const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
 const REARM_PX = 24 // ...and, once pulled free, only snaps to it again after moving this far away
 const LANE_H = 72
-const NO_DRAGS = new Map<number, number>()
 
 const accepts = (trackKind: string, clipKind: string) => trackKind === clipKind
 const audioFiles = (list: FileList | null | undefined) =>
   [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
 
-type Card = ReturnType<typeof deviceCard>
-/** A scope's automation: one collapsible section holding a lane per automated param (absent when there are none). */
-type AutoSec = { el: HTMLElement; toggle: HTMLElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
-  el: HTMLElement; row: HTMLElement; body: HTMLElement; head: HeadRefs; dispose(): void; more: HTMLElement; fxRow: HTMLElement; fx: HTMLElement
-  synthMore: HTMLElement; synthRow: HTMLElement; synth: HTMLElement; cards: Map<string, Card>
-  loopMore: HTMLElement; loopRow: HTMLElement; loops: HTMLElement
-  loopCards: Map<string, ReturnType<typeof looperCard>>; boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
+  el: HTMLElement; row: HTMLElement; body: HTMLElement; head: HeadRefs; dispose(): void
+  boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
   pads: Map<string, HTMLElement>
-  auto: AutoSec
-  presets: { el: HTMLElement; toggle: HTMLElement; grid: HTMLElement }
+  auto: HTMLElement // the automation section (a drawer component)
   loopTc: TransportControls // loops preview transport
   /** Soundscape tracks only: the source lane, which has its own time axis, scroll and zoom. */
   src: Src | null
@@ -97,9 +88,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const lanes = new Map<string, Lane>()
   const clipEls = new Map<string, HTMLElement>()
   const waves = new Map<string, { cv: HTMLCanvasElement; seams: HTMLElement; first: HTMLElement; label: HTMLElement; sig: string; pk?: Float32Array; v0: number; v1: number }>()
-  let remoteDrags = new Map<string, Map<number, number>>()
   /** A card is being dragged by its title bar: merged filter views split until it lands. */
-  let reordering = false
+  const [reordering, setReordering] = createSignal(false)
+  const [armedLooper, setArmedLooper] = createSignal<string | null>(null) // (sel.armedLooper, as of the last draw)
+  const [autoWidth, setAutoWidth] = createSignal(0) // the width of an automation surface: the whole timeline
   let raf = 0
   let destroyed = false
 
@@ -110,6 +102,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   })
   const store = createProjectStore(s)
   const drive = createMixDrive() // what automation drives the faders and pans to at the playhead (written every frame while a lane plays)
+  const autoValues = createAutoValues() // what automation drives each device's and looper's params to at the playhead (written every frame while a lane plays)
   const avail = createTabAvailability() // whether each header has an auto / presets tab to show
   const [status, setStatus] = createSignal({ text: '', bad: false })
   /** Show a line in the bar; `bad` marks a problem (red) rather than a note. */
@@ -163,6 +156,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       pb.recorder.onlevel = drawLevel
       pb.oncpu = showCpu
       pb.onmeters = onMeters
+      applyOverrides()
     } catch (err) {
       pb = null
       say(`sample rate: ${(err as Error).message}`, true)
@@ -224,7 +218,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
   overlay.append(playhead, snapLine)
   const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio files here, or use + track.')
-  const masterAuto = makeAutoSection(MASTER_TRACK, 'master automation')
   const master = h('div', { className: 'lane master' }) // like a track's lane: the fx row, then its automation, as one block (filled below)
   const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, readOnly ? null : addLink, bgPicker, overlay)
   const scroll = h('div', { className: 'scroll' }, content)
@@ -236,16 +229,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     void dropFiles(audioFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   }
   // The global fx lane: the master bus chain. It closes the track list, directly above the global automation (one unit, after every track).
-  const masterCards = new Map<string, ReturnType<typeof deviceCard>>()
-  const masterMore = h('div', { className: 'fx-toggle' }, 'master fx')
-  const masterFx = h('div', { className: 'fx', hidden: true })
-  const masterAdd = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
-    popover(masterAdd, EFFECTS.map((d) => [d.name, () => addDevice(doc, MASTER_TRACK, d.type)] as [string, () => void])) }, '+')
-  masterFx.append(masterAdd)
-  const masterFxRow = h('div', { className: 'fx-row', hidden: true }, masterMore, masterFx)
   const masterHead = h('div', { className: 'head' }) // (filled by `MasterHead`)
   let masterGain: HTMLInputElement | null = null // its fader, which doubles as its level meter
-  master.append(h('div', { className: 'lane-row master-row' }, masterHead), masterFxRow, masterAuto.el)
+  master.append(h('div', { className: 'lane-row master-row' }, masterHead)) // (the drawers follow: `MasterDrawers`)
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
 
   const x = (smp: number) => (smp / rate) * pps
@@ -257,6 +243,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     startTransport, stop, loopStatus: () => drawLoopStatus(),
   })
   // the top bar, the remote playheads and the headers are Solid components (the rest of the timeline is still drawn by `draw`)
+  // the peers' knob drags go to our engine as overrides (and show on the cards, which follow `store.drags`)
+  const applyOverrides = () => pb?.setOverrides(store.overrides())
   const headCtx: HeadCtx = { doc, undo, readOnly, store, rec, drawers, avail, drive, toggleTab, autoMenu }
   const disposers = [
     mountBar(bar, { store, readOnly, local: s.local, user: s.user, transport: transport.el, status, cpu, loopText, unread, chatOpen,
@@ -264,6 +252,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     mountRemoteHeads(overlay, { store, offset: HEADER, scale }),
     mountRemoteHeads(rulerHeads, { store, offset: 0, scale }),
     mountMasterHead(masterHead, headCtx, (r) => (masterGain = r.gain)),
+    createRoot((dispose) => (createEffect(() => (store.overrides(), applyOverrides())), dispose)),
   ]
   const ne = noteEditor({
     doc, undo, readOnly,
@@ -440,7 +429,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   const cardDeps = {
-    readOnly,
     live: (d: string, p: number, v: number) => pb?.live(d, p, v),
     drag: (d: AwarenessState['dragging']) => s.setLocal({ dragging: d }),
     commit: (d: string, p: number, v: number) => commitParam(doc, undo, d, p, v),
@@ -452,18 +440,28 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       const name = dev && prompt('name', dev.name ?? DEVICES[dev.type]?.name ?? '')?.trim()
       if (name) updateDevice(doc, d, { name })
     },
-    reorderStart: () => { reordering = true; schedule() },
-    reorderEnd: () => { reordering = false; schedule() },
+    reorderStart: () => setReordering(true),
+    reorderEnd: () => setReordering(false),
     reorderDrop: (d: string, before: string | null) => reorderDevice(doc, undo, d, before),
-    run: (d: string, self: FilterMember) => reordering && document.querySelector('.dev.reordering') ? [self] : (runs.get(d) ?? [d]).flatMap((o) => (o === d ? [self] : [cardOf(o)?.member() ?? []].flat())),
-    changed: (d: string) => { const host = runs.get(d)?.[0]; if (host && host !== d) cardOf(host)?.redrawCurve() },
-    dragFilter: (d: string, change: FilterChange) => cardOf(d)?.dragMove(change),
-    dragFilterEnd: (d: string) => cardOf(d)?.dragEnd(),
-    autoMenu: (label: HTMLElement, t: ParamTarget, clickToo?: boolean) => autoMenu(label, () => t, clickToo),
+  }
+  const loopDeps = {
+    readOnly,
+    grab: () => undo.stopCapturing(),
+    commit: (id: string, speed: number) => updateLooper(doc, id, { speed }),
+    setMuted: (id: string, muted: boolean) => updateLooper(doc, id, { muted }),
+    setGain: (id: string, gain: number) => updateLooper(doc, id, { gain }),
+    setTape: (id: string, patch: { sat?: number; cutoff?: number; warble?: number }) => updateLooper(doc, id, patch),
+    autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, () => t),
+    toggleArm: (id: string) => { sel.toggleArm(id); draw() },
+    clear: (id: string) => updateLooper(doc, id, { start: 0, length: 0 }),
+    remove: (id: string) => { sel.forgetLooper(id); deleteLooper(doc, id) },
   }
 
   // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
   const rowDeps = { doc, readOnly, grab: () => undo.stopCapturing(), x, fromX, get rate() { return getSampleRate(doc) } }
+  const drawCtx: DrawCtx = { ...headCtx, auto: autoValues, deps: cardDeps, reordering, loops: loopDeps, rows: rowDeps, armed: armedLooper, width: autoWidth, scale }
+  const masterDrawers = mountMasterDrawers(master, drawCtx)
+  disposers.push(masterDrawers.dispose)
 
   function autoMenu(label: HTMLElement, target: () => ParamTarget, clickToo = true) {
     const lane = () => laneOf(doc, target())
@@ -486,7 +484,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function reveal(scope: string) {
     drawers.open(scope, 'auto')
     draw()
-    ;(scope === MASTER_TRACK ? masterAuto : lanes.get(scope)?.auto)?.el.scrollIntoView({ block: 'nearest' })
+    ;(scope === MASTER_TRACK ? masterDrawers.refs.auto : lanes.get(scope)?.auto)?.scrollIntoView({ block: 'nearest' })
   }
 
   /** The tab to open or shut one drawer of a track (or MASTER_TRACK): the one way in. */
@@ -500,49 +498,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     draw()
   }
 
-  function makeAutoSection(scope: string, title = 'automation'): AutoSec {
-    const toggle = h('div', { className: 'fx-toggle' }, title)
-    const box = h('div', { className: 'auto-box' })
-    const el = h('div', { className: 'auto-section', hidden: true }, h('div', { className: 'fx-row' }, toggle), box)
-    el.dataset.title = title
-    return { el, toggle, box, rows: new Map() }
-  }
-
-  /** The owner's name for a lane header: the device's, numbered when its chain has several of a kind. */
-  /** The presets drawer: a section like the automation one (same toggle and box), holding one column of plain-text buttons per group. */
-  function makePresetsDrawer(id: string) {
-    const toggle = h('div', { className: 'fx-toggle on' }, 'presets')
-    const grid = h('div', { className: 'preset-grid' })
-    return { el: h('div', { className: 'auto-section', hidden: true }, h('div', { className: 'fx-row' }, toggle, grid)), toggle, grid }
-  }
-
-  const presetKeys = new WeakMap<HTMLElement, string>()
-  function drawPresets(l: Lane, t: Track) {
-    const list = drawers.isOpen(t.id, 'presets') ? presetsFor(doc, t.id) : []
-    const has = presetsFor(doc, t.id).length > 0
-    avail.set(t.id, 'presets', has)
-    l.presets.el.hidden = !list.length
-    // Redrawn on every refresh while playing; rebuilding identical buttons each frame eats clicks and flickers.
-    const key = JSON.stringify([list.map((p) => [p.id, p.group, p.name]), t.preset, readOnly || locks.has(t.id)])
-    if (presetKeys.get(l.presets.grid) === key) return
-    presetKeys.set(l.presets.grid, key)
-    const groups = new Map<string, typeof list>()
-    for (const p of list) groups.set(p.group, [...(groups.get(p.group) ?? []), p])
-    l.presets.grid.replaceChildren(...[...groups].map(([name, items]) => h('div', { className: 'preset-col', role: 'group', 'aria-label': name },
-      h('h4', {}, name),
-      ...items.map((p) => h('button', { className: 'preset' + (t.preset === p.id ? ' on' : ''), disabled: readOnly || locks.has(t.id), 'aria-pressed': String(t.preset === p.id), onclick: () => {
-        undo.stopCapturing()
-        applyPreset(doc, t.id, p.id)
-        undo.stopCapturing()
-      } }, p.name)))))
-  }
-
-  function ownerLabel(l: AutoLane, base: string, devices: Device[]) {
-    if (l.kind === 'looper') return base
-    const same = devices.filter((d) => d.trackId === l.scope && DEVICES[d.type]?.name === base)
-    return same.length > 1 ? `${base} ${same.findIndex((d) => d.id === l.owner) + 1}` : base
-  }
-
   /** Read the lanes and their points from the doc, and what they drive at the playhead. */
   function loadAuto() {
     autoLanes = getLanes(doc)
@@ -550,39 +505,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     for (const p of getPoints(doc)) (autoPoints.get(p.laneId) ?? autoPoints.set(p.laneId, []).get(p.laneId)!).push(p)
     for (const list of autoPoints.values()) list.sort((a, b) => a.pos - b.pos)
     readAuto()
-  }
-
-  /** Sync every scope's section with the lanes in the doc. */
-  function drawAutomation(devices: Device[], loopers: Looper[], width: number) {
-    const byScope = new Map<string, AutoLane[]>()
-    for (const l of autoLanes) (byScope.get(l.scope) ?? byScope.set(l.scope, []).get(l.scope)!).push(l)
-    const sections: [string, AutoSec][] = [[MASTER_TRACK, masterAuto], ...[...lanes].map(([id, l]) => [id, l.auto] as [string, AutoSec])]
-    for (const [scope, sec] of sections) {
-      const mixId = getMixDevice(doc, scope)?.id
-      const rank = (l: AutoLane) => (l.owner === mixId ? 0 : 1) // the fader's and pan's lanes lead the section
-      const mine = (byScope.get(scope) ?? []).flatMap((l) => {
-        const r = resolveTarget(doc, l)
-        return r ? [{ l, r }] : []
-      }).sort((a, b) => rank(a.l) - rank(b.l) || (rank(a.l) ? 0 : Number(a.l.param) - Number(b.l.param)))
-      const open = drawers.isOpen(scope, 'auto')
-      avail.set(scope, 'auto', mine.length > 0) // (no lanes: nothing to open)
-      sec.el.hidden = mine.length === 0 || !open
-      sec.toggle.classList.toggle('on', open)
-      sec.toggle.textContent = `${sec.el.dataset.title} (${mine.length})`
-      const ids = new Set(mine.map((m) => m.l.id))
-      for (const [id, row] of sec.rows) if (!ids.has(id)) { row.el.remove(); sec.rows.delete(id) }
-      if (sec.el.hidden) continue
-      mine.forEach(({ l, r }, i) => {
-        let row = sec.rows.get(l.id)
-        if (!row) sec.rows.set(l.id, (row = autoRow(rowDeps)))
-        if (sec.box.children[i] !== row.el) sec.box.insertBefore(row.el, sec.box.children[i] ?? null)
-        const slot = l.kind === 'looper' ? loopers.find((x) => x.id === l.owner)?.slot : undefined
-        row.update(l, autoPoints.get(l.id) ?? [], {
-          def: r.def, label: devices.find((d) => d.id === l.owner)?.type === MIX ? r.label : `${ownerLabel(l, r.owner, devices)} · ${r.label}`, value: r.value, width,
-          color: slot != null ? LOOP_COLORS[slot % LOOP_COLORS.length] : 'var(--accent)',
-        })
-      })
-    }
   }
 
   /**
@@ -598,15 +520,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       const t = laneState(l) === 'lfo' ? null : evalPoints(autoPoints.get(l.id) ?? [], at)
       ;(autoInfos.get(l.owner) ?? autoInfos.set(l.owner, new Map()).get(l.owner)!).set(l.param, { on: l.enabled && t != null, value: t == null ? null : paramToValue(r.def, t) })
     }
+    autoValues.publish(autoInfos)
   }
-  /** The playhead moved: repaint the controls a lane drives. */
+  /** The playhead moved: hand the controls a lane drives their values (they follow by themselves). */
   function refreshAuto() {
     readAuto()
-    for (const l of lanes.values()) {
-      for (const [id, c] of l.cards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)
-      for (const [id, c] of l.loopCards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)
-    }
-    for (const [id, c] of masterCards) if (autoInfos.has(id)) c.refresh(autoInfos.get(id)!)
     publishMix()
   }
   /** What the automation lanes drive each scope's fader and pan to, for the headers (they show the doc's value where nothing drives). */
@@ -626,7 +544,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (l) return l
     const head = h('div', { className: 'head' })
     const mounted = mountTrackHead(head, headCtx, t.id)
-    const more = h('div', { className: 'fx-toggle' }, 'fx')
     const body = h('div', { className: 'lane-body', 'data-track': t.id })
     body.onpointerdown = (e) => {
       if (e.target !== body) return
@@ -650,34 +567,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (t.kind === 'audio') bgMenu(body, (e) => [['upload', () => pickInto(t.id, atX(e))]])
     else if (t.kind === 'midi') bgMenu(body, (e) => [['new piano roll', () => newMidiClip(t.id, atX(e))], ['new drum grid', () => newMidiClip(t.id, atX(e), true)]])
     else if (t.kind === 'soundscape') bgMenu(body, (e) => [['new region', () => newPad(t.id, atX(e))]])
-    const fx = h('div', { className: 'fx', hidden: true })
-    const add = h('button', { className: 'add-fx', title: 'add effect', disabled: readOnly, onclick: () =>
-      popover(add, EFFECTS.map((d) => [d.name, () => addDevice(doc, t.id, d.type)] as [string, () => void])) }, '+')
-    fx.append(add)
-    const fxRow = h('div', { className: 'fx-row' }, more, fx) // opaque, so it covers the playhead
-    // MIDI tracks: the instrument gets its own row above the FX bar
-    const synthMore = h('div', { className: 'fx-toggle' }, 'synth')
-    const synth = h('div', { className: 'fx' })
-    const addSynth = h('button', { className: 'add-fx', title: 'add instrument', disabled: readOnly, onclick: () =>
-      popover(addSynth, INSTRUMENTS.map((d) => [d.name, () => (d.type === LOFI_DRUM ? addDrum(doc, t.id) : addDevice(doc, t.id, d.type))] as [string, () => void])) }, '+')
-    synth.append(addSynth)
-    const synthRow = h('div', { className: 'fx-row', hidden: true }, synthMore, synth)
     // soundscape tracks: the main lane is blank like an empty track (regions turn the loopers on); the source audio gets its own lane
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
-    // the loopers row: speed and region per slot, above the FX bar
-    const loopMore = h('div', { className: 'fx-toggle' }, 'loopers')
-    const loops = h('div', { className: 'fx' })
-    loops.append(h('button', { className: 'add-fx', title: 'add looper', disabled: readOnly, onclick: () => addNextLooper(doc, t.id) }, '+'))
     const loopTc = transportControls({ title: 'play / stop the loops', small: true, onToggle: () => togglePreview(t.id, 'loops') })
-    const loopRow = h('div', { className: 'fx-row', hidden: true }, h('div', { className: 'fx-head' }, loopMore, loopTc.el), loops)
     const row = h('div', { className: 'lane-row' }, head, body)
-    const auto = makeAutoSection(t.id)
-    const presets = makePresetsDrawer(t.id)
-    l = {
-      el: h('div', { className: 'lane' }, row, src?.row ?? null, synthRow, loopRow, fxRow, auto.el, presets.el), row, body, head: mounted.refs, dispose: () => {}, more,
-      fxRow, fx, synthMore, synthRow, synth, loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), cards: new Map(),
-      pads: new Map(), auto, presets, loopTc, src,
-    }
+    const el = h('div', { className: 'lane' }, row, src?.row ?? null)
+    const drawn = mountLaneDrawers(el, drawCtx, t.id, t.kind, loopTc) // (the drawers follow the rows: instruments, loopers, effects, automation, presets)
+    l = { el, row, body, head: mounted.refs, dispose: () => {}, boxes: new Map(), heads: new Map(), pads: new Map(), auto: drawn.refs.auto, loopTc, src }
     // the lane's own classes follow the doc, the peers' recordings and the loop pedal without a draw
     const lane = l
     const offFx = createRoot((dispose) => {
@@ -686,71 +582,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       createEffect(() => lane.el.classList.toggle('muted', !!store.trackById[t.id]?.muted))
       return dispose
     })
-    lane.dispose = () => (mounted.dispose(), offFx())
+    lane.dispose = () => (drawn.dispose(), mounted.dispose(), offFx())
     lanes.set(t.id, l)
     return l
-  }
-
-  /** Each filter's run: the ids of the filters adjacent to it in its chain (itself included), in chain order. */
-  const runs = new Map<string, string[]>()
-  const cardOf = (id: string) => masterCards.get(id) ?? [...lanes.values()].map((l) => l.cards.get(id)).find((c) => c)
-  function findRuns(chain: Device[]) {
-    let run: string[] = []
-    const flush = () => { for (const id of run) runs.set(id, run); run = [] }
-    for (const d of chain) {
-      if (d.type === SIMPLE_FILTER) run.push(d.id)
-      else flush()
-    }
-    flush()
-  }
-
-  function drawFx(l: Lane, t: Track, devices: Device[]) {
-    const fxOpen = drawers.isOpen(t.id, 'fx')
-    const synthOpen = t.kind === 'midi' && drawers.isOpen(t.id, 'synth')
-    const mine = devices.filter((d) => d.trackId === t.id && !DEVICES[d.type]?.hidden)
-    const chain = mine.filter((d) => !DEVICES[d.type]?.instrument)
-    const instruments = mine.filter((d) => DEVICES[d.type]?.instrument)
-    l.fxRow.hidden = !fxOpen // a shut drawer takes no height at all
-    l.fx.hidden = !fxOpen
-    l.more.classList.toggle('on', fxOpen)
-    l.synthRow.hidden = !synthOpen
-    l.synthMore.classList.toggle('on', synthOpen)
-    if (!fxOpen && !synthOpen) return
-    const ids = new Set(mine.map((d) => d.id))
-    for (const [id, c] of l.cards) if (!ids.has(id)) { c.el.remove(); l.cards.delete(id) }
-    const place = (box: HTMLElement, list: Device[]) => list.forEach((d, i) => {
-      let c = l.cards.get(d.id)
-      if (!c) l.cards.set(d.id, (c = deviceCard(d, cardDeps)))
-      if (box.children[i] !== c.el) box.insertBefore(c.el, box.children[i] ?? null)
-      c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS, autoInfos.get(d.id) ?? NO_AUTO)
-    })
-    if (synthOpen) place(l.synth, instruments)
-    if (fxOpen) {
-      findRuns(chain)
-      place(l.fx, chain)
-      for (const d of chain) l.cards.get(d.id)?.redrawCurve() // again, now that every card is in place (rows, neighbours)
-    }
-  }
-
-  function drawMaster(devices: Device[]) {
-    const mine = devices.filter((d) => d.trackId === MASTER_TRACK && !DEVICES[d.type]?.hidden)
-    const n = mine.length
-    const open = drawers.isOpen(MASTER_TRACK, 'fx')
-    masterFxRow.hidden = !open
-    masterFx.hidden = !open
-    masterMore.classList.toggle('on', open)
-    masterMore.textContent = n ? `master fx (${n})` : 'master fx'
-    if (!open) return
-    const ids = new Set(mine.map((d) => d.id))
-    for (const [id, c] of masterCards) if (!ids.has(id)) { c.el.remove(); masterCards.delete(id) }
-    findRuns(mine)
-    mine.forEach((d, i) => {
-      let c = masterCards.get(d.id)
-      if (!c) masterCards.set(d.id, (c = deviceCard(d, cardDeps)))
-      if (masterFx.children[i] !== c.el) masterFx.insertBefore(c.el, masterFx.children[i] ?? null)
-      c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS, autoInfos.get(d.id) ?? NO_AUTO)
-    })
-    for (const d of mine) masterCards.get(d.id)?.redrawCurve()
   }
 
   // --- soundscape previews: each soundscape's source and loops have a private transport/playhead
@@ -970,30 +804,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     sel.prunePad((id) => padsMap(doc).has(id))
   }
 
-  const loopDeps = {
-    readOnly,
-    grab: () => undo.stopCapturing(),
-    commit: (id: string, speed: number) => updateLooper(doc, id, { speed }),
-    setMuted: (id: string, muted: boolean) => updateLooper(doc, id, { muted }),
-    setGain: (id: string, gain: number) => updateLooper(doc, id, { gain }),
-    setTape: (id: string, patch: { sat?: number; cutoff?: number; warble?: number }) => updateLooper(doc, id, patch),
-    autoMenu: (label: HTMLElement, t: ParamTarget, clickToo?: boolean) => autoMenu(label, () => t, clickToo),
-    toggleArm: (id: string) => { sel.toggleArm(id); draw() },
-    clear: (id: string) => updateLooper(doc, id, { start: 0, length: 0 }),
-    remove: (id: string) => { sel.forgetLooper(id); deleteLooper(doc, id) },
-  }
-
-  /** Looper rows (cards) and the coloured region boxes drawn over the track's audio. */
-  function drawLoopers(l: Lane, t: Track, loopers: Looper[]) {
-    const isLoop = t.kind === 'soundscape' && !!l.src
-    const open = isLoop && drawers.isOpen(t.id, 'loopers')
-    l.loopRow.hidden = !open
-    const mine = isLoop ? loopers.filter((x) => x.trackId === t.id) : []
-    l.loops.hidden = !open
-    l.loopMore.classList.toggle('on', open)
-    l.loopTc.el.hidden = !open
+  /** The coloured region boxes drawn over the track's source audio (the looper cards are a drawer component). */
+  function drawLoopBoxes(l: Lane, t: Track, loopers: Looper[]) {
+    const mine = t.kind === 'soundscape' && l.src ? loopers.filter((x) => x.trackId === t.id) : []
     l.src?.body.classList.toggle('arming', mine.some((x) => x.id === sel.armedLooper))
-    // region boxes
     const ids = new Set(mine.filter((x) => x.length > 0).map((x) => x.id))
     for (const [id, b] of l.boxes) if (!ids.has(id)) { b.remove(); l.boxes.delete(id) }
     for (const lp of mine) {
@@ -1011,14 +825,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       b.style.width = `${Math.max(2, (lp.length / rate) * l.src.pps)}px`
       b.classList.toggle('armed', lp.id === sel.armedLooper)
     }
-    if (!open) return
-    for (const [id, c] of l.loopCards) if (!mine.some((m) => m.id === id)) { c.el.remove(); l.loopCards.delete(id) }
-    mine.forEach((lp, i) => {
-      let c = l.loopCards.get(lp.id)
-      if (!c) l.loopCards.set(lp.id, (c = looperCard(lp, loopDeps)))
-      if (l.loops.children[i] !== c.el) l.loops.insertBefore(c.el, l.loops.children[i] ?? null)
-      c.update(lp, lp.id === sel.armedLooper, rate, autoInfos.get(lp.id) ?? NO_AUTO)
-    })
   }
 
   /** Drag a loop window to move it, or either edge to resize it (live in the doc, one undo step). */
@@ -1097,7 +903,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const tracks = getTracks(doc)
     const clips = getClips(doc)
     syncEditZoom(clips)
-    syncScale()
     const devices = getDevices(doc)
     const loopers = getLoopers(doc)
     const pads = getPads(doc)
@@ -1108,6 +913,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const total = Math.max(60 * rate,
       ...clips.filter((c) => !scapes.has(c.trackId)).map((c) => c.start + clipLength(c, rate) + 30 * rate),
       ...pads.map((p) => p.start + p.length + 30 * rate))
+    batch(() => (syncScale(), setAutoWidth(x(total)))) // (the automation rows are drawn at both)
     scroll.style.setProperty('--view', `${scroll.clientWidth}px`)
     content.style.width = `${HEADER + x(total)}px`
     rulerBody.style.width = `${x(total)}px`
@@ -1115,15 +921,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
 
     loadAuto() // (before the cards: they show what a lane drives)
 
-    // remote live-param drags -> overrides on our engine, and the values shown on sliders
     const remote = s.remoteStates()
     remoteSig = remoteKey(remote)
-    remoteDrags = new Map()
-    for (const r of remote) {
-      for (const d of [r.dragging ?? []].flat()) remoteDrags.set(d.deviceId, (remoteDrags.get(d.deviceId) ?? new Map()).set(d.paramId, d.value))
-    }
-    pb?.setOverrides(remote.flatMap((r) => [r.dragging ?? []].flat()))
     locks = store.locks()
+    setArmedLooper(sel.armedLooper)
 
     sel.pruneEditing((id) => clipsMap(doc).get(id)?.get('kind') === 'midi')
     const editClip = sel.editing ? clips.find((c) => c.id === sel.editing) : undefined
@@ -1145,9 +946,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       l.el.classList.toggle('editing', t.id === editTrack)
       l.el.classList.toggle('drums', t.id === editTrack && gridRows >= 0) // the lane fits the drum grid instead of the piano roll
       if (t.id === editTrack && gridRows >= 0) l.el.style.setProperty('--dg-rows', String(gridRows))
-      drawFx(l, t, devices)
-      drawPresets(l, t)
-      drawLoopers(l, t, loopers)
+      drawLoopBoxes(l, t, loopers)
       drawPads(l, t, pads)
       if (l.src) {
         const srcOpen = drawers.isOpen(t.id, 'source')
@@ -1161,8 +960,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     })
 
     publishMix()
-    drawMaster(devices)
-    drawAutomation(devices, loopers, x(total))
 
     // clips
     sel.pruneClips((id) => clipsMap(doc).has(id))
@@ -1688,6 +1485,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     pb.recorder.onlevel = drawLevel
     pb.oncpu = showCpu
     pb.onmeters = onMeters
+    applyOverrides()
     rec.listenMidi()
     draw()
     zoomFit() // (zoom is not remembered per project, so every open fits the song to the window)

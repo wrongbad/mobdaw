@@ -98,6 +98,7 @@ export function createProjectStore(s: { doc: Y.Doc; awareness: Pick<Awareness, '
     const devicesByTrack = grouped(devices, (d) => d.trackId)
     const clipsByTrack = grouped(clips, (c) => c.trackId)
     const notesByClip = grouped(notes, (n) => n.clipId)
+    const pointsByLane = grouped(points, (p) => p.laneId)
 
     // the peers' awareness states (not ours): set on every change, so readers see playheads, drags and recordings as they come
     const [remote, setRemote] = createSignal<AwarenessState[]>(s.remoteStates(), { equals: false })
@@ -107,13 +108,32 @@ export function createProjectStore(s: { doc: Y.Doc; awareness: Pick<Awareness, '
     const locks = createMemo(() => new Map(remote().flatMap((r) => (r.recording ? [[r.recording.trackId, r.user.username] as [string, string]] : []))),
       undefined, { equals: (a, b) => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v) })
 
+    /** The peers' in-progress knob drags: what goes to the engine as overrides (only fires when a drag changes), and per device, param -> value. */
+    type Drag = { deviceId: string; paramId: number; value: number }
+    const overrides = createMemo(() => remote().flatMap((r) => [r.dragging ?? []].flat()) as Drag[], [] as Drag[],
+      { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) })
+    const dragsByDevice = createMemo(() => {
+      const m = new Map<string, Map<number, number>>()
+      for (const d of overrides()) (m.get(d.deviceId) ?? m.set(d.deviceId, new Map()).get(d.deviceId)!).set(d.paramId, d.value)
+      return m
+    })
+    const dragMemos = new Map<string, Accessor<Map<number, number>>>()
+    const NO_DRAGS = new Map<number, number>()
+    const sameDrags = (a: Map<number, number>, b: Map<number, number>) => a === b || (a.size === b.size && [...a].every(([k, v]) => b.get(k) === v))
+    const drags = (deviceId: string) => {
+      let m = dragMemos.get(deviceId)
+      if (!m) dragMemos.set(deviceId, (m = runWithOwner(owner, () => createMemo(() => dragsByDevice().get(deviceId) ?? NO_DRAGS, undefined, { equals: sameDrags }))!))
+      return m
+    }
+
     return {
+      overrides, drags,
       /** The entities by id (stores: read inside an effect or memo to follow one field). */
       trackById: tracks_.store, clipById: clips_.store, noteById: notes_.store, deviceById: devices_.store, looperById: loopers_.store,
       padById: pads_.store, laneById: lanes_.store, pointById: points_.store, samples: samples_.store as Record<string, SampleMeta>,
       /** Sorted as the schema getters sort them. */
       tracks, clips, notes, devices, loopers, pads, lanes, points,
-      devicesByTrack, clipsByTrack, notesByClip,
+      devicesByTrack, clipsByTrack, notesByClip, pointsByLane,
       /** A track's mix device (its fader and pan), or the master bus's. */
       mixDevice: (scope: string) => devicesByTrack(scope)().find((d) => d.type === MIX),
       remote, locks,

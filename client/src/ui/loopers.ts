@@ -1,7 +1,7 @@
 // One looper slot's card: on/off switch (mute), volume, speed (0.1x-4x, log slider), tape controls (saturation, filter, warble), a "draw region" arm button and clear.
 import { LOOP_CUTOFF_MAX, LOOP_CUTOFF_MIN, LOOP_SPEED_MAX, LOOP_SPEED_MIN, type Looper, type ParamTarget } from '@mobdaw/shared'
 import { h } from '../dom'
-import { NO_AUTO, type AutoInfo } from './automation'
+import type { AutoInfo } from '../project/viewState'
 import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
 import { fmtDb } from './slider'
 import { inUse } from './held'
@@ -109,12 +109,8 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
     h('div', { className: 'prm' }, h('span', { className: 'dim' }, 'region'), h('div', { className: 'btns' }, draw, clear)))
   cardMenu(el, head, title, 'delete looper', () => deps.remove(id), () => !deps.readOnly)
 
-  let current = lp
-  let lastArmed = false
   /** `auto`: the params a lane drives, keyed by `Looper` field; those show the lane's value and can't be dragged. */
-  function update(l: Looper, armed: boolean, rate: number, auto: Map<string, AutoInfo> = NO_AUTO) {
-    current = l
-    lastArmed = armed
+  function update(l: Looper, armed: boolean, rate: number, auto: ReadonlyMap<string, AutoInfo> = new Map()) {
     // a driven slider follows its lane (and is locked); a free one follows the doc unless it is being dragged
     const val = (key: string, input: HTMLInputElement, stat: number) => {
       const a = auto.get(key)
@@ -154,7 +150,5 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
     draw.textContent = armed ? 'drag on track…' : has ? 'redraw' : 'draw'
   }
   update(lp, false, 48000)
-  /** Repaint with new automation values only (the playhead moved). */
-  const refresh = (auto: Map<string, AutoInfo>) => update(current, lastArmed, 48000, auto)
-  return { el, update, refresh }
+  return { el, update }
 }
