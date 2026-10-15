@@ -60,7 +60,8 @@ Every nonlinearity is **Δ times an opening g(Δ) ∈ [0, 1]**:
 | decay | 0–1 | reflection magnitude (ring after release) |
 | breath | 0–1 | drive level (calibrated, see below) |
 | noise | 0–1 | turbulence on the drive |
-| vibrato rate / depth | Hz / 0–1 | drive LFO |
+| vibrato rate / depth | Hz / 0–1 | drive LFO (breath vibrato) |
+| vibrato pitch | 0–1 | same LFO retunes the loop, 60 cents peak (string / voice vibrato); not part of the calibration |
 | attack / release | s | gate slew |
 
 A second junction (simple_flute's blow + bow) is out of scope for v1.

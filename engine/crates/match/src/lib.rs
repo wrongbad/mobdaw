@@ -253,10 +253,11 @@ pub const CHAIN: [(&str, f32, f32); 5] = [
 ];
 pub const EQ_HZ: [f32; 4] = [100.0, 500.0, 2000.0, 8000.0];
 pub const EQ_DAMPING: f32 = 0.7071;
-/// Ridge weight (per dB^2, per solve band) and cap for the EQ gains; looser for the body's narrow peaks.
-pub const EQ_RIDGE: f64 = 0.02;
+/// Ridge as a fraction of each band's own column energy (so a narrow peak, which touches few solve bands, is shrunk
+/// as much as a broad one rather than swamped), and caps. An absolute ridge shrank body peaks ~4x.
+pub const EQ_RIDGE: f64 = 0.3;
 pub const EQ_MAX_DB: f64 = 12.0;
-pub const BODY_RIDGE: f64 = 0.004;
+pub const BODY_RIDGE: f64 = 0.1;
 pub const BODY_MAX_DB: f64 = 18.0;
 pub const BODY_BANDS: usize = 8;
 /// Each body peak searches ±40% (log) around its starting frequency; the shared damping 0.04..0.3 (Q 12..1.7).
@@ -473,7 +474,7 @@ pub fn solve_gains(c: &mut Chain, targets: &[Vec<f64>], cands: &[Vec<f32>]) {
             for j in 0..k { ata[i][j] += (cols[b][i] - cm[i]) * (cols[b][j] - cm[j]); }
         }
     }
-    for i in 0..k { ata[i][i] += ridge[i] * SOLVE_BANDS as f64; }
+    for i in 0..k { ata[i][i] *= 1.0 + ridge[i]; }
     let g = solve(ata, atb);
     for i in 0..4 { c.eq_db[i] = g[i].clamp(-cap[i], cap[i]) as f32; }
     if let Some(b) = &mut c.body {

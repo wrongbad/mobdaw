@@ -125,7 +125,8 @@ A hand-tuned preset that started from a matched one says so in a structured comm
 Done in the Rust worker where it touches audio (so there is one analysis implementation); Python only consumes the results as the CMA-ES start.
 
 - Amplitude envelope: fit ADSR or a multi-segment envelope to the target's dB RMS.
-- EQ (inside every evaluation, not a final stage): ratio of long-term average spectra, ridge least squares onto the EQ device's band responses, capped, so EQ only does broad shaping.
+- EQ and body (inside every evaluation, not a final stage): ratio of long-term average spectra, ridge least squares onto the devices' band responses (body: 8 narrow bells, kind 11, for strings), capped. The ridge is relative to each band's own column energy; an absolute ridge swamps narrow peaks.
+- Vibrato: an autocorrelation pitch track gives depth and rate; the loss compares them (the spectral loss averages vibrato away).
 - String: partial peak-picking gives f0 and inharmonicity B; per-partial decay times give loss params; comb-like gaps give pluck position.
 - Tube/bore: resonances and odd/even harmonic balance give bore type and length; these overlap with the calibration model, so share the fitted forward model rather than duplicating it.
 - Reverb: off during the dry fit (targets dry); then fit the reverb device with the dry chain frozen against the soundfont's own wet render, before writing `best.json`. Unreverbed renders sound fake, so candidates are judged by ear with it on.
