@@ -44,12 +44,12 @@ import { trackKind } from './trackKind'
 import { knob } from './knob'
 import { follow, peakToFill } from './meter'
 import { icon, setIcon } from '../theme/icons'
+import { MIN_SEC, addImportedClip, automateParam, commitParam, commitParams, deleteClips, loopClip, loopForever, passClip, reorderDevice, trimClip, unloopClip } from '../project/actions'
 import { createDrawers, createSelection, type TabName } from '../project/viewState'
 
 const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in styles.css
 const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
 const REARM_PX = 24 // ...and, once pulled free, only snaps to it again after moving this far away
-const MIN_SEC = 0.05
 const LANE_H = 72
 const NO_DRAGS = new Map<number, number>()
 
@@ -702,16 +702,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     readOnly,
     live: (d: string, p: number, v: number) => pb?.live(d, p, v),
     drag: (d: AwarenessState['dragging']) => s.setLocal({ dragging: d }),
-    commit: (d: string, p: number, v: number) => {
-      undo.stopCapturing()
-      setParam(doc, d, p, v)
-      undo.stopCapturing()
-    },
-    commitMany: (d: string, values: Record<number, number>) => {
-      undo.stopCapturing()
-      for (const [p, v] of Object.entries(values)) setParam(doc, d, Number(p), v)
-      undo.stopCapturing()
-    },
+    commit: (d: string, p: number, v: number) => commitParam(doc, undo, d, p, v),
+    commitMany: (d: string, values: Record<number, number>) => commitParams(doc, undo, d, values),
     bypass: (d: string, b: boolean) => updateDevice(doc, d, { bypass: b }),
     remove: (d: string) => deleteDevice(doc, d),
     rename: (d: string) => {
@@ -721,17 +713,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     },
     reorderStart: () => { reordering = true; schedule() },
     reorderEnd: () => { reordering = false; schedule() },
-    reorderDrop: (d: string, before: string | null) => {
-      const dev = getDevices(doc).find((x) => x.id === d)
-      if (!dev) return
-      const synth = !!DEVICES[dev.type]?.instrument // instruments and effects are separate rows
-      const chain = getDevices(doc).filter((x) => x.trackId === dev.trackId && x.id !== d && !!DEVICES[x.type]?.instrument === synth)
-      const i = before == null ? chain.length : chain.findIndex((x) => x.id === before)
-      if (i < 0) return
-      undo.stopCapturing()
-      updateDevice(doc, d, { order: orderBetween(chain[i - 1]?.order, chain[i]?.order) })
-      undo.stopCapturing()
-    },
+    reorderDrop: (d: string, before: string | null) => reorderDevice(doc, undo, d, before),
     run: (d: string, self: FilterMember) => reordering && document.querySelector('.dev.reordering') ? [self] : (runs.get(d) ?? [d]).flatMap((o) => (o === d ? [self] : [cardOf(o)?.member() ?? []].flat())),
     changed: (d: string) => { const host = runs.get(d)?.[0]; if (host && host !== d) cardOf(host)?.redrawCurve() },
     dragFilter: (d: string, change: FilterChange) => cardOf(d)?.dragMove(change),
@@ -794,13 +776,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
 
   /** Automate a param: a lane that starts flat at its current value, so nothing changes until a point is moved (or, with `lfo`, one in LFO mode). */
   function automate(t: ParamTarget, lfo = false) {
-    const r = resolveTarget(doc, t)
-    if (!r) return
-    doc.transact(() => {
-      const id = addLane(doc, t, r.def)
-      if (!getPoints(doc).some((p) => p.laneId === id)) addPoint(doc, id, 0, paramToPos(r.def, r.value), r.def.options ? 'hold' : 'linear')
-      if (lfo) setLaneState(doc, id, 'lfo')
-    })
+    if (!automateParam(doc, t, lfo)) return
     reveal(t.scope)
   }
 
@@ -1854,10 +1830,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     dragPointer(ev, {
       onDrag: (m) => {
         if (!clipsMap(doc).has(id)) return
-        if (mode === 'loop') return loopClip(clip, drawn + snapTo(m, clip.start + drawn, Math.round(((m.clientX - ev.clientX) / cpps) * rate)), srcFrames)
+        if (mode === 'loop') return loopClip(doc, rate, clip, drawn + snapTo(m, clip.start + drawn, Math.round(((m.clientX - ev.clientX) / cpps) * rate)), srcFrames)
         if (mode === 'pass') {
           const d = Math.round(((m.clientX - ev.clientX) / cpps) * rate)
-          return passClip(clip, pass0 + (clip.kind === 'audio' ? snapTo(m, seam0, d) : d), srcFrames)
+          return passClip(doc, rate, clip, pass0 + (clip.kind === 'audio' ? snapTo(m, seam0, d) : d), srcFrames)
         }
         if (mode !== 'move') {
           let d = Math.round(((m.clientX - ev.clientX) / cpps) * rate)
@@ -1866,7 +1842,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
           if (snap) d += snap.at - (mode === 'l' ? clip.start + d : clip.start + length + d)
           snapLine.hidden = !snap
           if (snap) snapLine.style.left = `${HEADER + x(snap.at)}px`
-          return trimClip(clip, mode, d, srcFrames, notes0)
+          return trimClip(doc, rate, clip, mode, d, srcFrames, notes0)
         }
         // Absolute position under the pointer, in the target lane's own scale (source lanes differ).
         const hit = targetAt(m.clientY, clip.kind)
@@ -1884,78 +1860,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         undo.stopCapturing()
         if (!moved) zoom()
       },
-    })
-  }
-
-  /**
-   * Drag a clip's right edge to change its extent to `extent` samples; the pass repeats to fill it. A clip that wasn't
-   * looping starts to, with its current length as the pass. Dragging it back to a pass or less ends the loop (isLooping),
-   * and a `forever` clip stops being forever.
-   */
-  function loopClip(clip: Clip, extent: number, srcFrames: number) {
-    const looping = isLooping(clip)
-    const forever = clip.forever ? { forever: false } : {}
-    if (clip.kind === 'audio') {
-      updateClip(doc, clip.id, { length: Math.max(Math.round(MIN_SEC * rate), Math.round(extent)), ...(looping ? {} : startPass(clip, srcFrames)), ...forever })
-      return
-    }
-    const step = clip.ppq / 4
-    const lengthTicks = Math.max(step, Math.round((extent * clip.bpm * clip.ppq) / (60 * rate) / step) * step)
-    updateClip(doc, clip.id, { lengthTicks, ...(looping ? {} : { loopTicks: clip.lengthTicks }), ...forever })
-  }
-
-  /** The fields that make a non-looping clip's current length its pass, dropping any stale pass first (its phase moves into the source offset). */
-  function startPass(clip: Clip & { kind: 'audio' }, srcFrames: number) {
-    const sourceOffset = clip.sourceOffset + (clip.loopLength ? clip.loopPhase ?? 0 : 0)
-    return { sourceOffset, loopLength: Math.min(clip.length, srcFrames - sourceOffset), loopPhase: 0 }
-  }
-
-  /** Drag a looping clip's first seam: the pass becomes `pass` samples (audio) or ticks' worth (MIDI, in 1/16 steps) and the repeats re-tile. */
-  function passClip(clip: Clip, pass: number, srcFrames: number) {
-    if (clip.kind === 'audio') {
-      const lo = Math.round(MIN_SEC * rate) + (clip.loopPhase ?? 0) // the first seam stays after the clip's start
-      updateClip(doc, clip.id, { loopLength: Math.round(clamp(pass, lo, Math.max(lo, Math.min(clip.length, srcFrames - clip.sourceOffset)))) })
-      return
-    }
-    const step = clip.ppq / 4
-    updateClip(doc, clip.id, { loopTicks: clamp(Math.round((pass * clip.bpm * clip.ppq) / (60 * rate) / step) * step, step, clip.lengthTicks) })
-  }
-
-  /**
-   * Resize a clip from either edge, non-destructively (the source audio and the notes stay whole;
-   * dragging the edge back out restores them). `dSmp` is the pointer delta since the grab.
-   */
-  function trimClip(clip: Clip, mode: 'l' | 'r', dSmp: number, srcFrames: number, notes0: Note[]) {
-    const minLength = MIN_SEC * rate
-    if (clip.kind === 'audio') {
-      if (isLooping(clip)) { // the left edge turns the pass instead (the seams stay put); the right edge is the loop handle
-        const t = trimBlock('l', clip, dSmp, { minLength, slackLeft: clip.start })
-        updateClip(doc, clip.id, { start: t.start, length: t.length, loopPhase: rotatePhase(clip.loopPhase ?? 0, t.d, clip.loopLength!) })
-        return
-      }
-      // a stale pass (the clip was pulled back to a pass or less) goes, so trimming it longer can't start it looping
-      const stale = clip.loopLength ? { loopLength: 0, loopPhase: 0 } : {}
-      const sourceOffset = clip.sourceOffset + (clip.loopLength ? clip.loopPhase ?? 0 : 0)
-      const t = trimBlock(mode, clip, dSmp, { minLength, slackLeft: Math.min(sourceOffset, clip.start), maxLength: srcFrames - sourceOffset })
-      updateClip(doc, clip.id, { ...stale, ...(mode === 'l' ? { start: t.start, length: t.length, sourceOffset: sourceOffset + t.d } : { length: t.length, sourceOffset }) })
-      return
-    }
-    // MIDI: lengths are in ticks, snapped to 1/16 notes
-    const k = (clip.bpm * clip.ppq) / (60 * rate) // ticks per sample
-    const step = clip.ppq / 4
-    const dTicks = dSmp * k
-    if (mode === 'r') {
-      updateClip(doc, clip.id, { lengthTicks: Math.max(step, Math.round((clip.lengthTicks + dTicks) / step) * step), loopTicks: 0 }) // (clears a stale pass)
-      return
-    }
-    // Left edge: the start moves and every note moves back by the same ticks, so the music stays put on the
-    // timeline. Notes pushed before the new start go silent but are kept, and return if the edge is dragged out.
-    // A looping clip's pattern turns instead: the notes rotate within the loop, so every repeat stays where it was.
-    const t = trimMidiLeft(clip, dSmp, rate)
-    const loop = isLooping(clip) ? clip.loopTicks! : 0
-    doc.transact(() => {
-      updateClip(doc, clip.id, { start: t.start, lengthTicks: t.lengthTicks })
-      for (const n of notes0) updateNote(doc, n.id, { tick: loop && n.tick < loop ? rotateTick(n.tick, t.d, loop) : n.tick - t.d })
     })
   }
 
@@ -1997,22 +1901,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function clipMenu(clipId: string): [string, () => void][] {
     const items: [string, () => void][] = [['delete clip', () => { // the whole selection if this clip is in it
       const ids = sel.clips.includes(clipId) ? [...sel.clips] : [clipId]
-      doc.transact(() => ids.forEach((id) => deleteClip(doc, id)))
+      deleteClips(doc, ids)
       select([])
     }]]
     const clip = getClips(doc).find((c) => c.id === clipId)
     if (clip) { // looping repeats the pass to the end of the clip (drag its right edge to extend), or past it with forever
       const looping = isLooping(clip)
-      items.unshift([isForever(clip) ? 'loop to end' : 'loop forever', () => {
-        if (looping) return updateClip(doc, clipId, { forever: !clip.forever })
-        // not looping yet: the current length becomes the pass and the extent grows to two of them, so it repeats at all
-        if (clip.kind === 'audio') updateClip(doc, clipId, { ...startPass(clip, sourceFrames(clip)), length: clip.length * 2, forever: true })
-        else updateClip(doc, clipId, { loopTicks: clip.lengthTicks, lengthTicks: clip.lengthTicks * 2, forever: true })
-      }])
-      if (looping) items.unshift(['no loop', () => { // the extent back to the first pass
-        if (clip.kind === 'audio') updateClip(doc, clipId, { sourceOffset: clip.sourceOffset + (clip.loopPhase ?? 0), length: clip.loopLength! - (clip.loopPhase ?? 0), loopLength: 0, loopPhase: 0, forever: false })
-        else updateClip(doc, clipId, { lengthTicks: clip.loopTicks!, loopTicks: 0, forever: false })
-      }])
+      items.unshift([isForever(clip) ? 'loop to end' : 'loop forever', () => loopForever(doc, clip, clip.kind === 'audio' ? sourceFrames(clip) : 0)])
+      if (looping) items.unshift(['no loop', () => unloopClip(doc, clip)]) // the extent back to the first pass
     }
     const hash = String(clipsMap(doc).get(clipId)?.get('sourceHash'))
     const meta = getSamples(doc)[hash]
@@ -2048,10 +1944,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       try {
         const m = await importFile(s.projectId, doc, f)
         const length = Math.round(m.duration * rate)
-        doc.transact(() => {
-          trackId ??= addTrack(doc, f.name.replace(/\.[^.]+$/, ''), 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))
-          addAudioClip(doc, { trackId, sourceHash: m.hash, start: at, length })
-        })
+        trackId = addImportedClip(doc, trackId, { name: f.name, hash: m.hash, length }, at)
         at += length
         say('')
       } catch (err) {
