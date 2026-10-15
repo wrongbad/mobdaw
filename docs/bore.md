@@ -62,6 +62,8 @@ Every nonlinearity is **Δ times an opening g(Δ) ∈ [0, 1]**:
 | noise | 0–1 | turbulence on the drive |
 | vibrato rate / depth | Hz / 0–1 | drive LFO (breath vibrato) |
 | vibrato pitch | 0–1 | same LFO retunes the loop, 60 cents peak (string / voice vibrato); not part of the calibration |
+| vibrato delay | ms | both vibratos fade in from the note start |
+| bell | 0–1 | even harmonics above ~1.2 kHz, outside the loop (a closed bore alone is odd-only at every frequency, so it sounds like a square wave; a clarinet's evens return above its ~1.5 kHz tone-hole cutoff). A tone-hole allpass in the loop was tried first and dropped: its inharmonic upper resonances pulled the pitch ±100+ cents unpredictably. |
 | attack / release | s | gate slew |
 
 A second junction (simple_flute's blow + bow) is out of scope for v1.

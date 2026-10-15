@@ -28,6 +28,8 @@ pub const P_ATTACK_MS: u32 = 11;
 pub const P_RELEASE_MS: u32 = 12;
 pub const P_GAIN: u32 = 13;
 pub const P_VIBRATO_PITCH: u32 = 14;
+pub const P_VIBRATO_DELAY_MS: u32 = 15;
+pub const P_BELL: u32 = 16;
 
 #[derive(Clone, Copy)]
 struct Pending {
@@ -73,10 +75,12 @@ pub struct BoreSynth {
     noise: Ramp,
     vibrato_depth: Ramp,
     pitch_vibrato: Ramp,
+    bell: Ramp,
     gain: Ramp,
     position: f32,
     open: bool,
     vibrato_hz: f32,
+    vibrato_delay_ms: f32,
     attack_ms: f32,
     release_ms: f32,
     /// Seeds the per-note noise.
@@ -107,10 +111,12 @@ impl BoreSynth {
             noise: Ramp::new(d.noise as f64),
             vibrato_depth: Ramp::new(d.vibrato_depth as f64),
             pitch_vibrato: Ramp::new(d.pitch_vibrato as f64),
+            bell: Ramp::new(d.bell as f64),
             gain: Ramp::new(1.0),
             position: d.position,
             open: d.open,
             vibrato_hz: 5.0,
+            vibrato_delay_ms: 0.0,
             attack_ms: 30.0,
             release_ms: 120.0,
             seed: 1,
@@ -140,6 +146,8 @@ impl BoreSynth {
             P_VIBRATO_DEPTH => self.vibrato_depth.set_target(unit(value), s),
             P_VIBRATO_PITCH => self.pitch_vibrato.set_target(unit(value), s),
             P_ATTACK_MS => self.attack_ms = value.clamp(0.0, 5000.0),
+            P_VIBRATO_DELAY_MS => self.vibrato_delay_ms = value.clamp(0.0, 5000.0),
+            P_BELL => self.bell.set_target(unit(value), s),
             P_RELEASE_MS => self.release_ms = value.clamp(1.0, 10000.0),
             P_GAIN => self.gain.set_target(value.clamp(0.0, 2.0) as f64, s),
             _ => {}
@@ -160,6 +168,7 @@ impl BoreSynth {
             noise: self.noise.value() as f32,
             vibrato_depth: self.vibrato_depth.value() as f32,
             pitch_vibrato: self.pitch_vibrato.value() as f32,
+            bell: self.bell.value() as f32,
         }
     }
 
@@ -186,6 +195,7 @@ impl BoreSynth {
             attack_ms: self.attack_ms,
             release_ms: self.release_ms,
             vibrato_hz: self.vibrato_hz,
+            vibrato_delay_ms: self.vibrato_delay_ms,
         };
         let v = &mut self.voices[idx];
         v.bore.start(&setup);
@@ -317,6 +327,7 @@ impl BoreSynth {
             || self.noise.is_moving()
             || self.vibrato_depth.is_moving()
             || self.pitch_vibrato.is_moving()
+            || self.bell.is_moving()
             || self.gain.is_moving()
     }
 
@@ -330,7 +341,7 @@ impl BoreSynth {
         let len = out.len();
         let mut knobs = self.knobs();
         let g0 = self.gain.value() as f32;
-        for r in [&mut self.character, &mut self.stiffness, &mut self.aperture, &mut self.damping, &mut self.decay, &mut self.breath, &mut self.noise, &mut self.vibrato_depth, &mut self.pitch_vibrato] {
+        for r in [&mut self.character, &mut self.stiffness, &mut self.aperture, &mut self.damping, &mut self.decay, &mut self.breath, &mut self.noise, &mut self.vibrato_depth, &mut self.pitch_vibrato, &mut self.bell] {
             r.advance(len);
         }
         let g1 = self.gain.advance(len) as f32;

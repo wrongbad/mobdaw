@@ -42,6 +42,16 @@
 //! (attack up, release down); `burst` is wade's `velbias`, a velocity-sized extra push that
 //! decays into the sustained level. White noise is a xorshift, seeded per note.
 //!
+//! # Bell
+//! A closed bore only supports odd harmonics, so its loop signal is close to a square wave. On a
+//! real clarinet the even harmonics come back above ~1.5 kHz (radiation from the bell and tone
+//! holes, and the reed's asymmetric flow). `bell` adds them outside the loop by ring modulation:
+//! the output high-passed at [`BELL_HZ`] (its upper odd harmonics) times a unit-level copy of the
+//! fundamental (the output band-passed at the note's frequency, over its own envelope). Each odd
+//! harmonic `k·f0` lands on `(k±1)·f0`: even harmonics at about their neighbours' level, only up
+//! high; the sum is high-passed again so no low products leak. (Squaring the output would not do:
+//! a square wave squared is constant.) Outside the loop, so tuning and calibration are untouched.
+//!
 //! # Pitch vibrato
 //! The same LFO can also retune the loop (`pitch_vibrato` cents peak): both legs are rescaled once
 //! per sub-block, the junction staying at the same fraction. This is a string player's (or a
@@ -64,6 +74,12 @@ const BURST_GAIN: f32 = 0.25;
 /// Scales for the noise and vibrato drive modulation at knob 1.
 const NOISE_SCALE: f32 = 0.5;
 const VIBRATO_SCALE: f32 = 0.25;
+/// Bell: high-pass corner (Hz) of the even-harmonic path, and the envelope follower's time constant.
+pub const BELL_HZ: f32 = 1200.0;
+/// Gain of the even-harmonic path at knob 1: ~+12 dB over unity, so the upper evens can reach their odd neighbours
+/// (a clarinet's do, above ~1.5 kHz).
+pub const BELL_GAIN: f32 = 4.0;
+const BELL_ENV_MS: f64 = 10.0;
 /// Pitch vibrato peak deviation at knob 1, in cents.
 pub const PITCH_VIBRATO_CENTS: f32 = 60.0;
 const DC_POLE: f32 = 0.995;
@@ -93,11 +109,13 @@ pub struct Raw {
     pub vibrato_depth: f32,
     /// 0..1: pitch vibrato, [`PITCH_VIBRATO_CENTS`] peak at 1.
     pub pitch_vibrato: f32,
+    /// 0..1: even harmonics up high, see the module docs.
+    pub bell: f32,
 }
 
 impl Default for Raw {
     fn default() -> Self {
-        Self { character: 0.0, stiffness: 0.5, aperture: 0.7, drive: 1.0, damping: 0.3, reflection: 0.95, noise: 0.0, vibrato_depth: 0.0, pitch_vibrato: 0.0 }
+        Self { character: 0.0, stiffness: 0.5, aperture: 0.7, drive: 1.0, damping: 0.3, reflection: 0.95, noise: 0.0, vibrato_depth: 0.0, pitch_vibrato: 0.0, bell: 0.0 }
     }
 }
 
@@ -241,6 +259,15 @@ pub struct Bore {
     /// The note's leg lengths (samples), before pitch vibrato.
     len_l: f64,
     len_r: f64,
+    /// Vibrato fade-in: current gain (0..1) and its step per sample.
+    vib_gain: f32,
+    vib_step: f32,
+    /// Bell path: envelope follower and high-pass.
+    bell_env: f32,
+    bell_a: f32,
+    bell_hp: crate::svf::Svf,
+    bell_lp: crate::svf::Svf,
+    bell_hp2: crate::svf::Svf,
     /// Whether the legs currently differ from `len_l`/`len_r` (so they are reset when vibrato stops).
     detuned: bool,
 }
@@ -259,11 +286,13 @@ pub struct NoteSetup {
     pub attack_ms: f32,
     pub release_ms: f32,
     pub vibrato_hz: f32,
+    /// Vibrato (drive and pitch) fades in linearly over this long from the note start.
+    pub vibrato_delay_ms: f32,
 }
 
 impl Default for NoteSetup {
     fn default() -> Self {
-        Self { freq_hz: 220.0, open: true, position: 0.3, tune_cents: 0.0, velocity: 0.8, seed: 1, attack_ms: 20.0, release_ms: 80.0, vibrato_hz: 5.0 }
+        Self { freq_hz: 220.0, open: true, position: 0.3, tune_cents: 0.0, velocity: 0.8, seed: 1, attack_ms: 20.0, release_ms: 80.0, vibrato_hz: 5.0, vibrato_delay_ms: 0.0 }
     }
 }
 
@@ -290,6 +319,21 @@ impl Bore {
             len_l: MIN_LEG,
             len_r: MIN_LEG,
             detuned: false,
+            vib_gain: 1.0,
+            vib_step: 1.0,
+            bell_env: 0.0,
+            bell_a: (1.0 - (-1.0 / (BELL_ENV_MS * 1e-3 * sample_rate as f64)).exp()) as f32,
+            bell_hp: {
+                let mut f = crate::svf::Svf::new();
+                f.set_hz(BELL_HZ, std::f32::consts::FRAC_1_SQRT_2, sample_rate);
+                f
+            },
+            bell_lp: crate::svf::Svf::new(),
+            bell_hp2: {
+                let mut f = crate::svf::Svf::new();
+                f.set_hz(BELL_HZ, std::f32::consts::FRAC_1_SQRT_2, sample_rate);
+                f
+            },
         }
     }
 
@@ -332,8 +376,15 @@ impl Bore {
         self.lfo_phase = 0.0;
         self.lfo_inc = n.vibrato_hz.max(0.0) as f64 / self.sample_rate;
         self.lfo_prev = 0.0;
+        let delay = n.vibrato_delay_ms.max(0.0) as f64 * self.sample_rate * 1e-3;
+        (self.vib_gain, self.vib_step) = if delay < 1.0 { (1.0, 1.0) } else { (0.0, (1.0 / delay) as f32) };
         self.dc_x1 = 0.0;
         self.dc_y1 = 0.0;
+        self.bell_env = 0.0;
+        self.bell_hp.reset();
+        self.bell_lp.reset();
+        self.bell_hp2.reset();
+        self.bell_lp.set_hz(n.freq_hz, std::f32::consts::FRAC_1_SQRT_2, self.sample_rate as f32);
         self.silent_blocks = 0;
         self.left.refl = 0.0;
         self.right.refl = 0.0;
@@ -392,11 +443,14 @@ impl Bore {
 
         // The LFO is evaluated once per sub-block and interpolated across it.
         self.lfo_phase = (self.lfo_phase + self.lfo_inc * len as f64).fract();
-        let lfo_now = ((self.lfo_phase * std::f64::consts::TAU).sin()) as f32;
+        // The fade-in scales the LFO itself, so drive and pitch vibrato both grow in.
+        self.vib_gain = (self.vib_gain + self.vib_step * len as f32).min(1.0);
+        let lfo_now = ((self.lfo_phase * std::f64::consts::TAU).sin()) as f32 * self.vib_gain;
         let lfo_prev = self.lfo_prev;
         self.lfo_prev = lfo_now;
         let dl = (lfo_now - lfo_prev) / len as f32;
         let noise = NOISE_SCALE * raw.noise.clamp(0.0, 1.0);
+        let bell = BELL_GAIN * raw.bell.clamp(0.0, 1.0);
         let vib = VIBRATO_SCALE * raw.vibrato_depth.clamp(0.0, 1.0);
         let mut lfo = lfo_prev;
         // Pitch vibrato: retune the loop at the sub-block's LFO value (positive LFO is sharp, a shorter loop).
@@ -434,6 +488,18 @@ impl Bore {
             self.dc_x1 = x;
             self.dc_y1 = flush_denormal(o);
             peak = peak.max(o.abs());
+            let o = if bell > 0.0 {
+                // band-pass at f0: the fundamental in phase. A quadrature carrier (the low-pass) makes the two
+                // neighbours' products cancel on each even harmonic; in phase they add.
+                let fund = self.bell_lp.process(o).bp() * 2.0 * std::f32::consts::FRAC_1_SQRT_2;
+                // a sine's mean |x| is 2/pi of its peak: scale the carrier to unit peak
+                self.bell_env = flush_denormal(self.bell_env + self.bell_a * (fund.abs() - self.bell_env));
+                let carrier = fund * std::f32::consts::FRAC_2_PI / (self.bell_env + 1e-6);
+                let up = self.bell_hp.process(o).hp();
+                o + bell * self.bell_hp2.process(up * carrier).hp()
+            } else {
+                o
+            };
             out[i] += match mult {
                 Some(mu) => o * mu[i],
                 None => o,
@@ -487,6 +553,7 @@ mod tests {
     fn pitch_vibrato_wobbles_the_period() {
         let setup = NoteSetup { freq_hz: 220.0, vibrato_hz: 6.0, ..NoteSetup::default() };
         let raw = Raw { character: 1.0, aperture: 0.6, drive: 0.5, ..Raw::default() };
+        assert!(tail_rms(&render(&raw, &setup, 1.0)) > 0.01, "the note speaks");
         let spread = |pv: f32| {
             let p = periods(&render(&Raw { pitch_vibrato: pv, ..raw }, &setup, 1.0), SR / 220.0);
             let m = p.iter().sum::<f32>() / p.len() as f32;
@@ -495,6 +562,69 @@ mod tests {
         let (still, wobbly) = (spread(0.0), spread(1.0));
         // 60 cents peak is about 3.5% period swing; the still note's period hardly varies.
         assert!(wobbly > 0.01 && wobbly > 4.0 * still, "still {still}, wobbly {wobbly}");
+    }
+
+    #[test]
+    fn vibrato_delay_fades_the_wobble_in() {
+        let setup = NoteSetup { freq_hz: 220.0, vibrato_hz: 6.0, vibrato_delay_ms: 2000.0, ..NoteSetup::default() };
+        let raw = Raw { character: 1.0, aperture: 0.6, drive: 0.5, pitch_vibrato: 1.0, ..Raw::default() };
+        let x = render(&raw, &setup, 3.0);
+        assert!(tail_rms(&x) > 0.01, "the note speaks: {}", tail_rms(&x));
+        // period spread while the fade is under 30% (0.2-0.6 s) vs at full depth (2.2-3 s); `periods` reads a slice's second half
+        let spread = |a: &[f32]| { let p = periods(a, SR / 220.0); let m = p.iter().sum::<f32>() / p.len() as f32; (p.iter().map(|v| (v - m).powi(2)).sum::<f32>() / p.len() as f32).sqrt() };
+        let (early, late) = (spread(&x[(0.2 * SR) as usize..(1.0 * SR) as usize]), spread(&x[(1.4 * SR) as usize..]));
+        assert!(late > 2.0 * early, "early {early}, late {late}");
+    }
+
+    /// Level (dB re the strongest) of harmonics 1..=n of a render's second half: the peak of a Hann-windowed DFT
+    /// within ±2% of each harmonic (the note can be a few cents off `f0`, which matters at high harmonics).
+    fn harmonic_db(x: &[f32], f0: f32, n: usize) -> Vec<f32> {
+        let t = &x[x.len() / 2..];
+        let w = |i: usize| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / t.len() as f32).cos();
+        let dft = |f: f32| {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, v) in t.iter().enumerate() {
+                let ph = std::f32::consts::TAU * f * i as f32 / SR;
+                re += v * w(i) * ph.cos();
+                im += v * w(i) * ph.sin();
+            }
+            re * re + im * im
+        };
+        let p: Vec<f32> = (1..=n).map(|k| (-10..=10).map(|j| dft(k as f32 * f0 * (1.0 + 0.002 * j as f32))).fold(0.0, f32::max)).collect();
+        let m = p.iter().cloned().fold(0.0, f32::max);
+        p.iter().map(|v| 10.0 * (v / m).log10()).collect()
+    }
+
+    /// A clarinet-ish closed-bore reed note that speaks: knobs through the calibration, as the device does.
+    fn clarinet(key: f32) -> (Raw, NoteSetup) {
+        let k = crate::bore_cal::Knobs { character: 0.0, open: false, position: 0.5, ..Default::default() };
+        let r = crate::bore_cal::resolve(key, &k);
+        let f = 440.0 * ((key - 69.0) / 12.0).exp2();
+        (r.raw, NoteSetup { freq_hz: f, open: false, position: r.position, tune_cents: r.tune_cents, ..NoteSetup::default() })
+    }
+
+    #[test]
+    fn bell_brings_back_even_harmonics_up_high_and_keeps_tuning() {
+        let (raw, setup) = clarinet(55.0);
+        let f = setup.freq_hz;
+        let plain = render(&raw, &setup, 1.0);
+        let bell = render(&Raw { bell: 1.0, ..raw }, &setup, 1.0);
+        assert!(tail_rms(&plain) > 0.01, "the note speaks: {}", tail_rms(&plain));
+        let (hp, hh) = (harmonic_db(&plain, f, 16), harmonic_db(&bell, f, 16));
+        // h2 stays down; the evens above the bell's high-pass (h8..h16, 1.6-3.1 kHz) come up
+        let even_hi = |h: &[f32]| (h[7] + h[9] + h[11] + h[13] + h[15]) / 5.0;
+        assert!(hh[1] < -30.0, "h2 plain {} bell {}", hp[1], hh[1]);
+        assert!(even_hi(&hh) > even_hi(&hp) + 10.0, "plain {hp:?}\nbell {hh:?}");
+        // outside the loop: the period is untouched
+        let per = |x: &[f32]| { let p = periods(x, SR / f); p.iter().sum::<f32>() / p.len() as f32 };
+        let cents = 1200.0 * (per(&plain) / per(&bell)).log2();
+        assert!(cents.abs() < 2.0, "{cents} cents");
+    }
+
+    #[test]
+    fn bell_at_zero_is_bit_identical() {
+        let (raw, setup) = clarinet(62.0);
+        assert_eq!(render(&raw, &setup, 0.3), render(&Raw { bell: 0.0, ..raw }, &setup, 0.3));
     }
 
     #[test]

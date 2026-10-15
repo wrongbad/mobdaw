@@ -481,6 +481,8 @@ for the note, so any value in 0..1 speaks and levels out.
 | release | 12 | 1..5000 ms | 120 | Read when a note is released. |
 | gain | 13 | 0..2 | 1 | Smoothed. |
 | vibrato pitch | 14 | 0..1 | 0 | Pitch vibrato (loop retuned per 32-sample sub-block at the vibrato rate), 60 cents peak at 1. Smoothed. |
+| vibrato delay | 15 | 0..3000 ms | 0 | Both vibratos fade in linearly over this long from the note start. Read when a note starts. |
+| bell | 16 | 0..1 | 0 | Even harmonics above ~1.2 kHz, added outside the loop (ring modulation of the upper partials by the fundamental; docs `dsp::bore`). No effect on tuning or calibration. Smoothed. |
 
 - Notes outside the working range of the current character, position and bore get no voice. When all 8 voices are
   busy the oldest is stolen with a 64-sample fade. Velocity sets a breath burst and scales level (0.5 + 0.5 v).
