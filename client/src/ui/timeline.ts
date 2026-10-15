@@ -862,11 +862,16 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     return { el: h('div', { className: 'auto-section', hidden: true }, h('div', { className: 'fx-row' }, toggle, grid)), toggle, grid }
   }
 
+  const presetKeys = new WeakMap<HTMLElement, string>()
   function drawPresets(l: Lane, t: Track) {
     const list = presetsShown.has(t.id) ? presetsFor(doc, t.id) : []
     const has = presetsFor(doc, t.id).length > 0
     l.tabs.get('presets')!.hidden = !has
     l.presets.el.hidden = !list.length
+    // Redrawn on every refresh while playing; rebuilding identical buttons each frame eats clicks and flickers.
+    const key = JSON.stringify([list.map((p) => [p.id, p.group, p.name]), t.preset, readOnly || locks.has(t.id)])
+    if (presetKeys.get(l.presets.grid) === key) return
+    presetKeys.set(l.presets.grid, key)
     const groups = new Map<string, typeof list>()
     for (const p of list) groups.set(p.group, [...(groups.get(p.group) ?? []), p])
     l.presets.grid.replaceChildren(...[...groups].map(([name, items]) => h('div', { className: 'preset-col', role: 'group', 'aria-label': name },
