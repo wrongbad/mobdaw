@@ -6,7 +6,7 @@ use std::{fs, path::Path};
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let sf2 = Path::new(&a[1]);
-    println!("| program | run | total | spectral+env | attack | vibrato | attack ms target / fit | vibrato cents target / fit |\n|---|---|---|---|---|---|---|---|");
+    println!("| program | run | total | spectral+env | attack | vibrato+harmonics | attack ms target / fit | vibrato cents target / fit | harmonic dB err (all / even) |\n|---|---|---|---|---|---|---|---|---|");
     for pr in &PROGRAMS {
         let ps = probes(pr);
         let tgt: Vec<Vec<f32>> = ps.iter().map(|p| render_sf2(sf2, pr.gm, *p)).collect();
@@ -22,8 +22,15 @@ fn main() {
             let (b, at, v) = (m(&|x| x.0), m(&|x| x.1), m(&|x| x.2));
             let att_y = ys.iter().map(|y| attack_time(y)).sum::<f32>() / 3.0 * 1000.0;
             let vib_y = ys.iter().zip(&ps).map(|(y, p)| vibrato(y, *p).0).sum::<f32>() / 3.0;
+            // mean |dB| harmonic-level error, and of the even harmonics alone
+            let herr = |even: bool| ys.iter().zip(&ts).zip(&ps).map(|((y, t), p)| {
+                let (th, yh) = (t.harm.as_ref().unwrap(), harmonic_levels(y, *p));
+                let d: Vec<f32> = th.iter().zip(&yh).enumerate().filter(|(k, _)| !even || k % 2 == 1).map(|(_, (a, b))| (a - b).abs()).collect();
+                d.iter().sum::<f32>() / d.len().max(1) as f32
+            }).sum::<f32>() / 3.0;
+            let (h_all, h_even) = (herr(false), herr(true));
             let label = Path::new(run).file_name().unwrap().to_string_lossy();
-            println!("| {} | {label} | {:.2} | {b:.2} | {at:.2} | {v:.2} | {att_t:.0} / {att_y:.0} | {vib_t:.0} / {vib_y:.0} |", pr.name, b + at + v);
+            println!("| {} | {label} | {:.2} | {b:.2} | {at:.2} | {v:.2} | {att_t:.0} / {att_y:.0} | {vib_t:.0} / {vib_y:.0} | {h_all:.1} / {h_even:.1} |", pr.name, b + at + v);
         }
     }
 }

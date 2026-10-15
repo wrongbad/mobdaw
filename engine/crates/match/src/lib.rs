@@ -139,6 +139,10 @@ pub struct Target {
     pub env: Vec<f32>,
     /// Vibrato (depth cents, rate Hz) of the held part, when the pitch term is on.
     pub vib: Option<(f32, f32)>,
+    /// Vibrato depth (cents) early and late in the held part, so a fade-in has to match too.
+    pub vib_split: Option<(f32, f32)>,
+    /// Harmonic levels (dB re the strongest) of the held part.
+    pub harm: Option<Vec<f32>>,
     /// The attack segment (first [`ATTACK_S`]): 256-point band spectrogram and 5 ms dB envelope.
     pub att_spec: Vec<Vec<f32>>,
     pub att_env: Vec<f32>,
@@ -176,12 +180,12 @@ fn envelope(x: &[f32]) -> Vec<f32> {
 
 pub fn target(x: &[f32]) -> Target {
     let a = attack_part(x);
-    Target { specs: [512, 2048].iter().map(|&n| spec(x, n, 40)).collect(), env: envelope(x), vib: None, att_spec: spec(a, 256, 24), att_env: fine_envelope(a) }
+    Target { specs: [512, 2048].iter().map(|&n| spec(x, n, 40)).collect(), env: envelope(x), vib: None, vib_split: None, harm: None, att_spec: spec(a, 256, 24), att_env: fine_envelope(a) }
 }
 
 /// As [`target`], plus the vibrato of the held part for the pitch term of [`loss`].
 pub fn target_pitched(x: &[f32], p: Probe) -> Target {
-    Target { vib: Some(vibrato(x, p)), ..target(x) }
+    Target { vib: Some(vibrato(x, p)), vib_split: Some(vibrato_split(x, p)), harm: Some(harmonic_levels(x, p)), ..target(x) }
 }
 
 /// Multi-resolution log-spectral L1 + dB envelope; lower is better.
@@ -203,7 +207,7 @@ pub fn loss(t: &Target, y: &[f32]) -> f32 {
     tot + 2.0 * e + W_ATTACK * attack_loss(t, y)
 }
 
-/// The parts of [`loss_pitched`]: (spectral + envelope, attack, vibrato).
+/// The parts of [`loss_pitched`]: (spectral + envelope, attack, vibrato + harmonics).
 pub fn loss_parts(t: &Target, y: &[f32], p: Probe) -> (f32, f32, f32) {
     let a = W_ATTACK * attack_loss(t, y);
     let base = loss(t, y) - a;
@@ -230,6 +234,12 @@ pub fn attack_loss(t: &Target, y: &[f32]) -> f32 {
 /// vibrato to speak of).
 pub const W_DEPTH: f32 = 0.08;
 pub const W_RATE: f32 = 0.25;
+/// Per dB of mean harmonic-level error. The band spectrogram can't see odd/even balance up high (a quarter-octave band
+/// holds 2-3 harmonics there, so the evens moving 40 dB shifts it ~0.4 dB); this term resolves each harmonic.
+pub const W_HARM: f32 = 0.08;
+pub const HARMONICS: usize = 16;
+/// Harmonic levels below this (dB re the strongest) count as this.
+pub const HARM_FLOOR_DB: f32 = -60.0;
 
 /// [`loss`] plus, if the target has vibrato stats, the vibrato depth/rate mismatch.
 pub fn loss_pitched(t: &Target, y: &[f32], p: Probe) -> f32 {
@@ -238,7 +248,50 @@ pub fn loss_pitched(t: &Target, y: &[f32], p: Probe) -> f32 {
     let (yd, yr) = vibrato(y, p);
     // a near-flat contour's "rate" is jitter: only compare rates when both have a vibrato to speak of
     let rate_w = (td.min(yd) / 8.0).min(1.0);
-    base + W_DEPTH * (td - yd).abs() + W_RATE * rate_w * (tr - yr).abs()
+    let mut l = base + W_RATE * rate_w * (tr - yr).abs();
+    // depth: early and late halves of the held part (half weight each), so the fade-in counts
+    l += match t.vib_split {
+        Some((te, tl)) => { let (ye, yl) = vibrato_split(y, p); 0.5 * W_DEPTH * ((te - ye).abs() + (tl - yl).abs()) }
+        None => W_DEPTH * (td - yd).abs(),
+    };
+    if let Some(th) = &t.harm {
+        let yh = harmonic_levels(y, p);
+        let n = th.iter().zip(&yh).count().max(1) as f32;
+        l += W_HARM * th.iter().zip(&yh).map(|(a, b)| (a - b).abs()).sum::<f32>() / n;
+    }
+    l
+}
+
+/// Vibrato depth (cents) over 0.25-0.7 s and 0.7 s to the release.
+pub fn vibrato_split(x: &[f32], p: Probe) -> (f32, f32) {
+    let mid = (0.7 * SR as f32) as usize;
+    let early = Probe { hold: 0.7, ..p };
+    // the late window: shift the clip so the track's 0.25 s start lands at 0.7 s
+    let off = mid - (0.25 * SR as f32) as usize;
+    let late = Probe { hold: p.hold - off as f32 / SR as f32, ..p };
+    (vibrato(x, early).0, vibrato(&x[off..], late).0)
+}
+
+/// Levels (dB re the strongest, floored at [`HARM_FLOOR_DB`]) of harmonics 1..=[`HARMONICS`] below 16 kHz in the held
+/// part (0.3 s on, 16384 samples): the Hann-windowed spectrum's peak within ±3% of each harmonic.
+pub fn harmonic_levels(x: &[f32], p: Probe) -> Vec<f32> {
+    let f0 = 440.0 * ((p.key as f32 - 69.0) / 12.0).exp2();
+    let n = 16384;
+    let a = (0.3 * SR as f32) as usize;
+    let seg = &x[a..(a + n).min(x.len())];
+    let mut buf: Vec<Complex<f32>> = (0..n).map(|i| {
+        let v = seg.get(i).copied().unwrap_or(0.0);
+        Complex::new(v * (0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n as f32).cos()), 0.0)
+    }).collect();
+    FftPlanner::<f32>::new().plan_fft_forward(n).process(&mut buf);
+    let bin = SR as f32 / n as f32;
+    let h: Vec<f32> = (1..=HARMONICS).filter(|&k| k as f32 * f0 < 16000.0).map(|k| {
+        let f = k as f32 * f0;
+        let (lo, hi) = (((f * 0.97 - 5.0) / bin) as usize, ((f * 1.03 + 5.0) / bin) as usize + 1);
+        buf[lo.max(1)..hi.min(n / 2)].iter().map(|c| c.norm_sqr()).fold(0.0, f32::max)
+    }).collect();
+    let m = h.iter().cloned().fold(1e-20, f32::max);
+    h.iter().map(|v| (10.0 * (v / m + 1e-20).log10()).max(HARM_FLOOR_DB)).collect()
 }
 
 /// f0 contour (cents vs the probe's note) of the held part, 0.25 s to the release, by autocorrelation within ±8% of
