@@ -3,20 +3,19 @@
 import { MAX_PPS, MIN_PPS, fitPps } from './zoomFit'
 import { editZoomPps } from './autoZoom'
 import {
-  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, MIX, MIX_GAIN, MIX_PAN, getMixDevice, setMixParam, migrateToV3, FINNWAVE, SIMPLE_FILTER, addAudioClip, addClickTrack, addDevice, addDrum, isLooping, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
-  evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
+  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, MIX, MIX_GAIN, MIX_PAN, getMixDevice, setMixParam, migrateToV3, FINNWAVE, SIMPLE_FILTER, addClickTrack, addDevice, addDrum, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
+  evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToValue, pointsMap, resolveTarget, setLaneEnabled, 
   deleteDevice, deleteLooper, addNextLooper, isDrum, isForever, passLength, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples, metaMap,
-  getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
-  updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
+  getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
+  updateDevice, updateLooper, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
   type Point, type SampleMeta, type Track,
-  type Role, nextTrackColor, trackColor, foreverSamples,
+  type Role, nextTrackColor, trackColor, 
 } from '@mobdaw/shared'
 import { homeLink } from '../router'
 import { drawWave, onPeaks, peaksFor, storedPeaks } from '../audio/peaks'
 import { shape } from '../audio/probe'
-import { getInputOffset, setInputOffset, type Captured } from '../audio/recording'
-import { LoopPedal, commitLoop, joinUndo, loopOffset, type Cmd, type LoopIO, type LoopTake } from '../audio/loopPedal'
-import { actionFor, cmdForKey, getBindings, getKeys, getMidiInput, midiSupported, onPress, openMidi } from '../midi'
+import { getInputOffset, setInputOffset } from '../audio/recording'
+import { cmdForKey, getKeys } from '../midi'
 import type { Meters, PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
 import { renderProject } from '../audio/render'
@@ -24,7 +23,7 @@ import { exportDialog } from './exportDialog'
 import { projectMenu } from './projectMenu'
 import { h } from '../dom'
 import { importFile, playable, PLAYBACK_MAX_BYTES } from '../samples'
-import { discardTake, finishTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, takeJournal, uploadAll, uploadTake, type TakeCtx } from '../takes'
+import { discardTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, uploadAll, uploadTake } from '../takes'
 import type { Session } from '../project/session'
 import { chatPanel } from './chat'
 import { NO_AUTO, autoRow, automateMenu, type AutoInfo } from './automation'
@@ -34,7 +33,7 @@ import type { FilterChange, FilterMember } from './filterCurve'
 import { LOOP_COLORS, looperCard } from './loopers'
 import { drumGrid } from './drumGrid'
 import { noteEditor } from './noteEditor'
-import { clamp, dragPointer, grabAt, passBoundaries, rotatePhase, rotateTick, snapTracker, trimBlock, trimMidiLeft, type Grab } from './blocks'
+import { clamp, dragPointer, grabAt, passBoundaries, snapTracker, trimBlock, type Grab } from './blocks'
 import { closedBy, deleteMenu, popover } from './popover'
 import { fmt, transportControls, type TransportControls } from './transport'
 import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
@@ -45,6 +44,7 @@ import { knob } from './knob'
 import { follow, peakToFill } from './meter'
 import { icon, setIcon } from '../theme/icons'
 import { MIN_SEC, addImportedClip, automateParam, commitParam, commitParams, deleteClips, loopClip, loopForever, passClip, reorderDevice, trimClip, unloopClip } from '../project/actions'
+import { createRecorder } from '../project/recorder'
 import { createDrawers, createSelection, type TabName } from '../project/viewState'
 
 const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in styles.css
@@ -98,17 +98,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let pps = 80
   const sel = createSelection() // clips, the open MIDI editor, note, pad and armed looper (local UI state)
   const drawers = createDrawers() // which drawers each track (or MASTER_TRACK) has open (local UI state, all shut by default)
-  let armedTrack: string | null = null // audio track armed for recording (local UI state, never in the doc)
-  let monitoring = false // hear the armed track's input through its effects (local UI state)
-  let monitored: string | null = null // the track the engine is currently monitoring
-  let take: { trackId: string; trackName: string; start: number; journal: ReturnType<typeof takeJournal> } | null = null // the take being recorded
   let locks = new Map<string, string>() // track id -> who is recording on it (someone else)
-  let loops: LoopPedal | null = null // the loop commands (keys and MIDI are always listened for; docs/engine.md §9.2)
-  let offMidi = () => {} // stops listening to the MIDI input
-  let loopLive: { source: number; clip?: number } | null = null // the live source (and engine-only clip) of the loop being recorded
-  let loopTimer = 0 // while a loop records: ends its take when it has what it needs
-  let closingTake: Promise<unknown> = Promise.resolve() // a loop take being stopped by the recorder
-  let loopArming = false // asking for the microphone
   const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
   const recRegions = new Map<string, HTMLElement>()
   let autoLanes: AutoLane[] = [] // as of the last draw
@@ -126,7 +116,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   // --- static structure
   const transport = transportControls({
     title: 'play / pause (space)', onToggle: () => toggle(), onRewind: () => { seek(0); scroll.scrollLeft = 0 },
-    record: readOnly ? undefined : { onToggle: () => void toggleRecord(), onMenu: (e) => offsetMenu(e) },
+    record: readOnly ? undefined : { onToggle: () => void rec.toggleRecord(), onMenu: (e) => offsetMenu(e) },
   })
   const status = h('span', { className: 'dim status', onclick: () => status.textContent && alert(status.textContent) })
   /** Show a line in the bar; `bad` marks a problem (red) rather than a note. */
@@ -162,8 +152,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
           locked: readOnly ? 'readonly' : isBlank() ? null : 'tracks',
           set: (r) => isBlank() && metaMap(doc).set('sampleRate', r),
         },
-        onInputChanged: () => void reopenInput(),
-        onLoopBindings: readOnly ? undefined : listenMidi, // (the keys are read at each press; the input may have changed)
+        onInputChanged: () => void rec.reopenInput(),
+        onLoopBindings: readOnly ? undefined : () => rec.listenMidi(), // (the keys are read at each press; the input may have changed)
       })
     } }, projectName)
     return el
@@ -177,10 +167,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function rateChanged() {
     const next = getSampleRate(doc)
     if (!pb || next === rate) return
-    resetLoops()
+    rec.resetLoops()
     pb.destroy()
     rate = next
-    armedTrack = null
+    rec.forgetArmed()
     try {
       pb = openPlayback(doc, s.projectId, rate, s.userId)
       pb.recorder.onlevel = drawLevel
@@ -189,23 +179,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     } catch (err) {
       pb = null
       say(`sample rate: ${(err as Error).message}`, true)
-    }
-    draw()
-  }
-  /** The microphone choice changed: if one is open, reconnect it to the chosen device (unless a take is running). */
-  async function reopenInput() {
-    if (!pb?.recorder.armed) return
-    if (take) {
-      say('the new microphone is used from the next take')
-      return
-    }
-    pb.recorder.disarm()
-    try {
-      await pb.recorder.arm()
-      say('')
-    } catch (err) {
-      armedTrack = null
-      say(`record: ${(err as Error).message}`, true)
     }
     draw()
   }
@@ -297,6 +270,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const fromX = (px: number) => Math.max(0, Math.round((px / pps) * rate))
   const position = () => pb?.position() ?? 0
 
+  const rec = createRecorder({
+    s, doc, undo, readOnly, rate: () => rate, pb: () => pb, position: () => position(), say, onChange: () => draw(),
+    startTransport, stop, loopStatus: () => drawLoopStatus(),
+  })
   const ne = noteEditor({
     doc, undo, readOnly,
     selectNote: (id) => (sel.selectNote(id), draw()),
@@ -310,260 +287,24 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (pb.playing) stop()
     else startTransport()
   }
-  function startTransport() {
-    pb?.play()
+  function startTransport(from?: number) {
+    if (!pb?.playing) pb?.play(from)
     transport.setPlaying(true)
     tick()
     ensurePreviewTick() // the loopers' playheads
   }
   function stop() {
-    const t = take
-    take = null
-    loops?.reset()
-    const live = loopLive // (a loop interrupted by the stop is saved as a plain take; its live source goes once the take has ended)
-    loopLive = null
-    clearLoopTimer()
-    drawLoopStatus()
-    const captured = t ? pb?.recorder.stop() : undefined // (asks the worklet to end the take before the engine stops)
-    // the loop commands' microphone is let go once every take has ended (never cut short); a track armed for recording keeps it
-    void Promise.all([captured, closingTake]).then(() => !armedTrack && !take && !pb?.playing && !loops?.recording && pb?.recorder.disarm())
-    if (live) void Promise.resolve(captured).then(() => (live.clip != null && pb?.removeLiveClip(live.clip), pb?.dropLiveSource(live.source)))
-    pb?.stop()
-    transport.setPlaying(false)
-    s.setLocal({ playhead: null, ...(t ? { recording: null } : {}) })
-    draw()
-    ensurePreviewTick() // let the loopers' playheads clear
-    if (t && captured) void saveTake(t, captured)
+    rec.stop(() => {
+      pb?.stop()
+      transport.setPlaying(false)
+      ensurePreviewTick() // let the loopers' playheads clear
+    })
   }
 
-  // --- recording (docs/engine.md §9)
-  /** R: arm this audio track (the first time, ask for the microphone) or disarm it. */
-  async function arm(id: string) {
-    if (!pb || take) return
-    if (armedTrack === id) {
-      armedTrack = null
-      pb.recorder.disarm()
-      return draw()
-    }
-    try {
-      await pb.recorder.arm()
-    } catch (err) {
-      say(`record: ${(err as Error).message}`, true)
-      return
-    }
-    say('')
-    armedTrack = id
-    draw()
-  }
-
-  /** ●: play and capture from the playhead (onto a new track if none is armed); again to stop. */
-  let preparing = false // asking for the microphone: ignore further presses
-  async function toggleRecord() {
-    if (!pb || readOnly || preparing) return
-    if (loops?.recording) return void say('record: a loop is recording', true)
-    if (take) return stop()
-    if (!armedTrack || !tracksMap(doc).has(armedTrack) || !pb.recorder.armed) {
-      preparing = true
-      try {
-        await pb.recorder.arm()
-      } catch (err) {
-        say(`record: ${(err as Error).message}`, true)
-        return
-      } finally {
-        preparing = false
-      }
-      if (destroyed || take) return
-      if (!armedTrack || !tracksMap(doc).has(armedTrack)) armedTrack = addTrack(doc, `track ${getTracks(doc).length + 1}`, 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))
-      draw()
-    }
-    const trackId = armedTrack!
-    const from = Math.round(position()) // (while playing, capture begins at the engine's next block: the recorder reports where)
-    const info = { trackId, trackName: String(tracksMap(doc).get(trackId)!.get('name')) }
-    const journal = takeJournal(s.projectId, info, rate, pb.recorder.info!.channels)
-    try {
-      pb.recorder.start((pcm, seq) => journal.chunk(pcm, seq), (pos) => journal.header(pos, pb!.recorder.latency()))
-    } catch (err) {
-      journal.release()
-      say(`record: ${(err as Error).message}`, true)
-      return
-    }
-    take = { ...info, start: from, journal }
-    say('')
-    s.setLocal({ recording: { trackId, start: from } })
-    if (!pb.playing) pb.play(from)
-    transport.setPlaying(true)
-    tick()
-    ensurePreviewTick()
-    draw()
-  }
-
-  async function saveTake(t: NonNullable<typeof take>, captured: Promise<Captured | null>) {
-    const cap = await captured
-    if (!cap) return t.journal.discard(), t.journal.release()
-    say('saving take…')
-    undo.stopCapturing()
-    try {
-      await finishTake(takeCtx(), { ...cap, trackId: t.trackId, trackName: t.trackName })
-      say('')
-      await t.journal.settled()
-      t.journal.discard() // (on failure the backup stays, and is recovered next time)
-    } catch (err) {
-      say(`take: ${(err as Error).message}`, true)
-    }
-    t.journal.release()
-    undo.stopCapturing()
-  }
-
-  const takeCtx = (): TakeCtx => ({ doc, projectId: s.projectId, me: s.userId == null ? null : { id: s.userId, name: s.user.username }, rate })
-
-  // --- loop commands (docs/engine.md §9.2, audio/loopPedal.ts): the transport keeps rolling and every command is written into
-  // the doc where it was heard. A loop take goes through the normal take path (`take`, the recorder, `finishTake`).
-  function resetLoops() {
-    loops?.reset()
-    dropLoopLive()
-    loops = null
-  }
-  const clearLoopTimer = () => (clearInterval(loopTimer), (loopTimer = 0))
-  /** Let go of a loop's live source and engine-only clip that never became a doc clip. */
-  function dropLoopLive() {
-    clearLoopTimer()
-    const l = loopLive
-    loopLive = null
-    if (!l || !pb) return
-    if (l.clip != null) pb.removeLiveClip(l.clip)
-    pb.dropLiveSource(l.source)
-  }
-  function makeLoops(): LoopPedal | null {
-    if (!pb || readOnly) return null
-    const io: LoopIO = {
-      playing: () => !!pb?.playing,
-      play: startTransport,
-      beginTake: beginLoopTake,
-      liveLoop: (t) => {
-        // The clip plays from the live source at once: silent until the boundary, then the loop, whatever the save is doing.
-        if (loopLive) loopLive.clip = pb!.liveClip(t.trackId, { source: loopLive.source, start: t.start, length: foreverSamples(rate), sourceOffset: loopOffset(t), loopLength: t.pass })
-      },
-      endTake: endLoopTake,
-      cancelTake: cancelLoopTake,
-      say: (m) => say(m, true),
-    }
-    return new LoopPedal({ doc, rate, io, undo, latency: () => pb!.recorder.latency() })
-  }
-  /** The take of a loop: the normal recording path, written into a live source the engine can play while it grows. */
-  function beginLoopTake(trackId: string): boolean {
-    const rec = pb!.recorder
-    if (take || rec.recording || !rec.armed || !rec.info) {
-      say('loop: the previous take is still closing', true)
-      return false
-    }
-    const source = pb!.liveSource(rec.info.channels)
-    const info = { trackId, trackName: String(tracksMap(doc).get(trackId)!.get('name')) }
-    const journal = takeJournal(s.projectId, info, rate, rec.info.channels)
-    const from = Math.round(position())
-    try {
-      rec.start((pcm, seq) => journal.chunk(pcm, seq), (pos) => (journal.header(pos, rec.latency()), loops?.tookAt(pos)), source)
-    } catch (err) {
-      journal.release()
-      pb!.dropLiveSource(source)
-      say(`loop: ${(err as Error).message}`, true)
-      return false
-    }
-    take = { ...info, start: from, journal }
-    loopLive = { source }
-    armedTrack = trackId
-    s.setLocal({ recording: { trackId, start: from } })
-    loopTimer = window.setInterval(() => loops && (loops.tick(position()), drawLoopStatus()), 30)
-    return true
-  }
-  /** The loop has all its frames: stop the take and save it. Its clip is the loop, written with the take (one undo step). */
-  function endLoopTake(t: LoopTake) {
-    const tk = take, live = loopLive
-    take = null
-    loopLive = null
-    clearLoopTimer()
-    s.setLocal({ recording: null })
-    if (!tk || !live || !pb) return
-    const stopped = pb.recorder.stop()
-    closingTake = stopped
-    void saveLoopTake(tk, stopped, t, live)
-    draw()
-  }
-  function cancelLoopTake() {
-    const tk = take, live = loopLive
-    take = null
-    clearLoopTimer()
-    s.setLocal({ recording: null })
-    const stopped = pb?.recorder.stop()
-    if (stopped) closingTake = stopped
-    loopLive = null
-    void stopped?.then(() => live && pb?.dropLiveSource(live.source))
-    tk?.journal.discard()
-    tk?.journal.release()
-    draw()
-  }
-  async function saveLoopTake(tk: NonNullable<typeof take>, captured: Promise<Captured | null>, t: LoopTake, live: NonNullable<typeof loopLive>) {
-    const gone = () => (live.clip != null && pb?.removeLiveClip(live.clip), pb?.dropLiveSource(live.source))
-    const cap = await captured
-    if (!cap) return gone(), tk.journal.discard(), tk.journal.release()
-    try {
-      await finishTake(takeCtx(), { ...cap, trackId: tk.trackId, trackName: tk.trackName }, `loop ${new Date().toLocaleTimeString([], { hour12: false })}`,
-        (hash) => (pb?.bindLiveSource(hash, live.source), joinUndo(undo, t.undoDepth)),
-        ({ trackId, hash }) => void commitLoop(doc, { ...t, recstart: cap.startPos }, trackId, hash), true)
-      await tk.journal.settled()
-      tk.journal.discard() // (on failure the backup stays, and is recovered next time)
-    } catch (err) {
-      gone()
-      say(`loop: ${(err as Error).message}`, true)
-    }
-    tk.journal.release()
-    undo.stopCapturing()
-  }
-
-  /** Run a command heard at `perfTime` (performance.now clock; a key or MIDI event's timeStamp). */
-  async function command(cmd: Cmd, perfTime: number) {
-    if (!pb || readOnly || destroyed || loopArming) return
-    let at = perfTime
-    if (cmd === 'record' && !loops?.recording) {
-      if (take) return void say('loop: stop recording first', true)
-      if (!pb.recorder.armed) { // the first press asks for the microphone; it stays armed
-        loopArming = true
-        try {
-          await pb.recorder.arm()
-        } catch (err) {
-          return void say(`loop: ${(err as Error).message}`, true)
-        } finally {
-          loopArming = false
-        }
-        say('')
-        at = performance.now()
-        if (destroyed || !pb) return
-      }
-    }
-    loops ??= makeLoops()
-    if (!loops) return
-    if (armedTrack && tracksMap(doc).has(armedTrack)) loops.current = armedTrack // an armed track is the current one
-    loops.press(cmd, pb.playing ? pb.heard(at) : Math.round(position()))
-    if (armedTrack && loops.current) armedTrack = loops.current
-    draw()
-  }
-  /** Listen to the chosen MIDI input (always, once one is set up). */
-  function listenMidi() {
-    offMidi()
-    offMidi = () => {}
-    const id = getMidiInput()
-    if (!id || !midiSupported() || readOnly) return
-    void openMidi().then(() => {
-      if (destroyed || id !== getMidiInput()) return
-      offMidi = onPress(id, (t, at) => {
-        const c = actionFor(getBindings(), t)
-        if (c) void command(c, at)
-      })
-    }, () => {})
-  }
   const fmtSec = (smp: number) => `${(smp / rate).toFixed(1)}s`
   /** The top bar's loop status: only while a loop records. */
   function drawLoopStatus() {
-    const st = loops?.status(position())
+    const st = rec.loops?.status(position())
     const text = !st ? '' : st.free ? `rec loop · ${fmtSec(st.samples)}` : `rec loop · ${st.stopping ? 'ends' : 'edge'} in ${fmtSec(st.samples)}`
     if (loopText.textContent !== text) loopText.textContent = text
     loopText.hidden = !st
@@ -616,11 +357,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
 
   /** The armed track's input meter: level on the drawn scale, red once the input has hit full scale. */
   function drawLevel() {
-    const rec = pb?.recorder
-    const l = armedTrack ? lanes.get(armedTrack) : undefined
-    if (!rec || !l?.meter) return
-    l.meter.style.setProperty('--lv', String(shape(rec.level)))
-    l.meter.classList.toggle('clipping', rec.clipped) // (not 'clip': that is the timeline clips' class, with its own ::before)
+    const input = pb?.recorder
+    const l = rec.armedTrack ? lanes.get(rec.armedTrack) : undefined
+    if (!input || !l?.meter) return
+    l.meter.style.setProperty('--lv', String(shape(input.level)))
+    l.meter.classList.toggle('clipping', input.clipped) // (not 'clip': that is the timeline clips' class, with its own ::before)
   }
 
   /** The take so far, drawn into its growing region (the visible part only). */
@@ -644,7 +385,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   /** The growing regions of takes in progress: ours, and other people's (from their awareness). */
   function drawRecRegions() {
     const want = new Map<string, { trackId: string; start: number; end: number; label: string }>()
-    if (take) want.set('me', { trackId: take.trackId, start: take.start, end: position(), label: 'recording' })
+    if (rec.take) want.set('me', { trackId: rec.take.trackId, start: rec.take.start, end: position(), label: 'recording' })
     for (const r of s.remoteStates()) {
       if (r.recording) want.set(`${r.user.username}:${r.recording.trackId}`, { ...r.recording, end: r.playhead ?? r.recording.start, label: `${r.user.username} is recording` })
     }
@@ -665,7 +406,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function tick() {
     if (destroyed || !pb?.playing) return
     // A take over the playback limit couldn't be played back: end it there (16-bit, so 2 bytes a sample).
-    if (take && (position() - take.start) * pb.recorder.info!.channels * 2 >= PLAYBACK_MAX_BYTES - 1024 * 1024) {
+    if (rec.take && (position() - rec.take.start) * pb.recorder.info!.channels * 2 >= PLAYBACK_MAX_BYTES - 1024 * 1024) {
       stop()
       say('take stopped: it reached the longest take that can be played back yet')
       return
@@ -688,7 +429,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     drawLoopStatus()
   }
   function seek(smp: number) {
-    if (take) return // a take is one continuous stretch of the timeline
+    if (rec.take) return // a take is one continuous stretch of the timeline
     pb?.seek(smp)
     drawPlayhead()
   }
@@ -934,11 +675,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       updateTrack(doc, t.id, { soloed: !tracksMap(doc).get(t.id)?.get('soloed') })
     } }, 'S')
     solo.disabled = readOnly
-    const record = t.kind === 'audio' ? h('button', { className: 'record', title: 'arm for recording', onclick: () => void arm(t.id) }, 'R') : null
+    const record = t.kind === 'audio' ? h('button', { className: 'record', title: 'arm for recording', onclick: () => void rec.arm(t.id) }, 'R') : null
     if (record) record.disabled = readOnly
     const listen = record ? h('button', { className: 'listen', hidden: true, title: 'monitor the input through this track\'s effects (use headphones)', onclick: () => {
-      monitoring = !monitoring
-      draw()
+      rec.toggleMonitoring()
     } }, 'I') : null
     const meter = record ? h('i', { className: 'meter', hidden: true, title: 'input level' }) : null
     const mix = mixControls(t.id)
@@ -1477,13 +1217,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     clickBtn.classList.toggle('on', tracks.some((t) => t.role === 'click' && !t.muted)) // lit: a click track exists and is unmuted
     const ids = new Set(tracks.map((t) => t.id))
     for (const [id, l] of lanes) if (!ids.has(id)) { l.el.remove(); lanes.delete(id) }
-    if (armedTrack && !ids.has(armedTrack)) { // the armed track was deleted
-      armedTrack = null
-      if (!take) pb?.recorder.disarm()
-    }
-    transport.setRecord(!!armedTrack, !!take)
-    const want = monitoring && armedTrack && pb?.recorder.armed ? armedTrack : null // (disarming ends monitoring)
-    if (want !== monitored) pb?.monitor((monitored = want))
+    rec.sync(ids)
+    transport.setRecord(!!rec.armedTrack, !!rec.take)
     tracks.forEach((t, i) => {
       const l = laneFor(t)
       if (laneBox.children[i] !== l.el) laneBox.insertBefore(l.el, laneBox.children[i] ?? null)
@@ -1501,12 +1236,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       }
       l.kind.title = k.label
       l.el.classList.toggle('locked', locks.has(t.id))
-      l.record?.classList.toggle('on', armedTrack === t.id)
-      l.el.classList.toggle('current', !readOnly && loops?.current === t.id)
-      if (l.meter) l.meter.hidden = armedTrack !== t.id
+      l.record?.classList.toggle('on', rec.armedTrack === t.id)
+      l.el.classList.toggle('current', !readOnly && rec.loops?.current === t.id)
+      if (l.meter) l.meter.hidden = rec.armedTrack !== t.id
       if (l.listen) {
-        l.listen.hidden = armedTrack !== t.id
-        l.listen.classList.toggle('on', monitoring)
+        l.listen.hidden = rec.armedTrack !== t.id
+        l.listen.classList.toggle('on', rec.monitoring)
       }
       l.mute.classList.toggle('on', t.muted)
       l.el.classList.toggle('muted', t.muted)
@@ -1893,7 +1628,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     return staged.get(hash)!
   }
   function incomingLabel(m: SampleMeta) {
-    const mine = isMine(takeCtx(), m)
+    const mine = isMine(rec.takeCtx(), m)
     if (mine && stagedHere(m.hash)) return 'local only · click for options'
     return `incoming from ${m.byName ?? 'someone'}${mine ? ', not on this device' : ''}`
   }
@@ -1914,7 +1649,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const meta = getSamples(doc)[hash]
     if (meta?.status !== 'incoming') return items
     items.length = 0 // an incoming take is saved or discarded, not just its clip deleted
-    const ctx = takeCtx()
+    const ctx = rec.takeCtx()
     if (isMine(ctx, meta)) {
       items.push(['save', () => {
         say('uploading take…')
@@ -2009,12 +1744,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const tag = (e.target as HTMLElement).tagName
     if (tag === 'SELECT' || (tag === 'INPUT' && (e.target as HTMLInputElement).type !== 'range')) return
     const mod = e.metaKey || e.ctrlKey
-    if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void toggleRecord() : toggle() }
+    if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void rec.toggleRecord() : toggle() }
     else if (!mod && !e.shiftKey && e.key.toLowerCase() === 'z') zoomFit()
     else if (e.key === 'Escape' && sel.escape()) draw()
     else if (!readOnly && tag !== 'TEXTAREA' && !(e.target as HTMLElement).isContentEditable && !mod && !e.altKey && !e.repeat && cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)) {
       e.preventDefault()
-      void command(cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)!, e.timeStamp)
+      void rec.command(cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)!, e.timeStamp)
     } // the loop commands, wherever the focus is not a text field
     else if (readOnly) return
     else if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? undo.redo() : undo.undo() }
@@ -2066,11 +1801,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     pb.recorder.onlevel = drawLevel
     pb.oncpu = showCpu
     pb.onmeters = onMeters
-    listenMidi()
+    rec.listenMidi()
     draw()
     zoomFit() // (zoom is not remembered per project, so every open fits the song to the window)
-    if (!readOnly) sweepUnusedTakes(takeCtx())
-    if (!readOnly) recoverTakes(takeCtx()).then((n) => {
+    if (!readOnly) sweepUnusedTakes(rec.takeCtx())
+    if (!readOnly) recoverTakes(rec.takeCtx()).then((n) => {
       if (n && !destroyed) say(`recovered ${n} unfinished take${n > 1 ? 's' : ''}`)
     }, (err) => console.warn('take recovery:', err))
   })
@@ -2087,9 +1822,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       removeEventListener('keydown', key)
       ne.destroy()
       removeEventListener('resize', schedule)
-      offMidi()
-      clearLoopTimer()
-      if (take) s.setLocal({ recording: null }), take.journal.release() // (its backup is recovered on the next open)
+      rec.destroy()
       watched.forEach((m) => m.unobserveDeep(schedule))
       s.awareness.off('change', schedule)
       metaMap(doc).unobserve(rateChanged)
