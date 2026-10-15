@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.base.json",
-  "compilerOptions": { "types": ["vite/client"], "lib": ["ES2023", "DOM", "DOM.Iterable"] },
+  "compilerOptions": { "types": ["vite/client"], "lib": ["ES2023", "DOM", "DOM.Iterable"], "jsx": "preserve", "jsxImportSource": "solid-js" },
   "include": ["src", "vite.config.ts"]
 }
