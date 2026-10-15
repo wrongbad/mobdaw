@@ -14,6 +14,7 @@ import {
   BORE, COMPRESSOR, DELAY, DEVICES, EQ, FINNWAVE, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO,
   addDevice, addDrum, deleteDevice, devicesMap, getDevices, getTracks, isDrum, setParam, updateDevice, updateTrack,
 } from '@mobdaw/shared'
+import { MATCHED_PRESETS } from './presets.matched'
 
 export type InstrumentCategory = 'keys' | 'bass' | 'lead' | 'pad' | 'pluck' | 'winds' | 'strings' | 'fx'
 export type InstrumentPreset = { id: string; name: string; type: number; params: Record<string, number>; category: InstrumentCategory }
@@ -227,6 +228,8 @@ export function addEffectPreset(doc: Y.Doc, trackId: string, preset: EffectPrese
 }
 
 export const instrumentPreset = (id: string) => INSTRUMENT_PRESETS.find((p) => p.id === id)
+/** A preset fitted to a GM soundfont program (presets.matched.ts): a bore voice and its own filter/EQ/reverb chain. */
+export const matchedPreset = (id: string) => MATCHED_PRESETS.find((p) => p.id === id)
 export const drumKit = (id: string) => DRUM_KITS.find((k) => k.id === id)
 export const effectPreset = (id: string) => EFFECT_PRESETS.find((p) => p.id === id)
 
@@ -248,6 +251,7 @@ export function presetsFor(doc: Y.Doc, trackId: string): TrackPreset[] {
   return [
     ...INSTRUMENT_PRESETS.map((p) => ({ id: p.id, name: p.name, group: p.category })),
     ...DRUM_KITS.map((k) => ({ id: k.id, name: k.name, group: 'drums' })),
+    ...MATCHED_PRESETS.map((p) => ({ id: p.id, name: p.name, group: 'matched' })),
   ]
 }
 
@@ -257,11 +261,16 @@ export function presetsFor(doc: Y.Doc, trackId: string): TrackPreset[] {
  */
 export function applyPreset(doc: Y.Doc, trackId: string, id: string) {
   if (!presetsFor(doc, trackId).some((p) => p.id === id)) return
+  const matched = matchedPreset(id)
   const synth = instrumentPreset(id), kit = drumKit(id)
-  const fx = effectPreset(synth || kit ? PRESET_FX[id] ?? '' : id)
+  const fx = effectPreset(synth || kit || matched ? PRESET_FX[id] ?? '' : id)
   doc.transact(() => {
     for (const d of getDevices(doc)) if (d.trackId === trackId) deleteDevice(doc, d.id)
     if (synth) addInstrument(doc, trackId, synth)
+    if (matched) {
+      addDevice(doc, trackId, matched.type, { name: matched.name }, clampParams(matched.type, matched.params))
+      for (const d of matched.fx) addDevice(doc, trackId, d.type, {}, clampParams(d.type, d.params))
+    }
     if (kit) addDrumKit(doc, trackId, kit)
     if (fx) addEffectPreset(doc, trackId, fx)
     updateTrack(doc, trackId, { preset: id })

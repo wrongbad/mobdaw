@@ -13,6 +13,7 @@ import { CallQueue } from '../src/audio/schedule'
 import { encodeWavPlanar } from '../src/audio/wav'
 import { contentEnd } from '../src/audio/range'
 import { DRUM_KITS, EFFECT_PRESETS, INSTRUMENT_PRESETS, addDrumKit, effectPreset, instrumentPreset, addEffectPreset, addInstrument, applyPreset, presetsFor } from '../src/content/presets'
+import { MATCHED_PRESETS } from '../src/content/presets.matched'
 import { TEMPLATES } from '../src/content/templates'
 import { DEMO_BARS, DEMO_BPM, DEMO_NAME, buildDemo, demoContents } from '../src/content/demo'
 
@@ -80,11 +81,11 @@ describe('track presets', () => {
   const ids = (doc: Y.Doc, t: string) => presetsFor(doc, t).map((p) => p.id)
   const mine = (doc: Y.Doc, t: string) => getDevices(doc).filter((d) => d.trackId === t && d.type !== MIX) // (the pinned mix device is not part of a chain preset)
 
-  it('offers fx-only on audio tracks, every instrument (synths then kits) on any MIDI track, nothing elsewhere', () => {
+  it('offers fx-only on audio tracks, every instrument (synths, kits, then matched) on any MIDI track, nothing elsewhere', () => {
     const doc = new Y.Doc()
     const audio = addTrack(doc, 'a', 'audio')
     expect(ids(doc, audio)).toEqual(EFFECT_PRESETS.map((p) => p.id))
-    const all = [...INSTRUMENT_PRESETS, ...DRUM_KITS].map((p) => p.id)
+    const all = [...INSTRUMENT_PRESETS, ...DRUM_KITS, ...MATCHED_PRESETS].map((p) => p.id)
     const synth = addTrack(doc, 's', 'midi')
     addInstrument(doc, synth, INSTRUMENT_PRESETS[0])
     const kit = addTrack(doc, 'k', 'midi')
