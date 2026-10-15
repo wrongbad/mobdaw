@@ -70,9 +70,7 @@ type Src = SrcView & {
 export function mountTimeline(s: Session, projectName: string, readOnly = false, renameProject?: (name: string) => Promise<unknown> | void,
   cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean }) {
   const { doc, undo } = s
-  let rate = DEFAULT_SAMPLE_RATE
   let pb: Playback | null = null // created once the doc has synced (needs meta.sampleRate)
-  let pps = 80
   const sel = createSelection() // clips, the open MIDI editor, note, pad and armed looper (local UI state)
   const drawers = createDrawers() // which drawers each track (or MASTER_TRACK) has open (local UI state, all shut by default)
   const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
@@ -102,9 +100,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const [unread, setUnread] = createSignal(0)
   const [chatOpen, setChatOpen] = createSignal(false)
   // pixels per second and the sample rate, for the bindings that place things on the timeline (the remote playheads)
-  const [scale, setScale] = createSignal({ pps, rate })
-  const syncScale = () => scale().pps === pps && scale().rate === rate || setScale({ pps, rate })
-  const xs = (smp: number) => (smp / scale().rate) * scale().pps // (`x`, for the bindings)
+  const [rate, setRate] = createSignal(DEFAULT_SAMPLE_RATE)
+  const [pps, setPps] = createSignal(80)
+  const scale = () => ({ pps: pps(), rate: rate() })
+  const xs = (smp: number) => (smp / rate()) * pps() // (`x`, for the bindings)
   const [ready, setReady] = createSignal(false) // the engine is open: waveforms are drawn from then on
   const [peakVer, setPeakVer] = createSignal(0) // counts the peaks that arrived
   const [stagedVer, setStagedVer] = createSignal(0) // counts the answers of which incoming takes this device still has
@@ -125,7 +124,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         onRenamed: (n) => (el.textContent = projectName = n),
         cloud: cloud && { ...cloud, onPublic: (v) => (cloud.public = v), onDemo: (v) => (cloud.demo = v) },
         sampleRate: {
-          value: rate,
+          value: rate(),
           locked: readOnly ? 'readonly' : isBlank() ? null : 'tracks',
           set: (r) => isBlank() && metaMap(doc).set('sampleRate', r),
         },
@@ -143,14 +142,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
    */
   function rateChanged() {
     const next = getSampleRate(doc)
-    if (!pb || next === rate) return
+    if (!pb || next === rate()) return
     rec.resetLoops()
     pb.destroy()
-    rate = next
-    syncScale()
+    setRate(next)
     rec.forgetArmed()
     try {
-      pb = openPlayback(doc, s.projectId, rate, s.userId)
+      pb = openPlayback(doc, s.projectId, rate(), s.userId)
       pb.recorder.onlevel = drawLevel
       pb.oncpu = showCpu
       pb.onmeters = onMeters
@@ -164,7 +162,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
   const exportProject = () => {
     if (!pb) return // (the project has not synced yet)
-    exportDialog({ name: projectName, render: (o) => renderProject(doc, s.projectId, rate, s.userId, o) })
+    exportDialog({ name: projectName, render: (o) => renderProject(doc, s.projectId, rate(), s.userId, o) })
   }
   /** The metronome button: add a click track, then mute / unmute it. */
   function clickTrack() {
@@ -233,12 +231,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   master.append(h('div', { className: 'lane-row master-row' }, masterHead)) // (the drawers follow: `MasterDrawers`)
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
 
-  const x = (smp: number) => (smp / rate) * pps
-  const fromX = (px: number) => Math.max(0, Math.round((px / pps) * rate))
+  const x = (smp: number) => (smp / rate()) * pps()
+  const fromX = (px: number) => Math.max(0, Math.round((px / pps()) * rate()))
   const position = () => pb?.position() ?? 0
 
   const rec = createRecorder({
-    s, doc, undo, readOnly, rate: () => rate, pb: () => pb, position: () => position(), say, onChange: () => syncRec(),
+    s, doc, undo, readOnly, rate, pb: () => pb, position: () => position(), say, onChange: () => syncRec(),
     startTransport, stop, loopStatus: () => drawLoopStatus(),
   })
   // the top bar, the remote playheads, the headers, the drawers and the blocks on the lanes are Solid components; what is left here
@@ -293,7 +291,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     })
   }
 
-  const fmtSec = (smp: number) => `${(smp / rate).toFixed(1)}s`
+  const fmtSec = (smp: number) => `${(smp / rate()).toFixed(1)}s`
   /** The top bar's loop status: only while a loop records. */
   function drawLoopStatus() {
     const st = rec.loops?.status(position())
@@ -388,7 +386,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const p = position()
     playhead.style.left = `${HEADER + x(p)}px`
     rulerHead.style.left = `${x(p)}px`
-    transport.setTime(p / rate)
+    transport.setTime(p / rate())
     if (myTake()) setTakePos(p) // (the growing region follows)
     drawLoopStatus()
   }
@@ -629,11 +627,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (src.playing && src.position() > l.src.end()) src.stop() // ran off the end of the audio
       const sp = src.position(), lp = loops.position()
       l.src.tc.setPlaying(src.playing)
-      l.src.tc.setTime(sp / rate)
+      l.src.tc.setTime(sp / rate())
       l.src.playhead.hidden = !src.playing && sp === 0
-      l.src.playhead.style.left = `${(sp / rate) * l.src.pps()}px`
+      l.src.playhead.style.left = `${(sp / rate()) * l.src.pps()}px`
       l.loopTc.setPlaying(loops.playing)
-      l.loopTc.setTime(lp / rate)
+      l.loopTc.setTime(lp / rate())
       any ||= src.playing || loops.playing
     }
     return drawLoopHeads() || any || pb.playing // (the heads keep drawing until the engine reports them gone)
@@ -680,7 +678,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
 
   /** A soundscape region: a block on the main lane during which all of the loopers are on. */
   function newPad(trackId: string, at: number) {
-    sel.pad = addPad(doc, trackId, at, 2 * rate)
+    sel.pad = addPad(doc, trackId, at, 2 * rate())
     select([])
   }
 
@@ -700,7 +698,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const playhead = h('div', { className: 'playhead', hidden: true })
     body.append(playhead)
     const src: Src = { row: h('div', { className: 'lane-row src-row' }, head, view), view, body, ticks, pps, setPps, scrollX, heads, setHeads, end, more, tc, playhead }
-    const at = (clientX: number) => Math.max(0, Math.round(((clientX - body.getBoundingClientRect().left) / pps()) * rate))
+    const at = (clientX: number) => Math.max(0, Math.round(((clientX - body.getBoundingClientRect().left) / pps()) * rate()))
     // click or drag on the source ruler to move its playhead (the main transport is unaffected)
     ticks.onpointerdown = (e) => {
       if (e.button !== 0) return
@@ -752,13 +750,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   const zoom = createZoom({
-    scroll, rulerBody, header: HEADER, store, sel, rate: () => rate, pps: () => pps, isSource: (id) => !!lanes.get(id)?.src,
-    setPps: (v) => ((pps = v), syncScale()),
+    scroll, rulerBody, header: HEADER, store, sel, rate, pps, isSource: (id) => !!lanes.get(id)?.src,
+    setPps,
   })
 
   // the gestures and the blocks on the lanes see the layout through these
   const geo: GestureCtx['geo'] = {
-    rate: () => rate, pps: () => pps, position, content,
+    rate, pps, position, content,
     lane: (id): LaneGeo | undefined => lanes.get(id),
     lanes: () => lanes.entries(),
     snapLine: (at) => {
@@ -770,7 +768,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const clipsCtx: ClipsCtx = {
     ...gctx, scale, total, ready, peaks: peakVer, viewW, scrollX, scroller: scroll, header: HEADER, projectId: s.projectId, ne, dg,
     menu: (id) => clipMenu(id), incomingLabel: (m) => incomingLabel(m), myTake, position: takePos,
-    drawLive: (region, startPx, widthPx) => pb && drawLiveWave(region, pb.recorder.peaks, { startPx, widthPx, header: HEADER, scroller: scroll, rate, pps }),
+    drawLive: (region, startPx, widthPx) => pb && drawLiveWave(region, pb.recorder.peaks, { startPx, widthPx, header: HEADER, scroller: scroll, rate: rate(), pps: pps() }),
   }
 
   // --- layout: explicit effects, each following what it reads (no pass over the whole project)
@@ -826,7 +824,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const clip = found && { ...found }
     if (clip) { // looping repeats the pass to the end of the clip (drag its right edge to extend), or past it with forever
       const looping = isLooping(clip)
-      items.unshift([isForever(clip) ? 'loop to end' : 'loop forever', () => loopForever(doc, clip, clip.kind === 'audio' ? sourceFrames(store, rate, clip) : 0)])
+      items.unshift([isForever(clip) ? 'loop to end' : 'loop forever', () => loopForever(doc, clip, clip.kind === 'audio' ? sourceFrames(store, rate(), clip) : 0)])
       if (looping) items.unshift(['no loop', () => unloopClip(doc, clip)]) // the extent back to the first pass
     }
     const hash = String(clipsMap(doc).get(clipId)?.get('sourceHash'))
@@ -862,7 +860,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       say(`uploading ${f.name}…`)
       try {
         const m = await importFile(s.projectId, doc, f)
-        const length = Math.round(m.duration * rate)
+        const length = Math.round(m.duration * rate())
         trackId = addImportedClip(doc, trackId, { name: f.name, hash: m.hash, length }, at)
         at += length
         say('')
@@ -931,9 +929,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       stashLaneRanges(doc)
     }
     chat.markSeen()
-    rate = getSampleRate(doc)
-    syncScale()
-    pb = openPlayback(doc, s.projectId, rate, s.userId)
+    setRate(getSampleRate(doc))
+    pb = openPlayback(doc, s.projectId, rate(), s.userId)
     pb.recorder.onlevel = drawLevel
     pb.oncpu = showCpu
     pb.onmeters = onMeters
