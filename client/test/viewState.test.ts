@@ -111,3 +111,20 @@ describe('reactive drawers and tab availability', () => {
     off()
   })
 })
+
+describe('reactive selection', () => {
+  it('fields are signals: effects follow them, and pruning only writes on a change', async () => {
+    const { createRoot, createEffect } = await import('solid-js')
+    const s = createSelection()
+    const seen: string[][] = []
+    const dispose = createRoot((d) => (createEffect(() => seen.push(s.clips)), d))
+    s.selectClips(['a'])
+    s.selectClips(['a', 'b'])
+    expect(seen).toEqual([[], ['a'], ['a', 'b']])
+    s.pruneClips(() => true) // nothing to drop: no write
+    expect(seen.length).toBe(3)
+    s.pruneClips((id) => id === 'b')
+    expect(seen.at(-1)).toEqual(['b'])
+    dispose()
+  })
+})
