@@ -1,12 +1,16 @@
 """Generate client/src/content/presets.matched.ts from match_chain best.json files.
-usage: python3 -I gen_presets.py <out.ts> <calibration rev> <run dir>...
-A program found in several run dirs takes the last one given."""
+usage: python3 -I gen_presets.py <out.ts> <calibration rev> <run dir | program=run dir>...
+A program found in several run dirs takes the last one given; `program=dir` picks that program from that dir only."""
 import json, os, sys
 out, rev, runs = sys.argv[1], sys.argv[2], sys.argv[3:]
 names = {"clarinet": "Clarinet", "alto-sax": "Alto sax", "flute": "Flute", "cello": "Cello", "violin": "Violin"}
 cat = {"clarinet": "winds", "alto-sax": "winds", "flute": "winds", "cello": "strings", "violin": "strings"}
 src = {}
 for r in runs:
+    if "=" in r:
+        k, d = r.split("=", 1)
+        src[k] = d
+        continue
     for k in names:
         if os.path.exists(f"{r}/{k}/best.json"):
             src[k] = r

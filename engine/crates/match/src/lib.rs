@@ -94,6 +94,9 @@ pub fn render_bore(rp: &[f32], open: bool, p: Probe) -> Option<Vec<f32>> {
     Some(out)
 }
 
+/// Per-frame dynamic range of the loss spectra (dB below the frame's loudest band).
+pub const FLOOR_DB: f32 = 60.0;
+
 pub struct Spec {
     pub mel: Vec<Vec<f32>>, // frames x bands, log magnitude
 }
@@ -112,11 +115,17 @@ pub fn spec(x: &[f32], n: usize, bands: usize) -> Vec<Vec<f32>> {
     while s + n <= x.len() {
         let mut buf: Vec<Complex<f32>> = (0..n).map(|i| Complex::new(x[s + i] * win[i], 0.0)).collect();
         fft.process(&mut buf);
-        let row = (0..bands).map(|b| {
+        let mut row: Vec<f32> = (0..bands).map(|b| {
             let (a, z) = (edges[b], edges[b + 1].max(edges[b] + 1));
             let e: f32 = buf[a..z.min(n / 2)].iter().map(|c| c.norm_sqr()).sum::<f32>() / (z - a) as f32;
             (e + 1e-8).ln()
         }).collect();
+        // Floor each frame FLOOR_DB below its loudest band: valleys between harmonics far under the peak are inaudible,
+        // but in a raw log spectrum they dominate, and the search fills them with noise to match a recording's floor.
+        let top = row.iter().cloned().fold(f32::MIN, f32::max);
+        for v in &mut row {
+            *v = v.max(top - FLOOR_DB * std::f32::consts::LN_10 / 10.0);
+        }
         out.push(row);
         s += hop;
     }
