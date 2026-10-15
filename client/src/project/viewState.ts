@@ -94,3 +94,21 @@ export function createSelection() {
 }
 
 export type Selection = ReturnType<typeof createSelection>
+
+/** What a scope's mix device is driven to by its automation lanes at the playhead (null: not driven, the doc's value shows). */
+export type MixDrive = { gain: number | null; pan: number | null }
+const UNDRIVEN: MixDrive = { gain: null, pan: null }
+
+/** The automation-driven fader and pan per scope, as signals: written every frame while a lane plays, read by the headers' bindings. */
+export function createMixDrive() {
+  const sigs = new Map<string, [Accessor<MixDrive>, Setter<MixDrive>]>()
+  const at = (scope: string) => sigs.get(scope) ?? sigs.set(scope, createSignal(UNDRIVEN)).get(scope)!
+  return {
+    get: (scope: string) => at(scope)[0](),
+    /** Only a change fires. */
+    set(scope: string, drive: MixDrive) {
+      const [get, set] = at(scope)
+      if (get().gain !== drive.gain || get().pan !== drive.pan) set(drive)
+    },
+  }
+}
