@@ -44,6 +44,7 @@ import { trackKind } from './trackKind'
 import { knob } from './knob'
 import { follow, peakToFill } from './meter'
 import { icon, setIcon } from '../theme/icons'
+import { createDrawers, createSelection, type TabName } from '../project/viewState'
 
 const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in styles.css
 const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
@@ -75,8 +76,6 @@ type Lane = {
   /** Soundscape tracks only: the source lane, which has its own time axis, scroll and zoom. */
   src: Src | null
 }
-/** The drawers a track's header tabs open; each is one of the `...Shown` sets below (global fx lives in `expanded` under MASTER_TRACK). */
-type TabName = 'source' | 'synth' | 'loopers' | 'fx' | 'auto' | 'presets'
 const TAB_LABEL: Record<TabName, string> = { source: 'src', synth: 'synth', loopers: 'loops', fx: 'fx', auto: 'auto', presets: 'presets' }
 const TAB_TITLE: Record<TabName, string> = { source: 'source audio', synth: 'instruments', loopers: 'loopers', fx: 'effects', auto: 'automation lanes', presets: 'presets' }
 const TABS: Record<string, TabName[]> = {
@@ -97,10 +96,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let rate = DEFAULT_SAMPLE_RATE
   let pb: Playback | null = null // created once the doc has synced (needs meta.sampleRate)
   let pps = 80
-  let selection: string[] = []
-  let editing: string | null = null // MIDI clip zoomed into its note editor
-  let noteSel: string | null = null
-  const expanded = new Set<string>() // local UI state: tracks showing their FX chain
+  const sel = createSelection() // clips, the open MIDI editor, note, pad and armed looper (local UI state)
+  const drawers = createDrawers() // which drawers each track (or MASTER_TRACK) has open (local UI state, all shut by default)
   let armedTrack: string | null = null // audio track armed for recording (local UI state, never in the doc)
   let monitoring = false // hear the armed track's input through its effects (local UI state)
   let monitored: string | null = null // the track the engine is currently monitoring
@@ -114,13 +111,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let loopArming = false // asking for the microphone
   const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
   const recRegions = new Map<string, HTMLElement>()
-  let armed: string | null = null // looper whose region is being drawn (local UI state)
-  let padSel: string | null = null // selected pad
-  const srcShown = new Set<string>() // soundscapes with the source lane expanded (collapsed by default)
-  const loopShown = new Set<string>() // looper tracks with the loopers row expanded (collapsed by default)
-  const synthShown = new Set<string>() // MIDI tracks with the synth row expanded (collapsed by default)
-  const autoShown = new Set<string>() // scopes (track ids, or MASTER_TRACK) with the automation section expanded (collapsed by default)
-  const presetsShown = new Set<string>() // tracks with the presets drawer expanded
   let autoLanes: AutoLane[] = [] // as of the last draw
   let autoPoints = new Map<string, Point[]>() // lane id -> its points, sorted
   let autoInfos = new Map<string, Map<string, AutoInfo>>() // owner id -> param -> what drives it
@@ -227,8 +217,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const clickBtn = h('button', { className: 'metro', disabled: readOnly, title: 'metronome: add a click track, then mute / unmute it', onclick: () => {
     const t = getTracks(doc).find((x) => x.role === 'click')
     if (t && !t.muted) { // switching it off tucks it away: every expandable lane and the editor shut
-      for (const set of [expanded, synthShown, loopShown, srcShown, autoShown, presetsShown]) set.delete(t.id)
-      if (editing && clipsMap(doc).get(editing)?.get('trackId') === t.id) editing = null
+      drawers.closeAll(t.id)
+      if (sel.editing && clipsMap(doc).get(sel.editing)?.get('trackId') === t.id) sel.editing = null
     }
     if (t) updateTrack(doc, t.id, { muted: !t.muted })
     else addClickTrack(doc)
@@ -309,7 +299,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
 
   const ne = noteEditor({
     doc, undo, readOnly,
-    selectNote: (id) => ((noteSel = id), draw()),
+    selectNote: (id) => (sel.selectNote(id), draw()),
     noteLive: (trackId, pitch, velocity, on) => pb?.noteLive(trackId, pitch, velocity, on),
   })
   const dg = drumGrid({ doc, undo, readOnly })
@@ -815,21 +805,19 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   function reveal(scope: string) {
-    autoShown.add(scope)
+    drawers.open(scope, 'auto')
     draw()
     ;(scope === MASTER_TRACK ? masterAuto : lanes.get(scope)?.auto)?.el.scrollIntoView({ block: 'nearest' })
   }
 
-  const shownSet = (n: TabName) => ({ source: srcShown, synth: synthShown, loopers: loopShown, fx: expanded, auto: autoShown, presets: presetsShown })[n]
-
   /** The tab to open or shut one drawer of a track (or MASTER_TRACK): the one way in. */
   function toggleTab(id: string, n: TabName) {
-    if (shownSet(n).delete(id)) {
+    if (!drawers.toggle(id, n)) {
       if (n === 'source' || n === 'loopers') { // the transport is about to be hidden: don't leave it playing
         const pv = pb?.preview(id, n === 'source' ? 'source' : 'loops')
         if (pv?.playing) pv.stop()
       }
-    } else shownSet(n).add(id)
+    }
     draw()
   }
 
@@ -840,7 +828,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
   const syncTabs = (id: string, btns: Map<TabName, HTMLButtonElement>) => {
     for (const [n, b] of btns) {
-      const on = shownSet(n).has(id)
+      const on = drawers.isOpen(id, n)
       b.classList.toggle('on', on)
       b.setAttribute('aria-pressed', String(on))
     }
@@ -864,7 +852,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
 
   const presetKeys = new WeakMap<HTMLElement, string>()
   function drawPresets(l: Lane, t: Track) {
-    const list = presetsShown.has(t.id) ? presetsFor(doc, t.id) : []
+    const list = drawers.isOpen(t.id, 'presets') ? presetsFor(doc, t.id) : []
     const has = presetsFor(doc, t.id).length > 0
     l.tabs.get('presets')!.hidden = !has
     l.presets.el.hidden = !list.length
@@ -910,7 +898,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         const r = resolveTarget(doc, l)
         return r ? [{ l, r }] : []
       }).sort((a, b) => rank(a.l) - rank(b.l) || (rank(a.l) ? 0 : Number(a.l.param) - Number(b.l.param)))
-      const open = autoShown.has(scope)
+      const open = drawers.isOpen(scope, 'auto')
       const tab = (scope === MASTER_TRACK ? masterTabs.btns : lanes.get(scope)?.tabs)?.get('auto')
       if (tab) tab.hidden = mine.length === 0 // (no lanes: nothing to open)
       sec.el.hidden = mine.length === 0 || !open
@@ -1003,9 +991,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const body = h('div', { className: 'lane-body', 'data-track': t.id })
     body.onpointerdown = (e) => {
       if (e.target !== body) return
-      editing = null
-      noteSel = null
-      padSel = null
+      sel.clickEmptyLane()
       select([])
     }
     const atX = (e: MouseEvent) => fromX(e.clientX - body.getBoundingClientRect().left)
@@ -1086,8 +1072,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   function drawFx(l: Lane, t: Track, devices: Device[]) {
-    const fxOpen = expanded.has(t.id)
-    const synthOpen = t.kind === 'midi' && synthShown.has(t.id)
+    const fxOpen = drawers.isOpen(t.id, 'fx')
+    const synthOpen = t.kind === 'midi' && drawers.isOpen(t.id, 'synth')
     const mine = devices.filter((d) => d.trackId === t.id && !DEVICES[d.type]?.hidden)
     const chain = mine.filter((d) => !DEVICES[d.type]?.instrument)
     const instruments = mine.filter((d) => DEVICES[d.type]?.instrument)
@@ -1116,7 +1102,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function drawMaster(devices: Device[]) {
     const mine = devices.filter((d) => d.trackId === MASTER_TRACK && !DEVICES[d.type]?.hidden)
     const n = mine.length
-    const open = expanded.has(MASTER_TRACK)
+    const open = drawers.isOpen(MASTER_TRACK, 'fx')
     masterFxRow.hidden = !open
     masterFx.hidden = !open
     masterMore.classList.toggle('on', open)
@@ -1212,7 +1198,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function bgMenu(body: HTMLElement, entries: (e: MouseEvent) => [string, () => void][]) {
     let down: { x: number; y: number; armed: boolean; closed: boolean } | null = null
     // (the popover's own capture listener runs first, so `closedBy` says whether this press closed a menu)
-    body.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, armed: !!armed, closed: closedBy(e) }), true)
+    body.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, armed: !!sel.armedLooper, closed: closedBy(e) }), true)
     const open = (e: MouseEvent) => {
       if (!readOnly && e.target === body) popover(body, entries(e), [e.clientX, e.clientY])
     }
@@ -1232,13 +1218,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   /** A drum grid clip is a one-bar pattern looped across four bars (4/4); a piano roll clip is four bars, unlooped. */
   function newMidiClip(trackId: string, at: number, drums = false) {
     const id = addMidiClip(doc, { trackId, start: at, ...(drums ? { view: 'drums', loopTicks: 4 * DEFAULT_PPQ } : {}) })
-    editing = id
+    sel.editing = id
     select([id])
   }
 
   /** A soundscape region: a block on the main lane during which all of the loopers are on. */
   function newPad(trackId: string, at: number) {
-    padSel = addPad(doc, trackId, at, 2 * rate)
+    sel.pad = addPad(doc, trackId, at, 2 * rate)
     select([])
   }
 
@@ -1274,7 +1260,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     }
     body.onpointerdown = (e) => {
       if (e.target !== body) return
-      padSel = null
+      sel.clickEmptySource()
       select([])
     }
     body.ondragover = (e) => e.preventDefault()
@@ -1298,7 +1284,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     }, { passive: false })
     // while a looper is armed, a drag here draws its region (capture: clips must not start a drag)
     body.addEventListener('pointerdown', (e) => {
-      const lp = armed ? getLoopers(doc).find((x) => x.id === armed && x.trackId === trackId) : undefined
+      const lp = sel.armedLooper ? getLoopers(doc).find((x) => x.id === sel.armedLooper && x.trackId === trackId) : undefined
       if (!lp || readOnly || e.button !== 0) return
       e.preventDefault()
       e.stopPropagation()
@@ -1313,9 +1299,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const pad = getPads(doc).find((p) => p.id === id)
     if (!pad) return
     const mode = grabAt(ev.clientX, (ev.currentTarget as HTMLElement).getBoundingClientRect())
-    editing = null
-    noteSel = null
-    padSel = id
+    sel.selectPad(id)
     select([])
     if (readOnly) return
     undo.stopCapturing()
@@ -1343,15 +1327,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (!e) {
         e = h('div', { className: 'clip region' }, 'loopers on') // a clip-styled block: same edges, same hover
         e.onpointerdown = (ev) => padDown(ev, p.id)
-        deleteMenu(e, 'delete region', () => { deletePad(doc, p.id); if (padSel === p.id) padSel = null; draw() }, () => !readOnly)
+        deleteMenu(e, 'delete region', () => { deletePad(doc, p.id); sel.forgetPad(p.id); draw() }, () => !readOnly)
         l.pads.set(p.id, e)
         l.body.append(e)
       }
       e.style.left = `${x(p.start)}px`
       e.style.width = `${Math.max(2, x(p.length))}px`
-      e.classList.toggle('sel', p.id === padSel)
+      e.classList.toggle('sel', p.id === sel.pad)
     }
-    if (padSel && !padsMap(doc).has(padSel)) padSel = null
+    sel.prunePad((id) => padsMap(doc).has(id))
   }
 
   const loopDeps = {
@@ -1362,21 +1346,21 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     setGain: (id: string, gain: number) => updateLooper(doc, id, { gain }),
     setTape: (id: string, patch: { sat?: number; cutoff?: number; warble?: number }) => updateLooper(doc, id, patch),
     autoMenu: (label: HTMLElement, t: ParamTarget, clickToo?: boolean) => autoMenu(label, () => t, clickToo),
-    toggleArm: (id: string) => { armed = armed === id ? null : id; draw() },
+    toggleArm: (id: string) => { sel.toggleArm(id); draw() },
     clear: (id: string) => updateLooper(doc, id, { start: 0, length: 0 }),
-    remove: (id: string) => { if (armed === id) armed = null; deleteLooper(doc, id) },
+    remove: (id: string) => { sel.forgetLooper(id); deleteLooper(doc, id) },
   }
 
   /** Looper rows (cards) and the coloured region boxes drawn over the track's audio. */
   function drawLoopers(l: Lane, t: Track, loopers: Looper[]) {
     const isLoop = t.kind === 'soundscape' && !!l.src
-    const open = isLoop && loopShown.has(t.id)
+    const open = isLoop && drawers.isOpen(t.id, 'loopers')
     l.loopRow.hidden = !open
     const mine = isLoop ? loopers.filter((x) => x.trackId === t.id) : []
     l.loops.hidden = !open
     l.loopMore.classList.toggle('on', open)
     l.loopTc.el.hidden = !open
-    l.src?.body.classList.toggle('arming', mine.some((x) => x.id === armed))
+    l.src?.body.classList.toggle('arming', mine.some((x) => x.id === sel.armedLooper))
     // region boxes
     const ids = new Set(mine.filter((x) => x.length > 0).map((x) => x.id))
     for (const [id, b] of l.boxes) if (!ids.has(id)) { b.remove(); l.boxes.delete(id) }
@@ -1393,7 +1377,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       }
       b.style.left = `${(lp.start / rate) * l.src.pps}px`
       b.style.width = `${Math.max(2, (lp.length / rate) * l.src.pps)}px`
-      b.classList.toggle('armed', lp.id === armed)
+      b.classList.toggle('armed', lp.id === sel.armedLooper)
     }
     if (!open) return
     for (const [id, c] of l.loopCards) if (!mine.some((m) => m.id === id)) { c.el.remove(); l.loopCards.delete(id) }
@@ -1401,7 +1385,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       let c = l.loopCards.get(lp.id)
       if (!c) l.loopCards.set(lp.id, (c = looperCard(lp, loopDeps)))
       if (l.loops.children[i] !== c.el) l.loops.insertBefore(c.el, l.loops.children[i] ?? null)
-      c.update(lp, lp.id === armed, rate, autoInfos.get(lp.id) ?? NO_AUTO)
+      c.update(lp, lp.id === sel.armedLooper, rate, autoInfos.get(lp.id) ?? NO_AUTO)
     })
   }
 
@@ -1411,7 +1395,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     ev.stopPropagation()
     const lp = getLoopers(doc).find((x) => x.id === id)
     const l = lp && lanes.get(lp.trackId)
-    if (!lp || !l?.src || readOnly || armed) return
+    if (!lp || !l?.src || readOnly || sel.armedLooper) return
     ev.preventDefault()
     const mode = grabAt(ev.clientX, el.getBoundingClientRect())
     const pps = l.src.pps
@@ -1445,7 +1429,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       },
       onEnd: () => {
         undo.stopCapturing()
-        if (drew) armed = null
+        if (drew) sel.doneDrawing()
         draw()
       },
     })
@@ -1455,9 +1439,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let zoomedFor: string | null = null
   let savedZoom: { pps: number; left: number; auto: number } | null = null
   function syncEditZoom(clips: Clip[]) {
-    if (editing === zoomedFor) return
-    zoomedFor = editing
-    const c = editing ? clips.find((x) => x.id === editing) : undefined
+    if (sel.editing === zoomedFor) return
+    zoomedFor = sel.editing
+    const c = sel.editing ? clips.find((x) => x.id === sel.editing) : undefined
     if (!c) {
       if (savedZoom && pps === savedZoom.auto) {
         const { pps: back, left } = savedZoom
@@ -1507,8 +1491,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     pb?.setOverrides(remote.flatMap((r) => [r.dragging ?? []].flat()))
     locks = new Map(remote.flatMap((r) => (r.recording ? [[r.recording.trackId, r.user.username] as [string, string]] : [])))
 
-    if (editing && clipsMap(doc).get(editing)?.get('kind') !== 'midi') editing = null
-    const editClip = editing ? clips.find((c) => c.id === editing) : undefined
+    sel.pruneEditing((id) => clipsMap(doc).get(id)?.get('kind') === 'midi')
+    const editClip = sel.editing ? clips.find((c) => c.id === sel.editing) : undefined
     const editTrack = editClip?.trackId
     const gridRows = editClip?.kind === 'midi' && editClip.view === 'drums' ? devices.filter((d) => d.trackId === editTrack && isDrum(d)).length : -1 // -1: the piano roll
 
@@ -1558,7 +1542,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       syncTabs(t.id, l.tabs)
       drawPads(l, t, pads)
       if (l.src) {
-        const srcOpen = srcShown.has(t.id)
+        const srcOpen = drawers.isOpen(t.id, 'source')
         l.src.row.hidden = !srcOpen
         l.src.more.classList.toggle('on', srcOpen)
         l.src.end = srcEnd(t.id)
@@ -1573,7 +1557,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     drawAutomation(devices, loopers, x(total))
 
     // clips
-    selection = selection.filter((id) => clipsMap(doc).has(id))
+    sel.pruneClips((id) => clipsMap(doc).has(id))
     const outline = new Map<string, string>()
     for (const r of remote) for (const id of r.selection ?? []) outline.set(id, r.user.color)
     const cids = new Set(clips.map((c) => c.id))
@@ -1631,11 +1615,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         const pk = !pb || !canPlay ? undefined : st ? storedPeaks(meta, rate) : peaksFor(s.projectId, c.sourceHash, rate)
         if (pk) drawVisibleWave(c, w, pk, width, lane.src ? { pps: cpps, scroller: lane.src.view, off: 0 } : { pps, scroller: scroll, off: HEADER })
         else w.cv.style.display = 'none'
-      } else drawMidiClip(e, c, notes.filter((n) => n.clipId === c.id), devices.filter((d) => d.trackId === c.trackId && DEVICES[d.type]?.instrument), c.id === editing,
+      } else drawMidiClip(e, c, notes.filter((n) => n.clipId === c.id), devices.filter((d) => d.trackId === c.trackId && DEVICES[d.type]?.instrument), c.id === sel.editing,
         forever ? (width / cpps) * c.bpm * c.ppq / 60 : c.lengthTicks)
       e.classList.toggle('midi', c.kind === 'midi')
-      e.classList.toggle('editing', c.kind === 'midi' && c.id === editing)
-      e.classList.toggle('sel', selection.includes(c.id))
+      e.classList.toggle('editing', c.kind === 'midi' && c.id === sel.editing)
+      e.classList.toggle('sel', sel.clips.includes(c.id))
       e.classList.toggle('unplayable', !canPlay)
       const o = outline.get(c.id)
       e.style.outline = o ? `2px solid ${o}` : ''
@@ -1732,9 +1716,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (other.el.parentElement === e) { other.el.remove(); other.reset() }
     if (open) {
       if (editor.el.parentElement !== e) { e.replaceChildren(editor.el); delete e.dataset.sig }
-      noteSel = notesMap(doc).has(noteSel ?? '') ? noteSel : null
+      sel.pruneNote((id) => notesMap(doc).has(id))
       if (editor === dg) dg.update(c, notes, instruments, pps, extent)
-      else ne.update(c, notes, noteSel, pps, extent)
+      else ne.update(c, notes, sel.note, pps, extent)
       return
     }
     if (editor.el.parentElement === e) { editor.el.remove(); editor.reset() }
@@ -1783,7 +1767,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const drawRuler = (totalSec: number) => drawTicks(rulerBody, totalSec, pps, [rulerHeads])
 
   function select(ids: string[]) {
-    selection = ids
+    sel.selectClips(ids)
     s.setLocal({ selection: ids })
     draw()
   }
@@ -1815,7 +1799,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function clipZone(ev: PointerEvent, el: HTMLElement, c: Clip): Grab {
     const box = el.getBoundingClientRect()
     const looping = isLooping(c)
-    const open = c.kind === 'midi' && c.id === editing
+    const open = c.kind === 'midi' && c.id === sel.editing
     const cpps = lanes.get(c.trackId)?.src?.pps ?? pps
     const seam = looping && !open ? box.left + ((passLength(c, rate) - (c.kind === 'audio' ? c.loopPhase ?? 0 : 0)) / rate) * cpps : undefined
     return grabAt(ev.clientX, box, { y: ev.clientY, looping: looping || open, seam })
@@ -1828,14 +1812,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (!clip) return
     const box = (ev.currentTarget as HTMLElement).getBoundingClientRect()
     const mode = clipZone(ev, ev.currentTarget as HTMLElement, clip)
-    noteSel = null
-    padSel = null
+    sel.pressClip()
     const lane0 = lanes.get(clip.trackId)
     const cpps = lane0?.src ? lane0.src.pps : pps // source clips scale with their own lane
     // a click (no drag) on a MIDI clip zooms into its editor; on the open clip's header strip it zooms back out
     const zoom = () => {
       if (clip.kind !== 'midi' || mode !== 'move') return
-      editing = editing === id ? null : id
+      sel.toggleEditing(id)
       draw()
     }
     select([id])
@@ -2013,7 +1996,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const failed = (err: unknown) => say((err as Error).message, true)
   function clipMenu(clipId: string): [string, () => void][] {
     const items: [string, () => void][] = [['delete clip', () => { // the whole selection if this clip is in it
-      const ids = selection.includes(clipId) ? [...selection] : [clipId]
+      const ids = sel.clips.includes(clipId) ? [...sel.clips] : [clipId]
       doc.transact(() => ids.forEach((id) => deleteClip(doc, id)))
       select([])
     }]]
@@ -2135,7 +2118,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const mod = e.metaKey || e.ctrlKey
     if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void toggleRecord() : toggle() }
     else if (!mod && !e.shiftKey && e.key.toLowerCase() === 'z') zoomFit()
-    else if (e.key === 'Escape' && (editing || armed || padSel)) { editing = null; noteSel = null; armed = null; padSel = null; draw() }
+    else if (e.key === 'Escape' && sel.escape()) draw()
     else if (!readOnly && tag !== 'TEXTAREA' && !(e.target as HTMLElement).isContentEditable && !mod && !e.altKey && !e.repeat && cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)) {
       e.preventDefault()
       void command(cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)!, e.timeStamp)
@@ -2145,19 +2128,18 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     else if (!mod && e.key.toLowerCase() === 's') {
       const at = Math.round(position())
       // (source clips have their own time axis: the playhead means nothing there)
-      doc.transact(() => unlocked(selection).filter((id) => !lanes.get(String(clipsMap(doc).get(id)?.get('trackId')))?.src).forEach((id) => splitClip(doc, id, at)))
+      doc.transact(() => unlocked(sel.clips).filter((id) => !lanes.get(String(clipsMap(doc).get(id)?.get('trackId')))?.src).forEach((id) => splitClip(doc, id, at)))
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault()
-      if (noteSel) {
-        deleteNote(doc, noteSel)
-        noteSel = null
+      const gone = sel.takeDelete()
+      if (gone && 'note' in gone) {
+        deleteNote(doc, gone.note)
         draw()
-      } else if (padSel) {
-        deletePad(doc, padSel)
-        padSel = null
+      } else if (gone) {
+        deletePad(doc, gone.pad)
         draw()
       } else {
-        doc.transact(() => unlocked(selection).forEach((id) => deleteClip(doc, id)))
+        doc.transact(() => unlocked(sel.clips).forEach((id) => deleteClip(doc, id)))
         select([])
       }
     }
