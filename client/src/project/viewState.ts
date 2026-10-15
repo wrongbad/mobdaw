@@ -1,26 +1,45 @@
 // Local UI state of the timeline (never in the doc): which drawers are open, and what is selected.
 // The clearing rules that used to be spread over the pointerdown / Escape / delete handlers live here.
+import { createSignal, type Accessor, type Setter } from 'solid-js'
 
 /** The drawers a track's header tabs open (global fx lives under MASTER_TRACK). */
 export type TabName = 'source' | 'synth' | 'loopers' | 'fx' | 'auto' | 'presets'
 
-/** Open drawers per track (or scope) id; all are closed by default. */
+const TABS: TabName[] = ['source', 'synth', 'loopers', 'fx', 'auto', 'presets']
+
+/** A boolean per key that components can follow: reading it inside an effect or binding subscribes to that key only. */
+function flags() {
+  const sigs = new Map<string, [Accessor<boolean>, Setter<boolean>]>()
+  const at = (k: string) => sigs.get(k) ?? sigs.set(k, createSignal(false)).get(k)!
+  return { get: (k: string) => at(k)[0](), set: (k: string, v: boolean) => void (at(k)[0]() === v || at(k)[1](v)) }
+}
+
+/** Open drawers per track (or scope) id; all are closed by default. Reactive per (id, tab), so a header's tabs follow without a draw. */
 export function createDrawers() {
-  const open = new Map<string, Set<TabName>>()
+  const open = flags()
+  const key = (id: string, tab: TabName) => `${id}\0${tab}`
   return {
-    isOpen: (id: string, tab: TabName) => open.get(id)?.has(tab) ?? false,
+    isOpen: (id: string, tab: TabName) => open.get(key(id, tab)),
     /** Open it if shut, shut it if open; returns whether it is now open. */
     toggle(id: string, tab: TabName) {
-      const set = open.get(id) ?? open.set(id, new Set()).get(id)!
-      if (set.delete(tab)) return false
-      set.add(tab)
-      return true
+      const now = !open.get(key(id, tab))
+      open.set(key(id, tab), now)
+      return now
     },
-    open(id: string, tab: TabName) {
-      if (!open.has(id)) open.set(id, new Set())
-      open.get(id)!.add(tab)
-    },
-    closeAll: (id: string) => void open.delete(id),
+    open: (id: string, tab: TabName) => open.set(key(id, tab), true),
+    closeAll: (id: string) => TABS.forEach((t) => open.set(key(id, t), false)),
+  }
+}
+
+/**
+ * Which optional tabs a header shows (the others always do): `auto` once the scope has a lane to open, `presets` once the
+ * track has any. The draw sets them from the doc; the headers follow.
+ */
+export function createTabAvailability() {
+  const f = flags()
+  return {
+    has: (id: string, tab: 'auto' | 'presets') => f.get(`${id}\0${tab}`),
+    set: (id: string, tab: 'auto' | 'presets', v: boolean) => f.set(`${id}\0${tab}`, v),
   }
 }
 

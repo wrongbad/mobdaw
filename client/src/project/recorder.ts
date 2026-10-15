@@ -1,6 +1,7 @@
 // Recording (docs/engine.md §9): arming, takes, monitoring, and the loop commands (audio/loopPedal.ts) from keys and MIDI.
 // Audio and doc state machines with no DOM: the view passes in what it shows and hears (`say`, `onChange`, the transport).
 import { addTrack, foreverSamples, getTracks, nextTrackColor, tracksMap } from '@mobdaw/shared'
+import { createSignal } from 'solid-js'
 import type * as Y from 'yjs'
 import type { Captured } from '../audio/recording'
 import { LoopPedal, commitLoop, joinUndo, loopOffset, type Cmd, type LoopIO, type LoopTake } from '../audio/loopPedal'
@@ -35,12 +36,19 @@ export type RecorderDeps = {
   finish?: typeof finishTake
 }
 
+/** A mutable value that components can follow (`.v` read inside an effect or a binding subscribes). */
+function sig<T>(init: T) {
+  const [get, set] = createSignal(init)
+  return { get v() { return get() }, set v(x: T) { set(() => x) } }
+}
+
 export function createRecorder(d: RecorderDeps) {
   const { s, doc, undo, readOnly } = d
   const journalOf = d.journal ?? takeJournal
   const finish = d.finish ?? finishTake
-  let armedTrack: string | null = null // audio track armed for recording (local UI state, never in the doc)
-  let monitoring = false // hear the armed track's input through its effects (local UI state)
+  const current = sig<string | null>(null) // the loop commands' current track, as of the last change
+  const armed = sig<string | null>(null) // audio track armed for recording (local UI state, never in the doc)
+  const monitor = sig(false) // hear the armed track's input through its effects (local UI state)
   let monitored: string | null = null // the track the engine is currently monitoring
   let take: Take | null = null // the take being recorded
   let loops: LoopPedal | null = null // the loop commands (keys and MIDI are always listened for; docs/engine.md §9.2)
@@ -53,16 +61,17 @@ export function createRecorder(d: RecorderDeps) {
   let destroyed = false
 
   const say = d.say
+  const changed = () => ((current.v = loops?.current ?? null), d.onChange())
   const takeCtx = (): TakeCtx => ({ doc, projectId: s.projectId, me: s.userId == null ? null : { id: s.userId, name: s.user.username }, rate: d.rate() })
 
   /** R: arm this audio track (the first time, ask for the microphone) or disarm it. */
   async function arm(id: string) {
     const pb = d.pb()
     if (!pb || take) return
-    if (armedTrack === id) {
-      armedTrack = null
+    if (armed.v === id) {
+      armed.v = null
       pb.recorder.disarm()
-      return d.onChange()
+      return changed()
     }
     try {
       await pb.recorder.arm()
@@ -71,8 +80,8 @@ export function createRecorder(d: RecorderDeps) {
       return
     }
     say('')
-    armedTrack = id
-    d.onChange()
+    armed.v = id
+    changed()
   }
 
   /** ●: play and capture from the playhead (onto a new track if none is armed); again to stop. */
@@ -81,7 +90,7 @@ export function createRecorder(d: RecorderDeps) {
     if (!pb || readOnly || preparing) return
     if (loops?.recording) return void say('record: a loop is recording', true)
     if (take) return d.stop()
-    if (!armedTrack || !tracksMap(doc).has(armedTrack) || !pb.recorder.armed) {
+    if (!armed.v || !tracksMap(doc).has(armed.v) || !pb.recorder.armed) {
       preparing = true
       try {
         await pb.recorder.arm()
@@ -92,10 +101,10 @@ export function createRecorder(d: RecorderDeps) {
         preparing = false
       }
       if (destroyed || take) return
-      if (!armedTrack || !tracksMap(doc).has(armedTrack)) armedTrack = addTrack(doc, `track ${getTracks(doc).length + 1}`, 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))
-      d.onChange()
+      if (!armed.v || !tracksMap(doc).has(armed.v)) armed.v = addTrack(doc, `track ${getTracks(doc).length + 1}`, 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))
+      changed()
     }
-    const trackId = armedTrack!
+    const trackId = armed.v!
     const from = Math.round(d.position()) // (while playing, capture begins at the engine's next block: the recorder reports where)
     const info = { trackId, trackName: String(tracksMap(doc).get(trackId)!.get('name')) }
     const journal = journalOf(s.projectId, info, d.rate(), pb.recorder.info!.channels)
@@ -110,7 +119,7 @@ export function createRecorder(d: RecorderDeps) {
     say('')
     s.setLocal({ recording: { trackId, start: from } })
     d.startTransport(from)
-    d.onChange()
+    changed()
   }
 
   /**
@@ -128,11 +137,11 @@ export function createRecorder(d: RecorderDeps) {
     d.loopStatus()
     const captured = t ? pb?.recorder.stop() : undefined // (asks the worklet to end the take before the engine stops)
     // the loop commands' microphone is let go once every take has ended (never cut short); a track armed for recording keeps it
-    void Promise.all([captured, closingTake]).then(() => !armedTrack && !take && !d.pb()?.playing && !loops?.recording && d.pb()?.recorder.disarm())
+    void Promise.all([captured, closingTake]).then(() => !armed.v && !take && !d.pb()?.playing && !loops?.recording && d.pb()?.recorder.disarm())
     if (live) void Promise.resolve(captured).then(() => (live.clip != null && pb?.removeLiveClip(live.clip), pb?.dropLiveSource(live.source)))
     halt()
     s.setLocal({ playhead: null, ...(t ? { recording: null } : {}) })
-    d.onChange()
+    changed()
     if (t && captured) void saveTake(t, captured)
   }
 
@@ -210,7 +219,7 @@ export function createRecorder(d: RecorderDeps) {
     }
     take = { ...info, start: from, journal }
     loopLive = { source }
-    armedTrack = trackId
+    armed.v = trackId
     s.setLocal({ recording: { trackId, start: from } })
     loopTimer = setInterval(() => loops && (loops.tick(d.position()), d.loopStatus()), 30)
     return true
@@ -227,7 +236,7 @@ export function createRecorder(d: RecorderDeps) {
     const stopped = pb.recorder.stop()
     closingTake = stopped
     void saveLoopTake(tk, stopped, t, live)
-    d.onChange()
+    changed()
   }
   function cancelLoopTake() {
     const pb = d.pb()
@@ -241,7 +250,7 @@ export function createRecorder(d: RecorderDeps) {
     void stopped?.then(() => live && pb?.dropLiveSource(live.source))
     tk?.journal.discard()
     tk?.journal.release()
-    d.onChange()
+    changed()
   }
   async function saveLoopTake(tk: Take, captured: Promise<Captured | null>, t: LoopTake, live: NonNullable<typeof loopLive>) {
     const gone = () => (live.clip != null && d.pb()?.removeLiveClip(live.clip), d.pb()?.dropLiveSource(live.source))
@@ -284,11 +293,11 @@ export function createRecorder(d: RecorderDeps) {
     }
     loops ??= makeLoops()
     if (!loops) return
-    if (armedTrack && tracksMap(doc).has(armedTrack)) loops.current = armedTrack // an armed track is the current one
+    if (armed.v && tracksMap(doc).has(armed.v)) loops.current = armed.v // an armed track is the current one
     const now = d.pb()!
     loops.press(cmd, now.playing ? now.heard(at) : Math.round(d.position()))
-    if (armedTrack && loops.current) armedTrack = loops.current
-    d.onChange()
+    if (armed.v && loops.current) armed.v = loops.current
+    changed()
   }
   /** Listen to the chosen MIDI input (always, once one is set up). */
   function listenMidi() {
@@ -318,29 +327,32 @@ export function createRecorder(d: RecorderDeps) {
       await pb.recorder.arm()
       say('')
     } catch (err) {
-      armedTrack = null
+      armed.v = null
       say(`record: ${(err as Error).message}`, true)
     }
-    d.onChange()
+    changed()
   }
 
   return {
     get take() { return take },
-    get armedTrack() { return armedTrack },
-    get monitoring() { return monitoring },
+    /** Read inside an effect or a binding, these follow the recorder (the headers' R, I and meter do). */
+    get armedTrack() { return armed.v },
+    get monitoring() { return monitor.v },
+    /** The loop commands' current track (where record and mute act). */
+    get currentTrack() { return current.v },
     get loops() { return loops },
     arm, toggleRecord, stop, command, listenMidi, reopenInput, resetLoops, takeCtx,
-    toggleMonitoring() { monitoring = !monitoring; d.onChange() },
+    toggleMonitoring() { monitor.v = !monitor.v; changed() },
     /** The project's sample rate changed: playback is opened again, and nothing stays armed. */
-    forgetArmed() { armedTrack = null },
+    forgetArmed() { armed.v = null },
     /** Each draw: the armed track may have been deleted, and the engine monitors the armed track if asked to (disarming ends monitoring). */
     sync(trackIds: Set<string>) {
       const pb = d.pb()
-      if (armedTrack && !trackIds.has(armedTrack)) { // the armed track was deleted
-        armedTrack = null
+      if (armed.v && !trackIds.has(armed.v)) { // the armed track was deleted
+        armed.v = null
         if (!take) pb?.recorder.disarm()
       }
-      const want = monitoring && armedTrack && pb?.recorder.armed ? armedTrack : null
+      const want = monitor.v && armed.v && pb?.recorder.armed ? armed.v : null
       if (want !== monitored) pb?.monitor((monitored = want))
     },
     destroy() {

@@ -88,3 +88,26 @@ describe('selection', () => {
     expect(s).toMatchObject({ clips: [], editing: null, note: null, pad: null, armedLooper: 'l' })
   })
 })
+
+describe('reactive drawers and tab availability', () => {
+  it('a header following one tab runs only when that tab changes', async () => {
+    const { createEffect, createRoot } = await import('solid-js')
+    const { createTabAvailability } = await import('../src/project/viewState')
+    const d = createDrawers()
+    const av = createTabAvailability()
+    const seen: boolean[] = []
+    let other = 0
+    const off = createRoot((dispose) => {
+      createEffect(() => seen.push(d.isOpen('a', 'fx')))
+      createEffect(() => { av.has('a', 'auto'); other++ })
+      return dispose
+    })
+    d.toggle('a', 'auto'); d.toggle('b', 'fx')
+    d.toggle('a', 'fx')
+    d.closeAll('a')
+    av.set('a', 'auto', true); av.set('a', 'auto', true)
+    expect(seen).toEqual([false, true, false])
+    expect(other).toBe(2)
+    off()
+  })
+})
