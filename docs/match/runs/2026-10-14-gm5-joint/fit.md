@@ -24,7 +24,7 @@ The bore-only column is `match_bore ... 160 48` (docs/match/runs/2026-10-14-gm5-
 - Clarinet now fits with open bore and character 0.91 (bow anchor) plus a 2.5 kHz lowpass, instead of a closed reed. FluidR3's clarinet has strong even harmonics, so this may be honest, but it's a candidate to listen to against the closed-reed variant.
 - Flute aperture at 0, violin breath 0.04 and noise 0.99: still on bounds.
 
-Per-program `best.json` (bore, filter, EQ, reverb in app units), and dry/wet target and best WAVs: `<program>/` (local). Plots: `compare_best_dry.png`, `compare_best_wet.png` (local; `engine/crates/match/plot_compare.py <dir> target_wet best_wet`).
+Per-program `best.json` (bore, filter, EQ, reverb in app units), and dry/wet target and best WAVs: `<program>/<key>_{dry,wet}_{target,best}.wav` (local). Plots: `compare_best_dry.png`, `compare_best_wet.png` (local; `engine/crates/match/plot_compare.py <dir> wet`).
 
 ## Parameters
 ### clarinet

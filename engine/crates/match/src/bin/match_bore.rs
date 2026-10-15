@@ -63,7 +63,7 @@ fn main() {
         fs::create_dir_all(&dir).unwrap();
         let probes: Vec<Probe> = keys.iter().map(|&k| Probe { key: k, vel: 90, hold: 1.2, dur: 1.8 }).collect();
         let tgt: Vec<Vec<f32>> = probes.iter().map(|p| render_sf2(sf2, prog, *p)).collect();
-        for (p, t) in probes.iter().zip(&tgt) { write_wav(&dir.join(format!("target_{}.wav", p.key)), t); }
+        for (p, t) in probes.iter().zip(&tgt) { write_wav(&dir.join(format!("{}_dry_target.wav", p.key)), t); }
         let ts: Vec<Target> = tgt.iter().map(|t| target(t)).collect();
         let mut res = vec![];
         for open in [true, false] {
@@ -79,7 +79,7 @@ fn main() {
         js.push_str("\n}\n");
         fs::write(dir.join("best.json"), js).unwrap();
         for p in &probes {
-            if let Some(y) = render_bore(&rp, *open, *p) { write_wav(&dir.join(format!("best_{}.wav", p.key)), &y); }
+            if let Some(y) = render_bore(&rp, *open, *p) { write_wav(&dir.join(format!("{}_dry_best.wav", p.key)), &y); }
         }
         writeln!(report, "| {name} | {prog} | {open} | {l:.2} | other bore {:.2} |", res[1].2).unwrap();
         eprintln!("{name}: open={open} loss={l:.2}");

@@ -99,14 +99,14 @@ fn main() {
         c.reverb = Some(reverb_real(&rx));
 
         for (i, p) in wp.iter().enumerate() {
-            write_wav(&dir.join(format!("target_dry_{}.wav", p.key)), &render_sf2(sf2, prog, *p));
-            write_wav(&dir.join(format!("target_wet_{}.wav", p.key)), &wet[i]);
+            write_wav(&dir.join(format!("{}_dry_target.wav", p.key)), &render_sf2(sf2, prog, *p));
+            write_wav(&dir.join(format!("{}_wet_target.wav", p.key)), &wet[i]);
             let mut y = pre_eq(&c, *p).unwrap();
             let mut d = y.clone();
             finish(&Chain { reverb: None, ..c.clone() }, &mut d);
-            write_wav(&dir.join(format!("best_dry_{}.wav", p.key)), &d);
+            write_wav(&dir.join(format!("{}_dry_best.wav", p.key)), &d);
             finish(&c, &mut y);
-            write_wav(&dir.join(format!("best_wet_{}.wav", p.key)), &y);
+            write_wav(&dir.join(format!("{}_wet_best.wav", p.key)), &y);
         }
 
         let rv = c.reverb.unwrap();
