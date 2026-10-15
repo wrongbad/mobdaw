@@ -52,10 +52,10 @@ export function passBoundaries(start: number, pass: number, phase: number, until
  */
 export function dragPointer(
   ev: PointerEvent,
-  h: { onDrag(m: PointerEvent): void; onEnd?(moved: boolean): void },
+  h: { onDrag(m: PointerEvent): void; onEnd?(moved: boolean): void; /** a finger drags at once (a scrub, not a block) */ immediate?: boolean },
 ) {
   // a finger picks the block up with a long press (see lift.ts); a tap ends as a click, a swipe as a scroll
-  if (ev.pointerType === 'touch' && !isLifted(ev)) return lift(ev, () => dragPointer(ev, h), (why) => h.onEnd?.(why === 'moved'))
+  if (ev.pointerType === 'touch' && !h.immediate && !isLifted(ev)) return lift(ev, () => dragPointer(ev, h), (why) => h.onEnd?.(why === 'moved'))
   let last: PointerEvent | null = null
   let pending = 0
   let moved = false

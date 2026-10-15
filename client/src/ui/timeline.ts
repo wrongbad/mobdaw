@@ -709,7 +709,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         refreshPreviews()
       }
       seek(e.clientX)
-      dragPointer(e, { onDrag: (m) => seek(m.clientX) })
+      dragPointer(e, { onDrag: (m) => seek(m.clientX), immediate: true }) // (a finger scrubs at once, no long press)
     }
     body.onpointerdown = (e) => {
       if (e.target !== body) return
