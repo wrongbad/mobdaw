@@ -29,7 +29,7 @@ for k in names:
     b = j["bore"]
     bore = {0: b["character"], 1: b["stiffness"], 2: b["aperture"], 3: b["position"], 4: b["bore"], 5: b["damping"], 6: b["decay"],
             7: b["breath"], 8: b["noise"], 9: b["vibrato_hz"], 10: b["vibrato_depth"], 11: b["attack_ms"], 12: b["release_ms"], 13: 1,
-            14: b.get("pitch_vibrato", 0), 15: b.get("vibrato_delay_ms", 0), 16: b.get("bell", 0)}
+            14: b.get("pitch_vibrato", 0), 15: b.get("vibrato_delay_ms", 0), 16: b.get("bell", 0), 17: b.get("valve_noise", 0), 18: b.get("air", 0), 19: b.get("wander", 0)}
     f, r = j["filter"], j["reverb"]
     fx = ([("BODY", bands(j["body"]))] if "body" in j else []) + [
         ("SIMPLE_FILTER", {0: 0, 1: f["cutoff_hz"], 2: f["damping"], 3: 0}), ("EQ", bands(j["eq"])),

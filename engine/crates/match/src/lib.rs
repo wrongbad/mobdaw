@@ -48,7 +48,7 @@ pub fn normalise(x: &mut [f32]) {
 }
 
 /// Bore parameters in calibrated knob space; indices match `PARAMS`.
-pub const PARAMS: [(&str, f32, f32); 14] = [
+pub const PARAMS: [(&str, f32, f32); 17] = [
     ("character", 0.0, 1.0),
     ("stiffness", 0.0, 1.0),
     ("aperture", 0.0, 1.0),
@@ -63,6 +63,9 @@ pub const PARAMS: [(&str, f32, f32); 14] = [
     ("pitch_vibrato", 0.0, 1.0),
     ("vibrato_delay_ms", 0.0, 1500.0),
     ("bell", 0.0, 1.0),
+    ("valve_noise", 0.0, 1.0),
+    ("air", 0.0, 1.0),
+    ("wander", 0.0, 1.0),
 ];
 
 /// `x` is normalised 0..1 per PARAMS (attack/release log-scaled); `open` is a discrete choice.
@@ -143,6 +146,9 @@ pub struct Target {
     pub vib_split: Option<(f32, f32)>,
     /// Harmonic levels (dB re the strongest) of the held part.
     pub harm: Option<Vec<f32>>,
+    /// Noise between the harmonics per band (dB re total), and shimmer (dB), of the held part.
+    pub noise: Option<[f32; 4]>,
+    pub shimmer: Option<f32>,
     /// The attack segment (first [`ATTACK_S`]): 256-point band spectrogram and 5 ms dB envelope.
     pub att_spec: Vec<Vec<f32>>,
     pub att_env: Vec<f32>,
@@ -180,12 +186,12 @@ fn envelope(x: &[f32]) -> Vec<f32> {
 
 pub fn target(x: &[f32]) -> Target {
     let a = attack_part(x);
-    Target { specs: [512, 2048].iter().map(|&n| spec(x, n, 40)).collect(), env: envelope(x), vib: None, vib_split: None, harm: None, att_spec: spec(a, 256, 24), att_env: fine_envelope(a) }
+    Target { specs: [512, 2048].iter().map(|&n| spec(x, n, 40)).collect(), env: envelope(x), vib: None, vib_split: None, harm: None, noise: None, shimmer: None, att_spec: spec(a, 256, 24), att_env: fine_envelope(a) }
 }
 
 /// As [`target`], plus the vibrato of the held part for the pitch term of [`loss`].
 pub fn target_pitched(x: &[f32], p: Probe) -> Target {
-    Target { vib: Some(vibrato(x, p)), vib_split: Some(vibrato_split(x, p)), harm: Some(harmonic_levels(x, p)), ..target(x) }
+    Target { vib: Some(vibrato(x, p)), vib_split: Some(vibrato_split(x, p)), harm: Some(harmonic_levels(x, p)), noise: Some(noise_bands(x, p)), shimmer: Some(shimmer(x, p)), ..target(x) }
 }
 
 /// Multi-resolution log-spectral L1 + dB envelope; lower is better.
@@ -207,7 +213,7 @@ pub fn loss(t: &Target, y: &[f32]) -> f32 {
     tot + 2.0 * e + W_ATTACK * attack_loss(t, y)
 }
 
-/// The parts of [`loss_pitched`]: (spectral + envelope, attack, vibrato + harmonics).
+/// The parts of [`loss_pitched`]: (spectral + envelope, attack, vibrato + harmonics + noise + shimmer).
 pub fn loss_parts(t: &Target, y: &[f32], p: Probe) -> (f32, f32, f32) {
     let a = W_ATTACK * attack_loss(t, y);
     let base = loss(t, y) - a;
@@ -240,6 +246,12 @@ pub const W_HARM: f32 = 0.08;
 pub const HARMONICS: usize = 16;
 /// Harmonic levels below this (dB re the strongest) count as this.
 pub const HARM_FLOOR_DB: f32 = -60.0;
+/// Per dB of mean inter-harmonic noise error over [`NOISE_BANDS`], and per dB of shimmer error. Neither is visible to
+/// the band spectrogram: the noise sits between harmonics it averages together, and shimmer is faster than its frames
+/// resolve level and too small to move it.
+pub const W_NOISE: f32 = 0.05;
+pub const W_SHIMMER: f32 = 1.0;
+pub const NOISE_BANDS: [f32; 5] = [100.0, 500.0, 1500.0, 4000.0, 12000.0];
 
 /// [`loss`] plus, if the target has vibrato stats, the vibrato depth/rate mismatch.
 pub fn loss_pitched(t: &Target, y: &[f32], p: Probe) -> f32 {
@@ -254,12 +266,57 @@ pub fn loss_pitched(t: &Target, y: &[f32], p: Probe) -> f32 {
         Some((te, tl)) => { let (ye, yl) = vibrato_split(y, p); 0.5 * W_DEPTH * ((te - ye).abs() + (tl - yl).abs()) }
         None => W_DEPTH * (td - yd).abs(),
     };
+    if let Some(tn) = &t.noise {
+        let yn = noise_bands(y, p);
+        l += W_NOISE * tn.iter().zip(&yn).map(|(a, b)| (a - b).abs()).sum::<f32>() / 4.0;
+    }
+    if let Some(ts) = t.shimmer {
+        l += W_SHIMMER * (ts - shimmer(y, p)).abs();
+    }
     if let Some(th) = &t.harm {
         let yh = harmonic_levels(y, p);
         let n = th.iter().zip(&yh).count().max(1) as f32;
         l += W_HARM * th.iter().zip(&yh).map(|(a, b)| (a - b).abs()).sum::<f32>() / n;
     }
     l
+}
+
+/// Noise between the harmonics of the held part (0.3 s to the release), per [`NOISE_BANDS`] band, in dB re the total
+/// 80 Hz-12 kHz power: 8192-point frames averaged, bins within ±0.2·f0 of a harmonic left out.
+pub fn noise_bands(x: &[f32], p: Probe) -> [f32; 4] {
+    let f0 = 440.0 * ((p.key as f32 - 69.0) / 12.0).exp2();
+    let n = 8192;
+    let (a, z) = ((0.3 * SR as f32) as usize, ((p.hold * SR as f32) as usize).min(x.len()));
+    let fft = FftPlanner::<f32>::new().plan_fft_forward(n);
+    let mut pw = vec![0.0f32; n / 2];
+    let mut s0 = a;
+    let mut frames = 0;
+    while s0 + n <= z {
+        let mut buf: Vec<Complex<f32>> = (0..n).map(|i| Complex::new(x[s0 + i] * (0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n as f32).cos()), 0.0)).collect();
+        fft.process(&mut buf);
+        for (q, c) in pw.iter_mut().zip(&buf) { *q += c.norm_sqr(); }
+        frames += 1;
+        s0 += n / 4;
+    }
+    let bin = SR as f32 / n as f32;
+    let harm = |f: f32| { let k = (f / f0).round().max(1.0); (f - k * f0).abs() < 0.2 * f0 };
+    let tot: f32 = (0..n / 2).filter(|&i| (80.0..12000.0).contains(&(i as f32 * bin))).map(|i| pw[i]).sum::<f32>().max(1e-20);
+    if frames == 0 { return [-120.0; 4]; }
+    std::array::from_fn(|b| {
+        let e: f32 = (0..n / 2).filter(|&i| { let f = i as f32 * bin; f >= NOISE_BANDS[b] && f < NOISE_BANDS[b + 1] && !harm(f) }).map(|i| pw[i]).sum();
+        (10.0 * (e / tot + 1e-12).log10()).max(-120.0)
+    })
+}
+
+/// Shimmer of the held part: RMS (dB) of the 10 ms level after removing its 90 ms moving average.
+pub fn shimmer(x: &[f32], p: Probe) -> f32 {
+    let c = SR / 100;
+    let (a, z) = ((0.3 * SR as f32) as usize, ((p.hold * SR as f32) as usize).min(x.len()));
+    let e: Vec<f32> = x[a..z].chunks_exact(c).map(|ch| 10.0 * (ch.iter().map(|v| v * v).sum::<f32>() / c as f32 + 1e-12).log10()).collect();
+    let w = 9;
+    if e.len() <= 2 * w { return 0.0; }
+    let d: Vec<f32> = (w..e.len() - w).map(|i| e[i] - e[i - w / 2..=i + w / 2].iter().sum::<f32>() / w as f32).collect();
+    (d.iter().map(|v| v * v).sum::<f32>() / d.len() as f32).sqrt()
 }
 
 /// Vibrato depth (cents) over 0.25-0.7 s and 0.7 s to the release.
@@ -482,7 +539,8 @@ pub fn render_voice(c: &Chain, p: Probe) -> Option<Vec<f32>> {
     let mut b = BoreSynth::new(SR as f32);
     for (id, v) in [(P_CHARACTER, rp[0]), (P_STIFFNESS, rp[1]), (P_APERTURE, rp[2]), (P_POSITION, rp[3]), (P_BORE, c.open as u8 as f32),
         (P_DAMPING, rp[4]), (P_DECAY, rp[5]), (P_BREATH, rp[6]), (P_NOISE, rp[7]), (P_VIBRATO_DEPTH, rp[8]), (P_ATTACK_MS, rp[9]), (P_RELEASE_MS, rp[10]),
-        (P_VIBRATO_PITCH, rp[11]), (P_VIBRATO_DELAY_MS, rp[12]), (P_BELL, rp[13]), (P_VIBRATO_RATE, c.vibrato_hz)] {
+        (P_VIBRATO_PITCH, rp[11]), (P_VIBRATO_DELAY_MS, rp[12]), (P_BELL, rp[13]), (P_VALVE_NOISE, rp[14]), (P_AIR, rp[15]), (P_WANDER, rp[16]),
+        (P_VIBRATO_RATE, c.vibrato_hz)] {
         b.set_param_smooth(id, v, 0.0);
     }
     if !b.accepts(p.key) {

@@ -6,7 +6,7 @@ use std::{fs, path::Path};
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let sf2 = Path::new(&a[1]);
-    println!("| program | run | total | spectral+env | attack | vibrato+harmonics | attack ms target / fit | vibrato cents target / fit | harmonic dB err (all / even) |\n|---|---|---|---|---|---|---|---|---|");
+    println!("| program | run | total | spectral+env | attack | vib+harm+noise+shimmer | attack ms target / fit | vibrato cents target / fit | harmonic dB err (all / even) | noise dB err | shimmer dB target / fit |\n|---|---|---|---|---|---|---|---|---|---|---|");
     for pr in &PROGRAMS {
         let ps = probes(pr);
         let tgt: Vec<Vec<f32>> = ps.iter().map(|p| render_sf2(sf2, pr.gm, *p)).collect();
@@ -29,8 +29,11 @@ fn main() {
                 d.iter().sum::<f32>() / d.len().max(1) as f32
             }).sum::<f32>() / 3.0;
             let (h_all, h_even) = (herr(false), herr(true));
+            let n_err = ys.iter().zip(&ts).zip(&ps).map(|((y, t), p)| t.noise.unwrap().iter().zip(noise_bands(y, *p)).map(|(a, b)| (a - b).abs()).sum::<f32>() / 4.0).sum::<f32>() / 3.0;
+            let sh_t = tgt.iter().zip(&ps).map(|(t, p)| shimmer(t, *p)).sum::<f32>() / 3.0;
+            let sh_y = ys.iter().zip(&ps).map(|(y, p)| shimmer(y, *p)).sum::<f32>() / 3.0;
             let label = Path::new(run).file_name().unwrap().to_string_lossy();
-            println!("| {} | {label} | {:.2} | {b:.2} | {at:.2} | {v:.2} | {att_t:.0} / {att_y:.0} | {vib_t:.0} / {vib_y:.0} | {h_all:.1} / {h_even:.1} |", pr.name, b + at + v);
+            println!("| {} | {label} | {:.2} | {b:.2} | {at:.2} | {v:.2} | {att_t:.0} / {att_y:.0} | {vib_t:.0} / {vib_y:.0} | {h_all:.1} / {h_even:.1} | {n_err:.1} | {sh_t:.2} / {sh_y:.2} |", pr.name, b + at + v);
         }
     }
 }
