@@ -12,6 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dsp = { path = "../dsp" }
+engine = { path = "../engine" }
 rustysynth = "1"
 rustfft = "6"
 rayon = "1"

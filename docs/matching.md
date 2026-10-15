@@ -1,6 +1,6 @@
 # Patch matching: automatic synth sound matching
 
-Status: **plan, nothing built.** Python orchestrates; Rust runs the hot loops. This doc is self-contained and the plan of record.
+Status: **prototype.** `engine/crates/match` (`match_chain`) does the joint fit below end to end for 5 programs (docs/match/runs/2026-10-14-gm5-joint/fit.md); the worker/CLI split is not built. Python orchestrates; Rust runs the hot loops. This doc is self-contained and the plan of record.
 
 Goal: find parameter settings for our engines (bore, subtractive, filters, EQ, reverb) that closely approximate General MIDI soundfont instruments.
 
@@ -53,7 +53,7 @@ Contents:
 Python depends on numpy, pycma, pyyaml, matplotlib, and `soundfile`/`pyfluidsynth` for target rendering. It runs offline and is not shipped.
 
 - **Parameter space:** read from the worker `schema`. Normalise to [0, 1], log scale for Hz/s/Q. The CLI and suggestion files always speak real units.
-- **Optimizer:** pycma for continuous params (10-40 dims). Discrete choices via `branch` (or enumerate short searches). Staged search: exciter/structure, filter/envelope, modulation/velocity, then a joint polish. Multi-fidelity with successive halving using `fidelity`.
+- **Optimizer:** pycma for continuous params (10-40 dims). Discrete choices via `branch` (or enumerate short searches). Search the synth and filter knobs **jointly**, not in stages: timbre knobs reshape the spectrum non-linearly, so fitting them first and patching with EQ afterwards gets the tone wrong. Inside each candidate evaluation, solve the EQ gains in closed form (regularised, shared across probe notes) so every candidate is scored with its best EQ. Multi-fidelity with successive halving using `fidelity`.
 - **State:** `trials.jsonl` is the source of truth; `state.pkl` is a cache and can be rebuilt by replaying.
 - **Batches:** one `eval` request per generation (population in one message), so the worker parallelises across cores.
 
@@ -125,10 +125,10 @@ A hand-tuned preset that started from a matched one says so in a structured comm
 Done in the Rust worker where it touches audio (so there is one analysis implementation); Python only consumes the results as the CMA-ES start.
 
 - Amplitude envelope: fit ADSR or a multi-segment envelope to the target's dB RMS.
-- EQ (final stage): ratio of long-term average spectra, smoothed, closed-form band gains.
+- EQ (inside every evaluation, not a final stage): ratio of long-term average spectra, ridge least squares onto the EQ device's band responses, capped, so EQ only does broad shaping.
 - String: partial peak-picking gives f0 and inharmonicity B; per-partial decay times give loss params; comb-like gaps give pluck position.
 - Tube/bore: resonances and odd/even harmonic balance give bore type and length; these overlap with the calibration model, so share the fitted forward model rather than duplicating it.
-- Reverb: off during matching; add afterwards from an RT60 estimate.
+- Reverb: off during the dry fit (targets dry); then fit the reverb device with the dry chain frozen against the soundfont's own wet render, before writing `best.json`. Unreverbed renders sound fake, so candidates are judged by ear with it on.
 
 ## Probe suite
 

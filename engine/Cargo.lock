@@ -66,6 +66,7 @@ name = "match"
 version = "0.1.0"
 dependencies = [
  "dsp",
+ "engine",
  "rayon",
  "rustfft",
  "rustysynth",
