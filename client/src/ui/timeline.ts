@@ -1,7 +1,6 @@
 // Plain absolutely-positioned DOM timeline. Isolated so it can be redesigned.
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
-import { MAX_PPS, MIN_PPS, fitPps } from './zoomFit'
-import { editZoomPps } from './autoZoom'
+import { createZoom } from './zoom'
 import {
   DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, MIX_GAIN, MIX_PAN, migrateToV3, FINNWAVE, addClickTrack, addDevice, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getPoints, laneOf, laneState, paramToValue, resolveTarget, setLaneEnabled, 
@@ -261,7 +260,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const headCtx: HeadCtx = { doc, undo, readOnly, store, rec, drawers, avail, drive, toggleTab, autoMenu }
   disposers.push(
     mountBar(bar, { store, readOnly, local: s.local, user: s.user, transport: transport.el, status, cpu, loopText, unread, chatOpen,
-      onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: zoomButton, onExport: exportProject, onChat: toggleChat }),
+      onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: (f) => zoom.button(f), onExport: exportProject, onChat: toggleChat }),
     mountRemoteHeads(overlay, { store, offset: HEADER, scale }),
     mountRemoteHeads(rulerHeads, { store, offset: 0, scale }),
     mountMasterHead(masterHead, headCtx, (r) => (masterGain = r.gain)),
@@ -747,37 +746,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     return src
   }
 
-  // Opening a MIDI clip while zoomed far out zooms in to it (editZoomPps); closing it puts the zoom back, unless the zoom was changed since.
-  let zoomedFor: string | null = null
-  let savedZoom: { pps: number; left: number; auto: number } | null = null
-  function syncEditZoom(editing: string | null) {
-    if (editing === zoomedFor) return
-    zoomedFor = editing
-    const c = editing ? store.clipById[editing] : undefined
-    if (!c) {
-      if (savedZoom && pps === savedZoom.auto) {
-        const { pps: back, left } = savedZoom
-        pps = back
-        syncScale()
-        requestAnimationFrame(() => (scroll.scrollLeft = left))
-      }
-      savedZoom = null
-      return
-    }
-    if (c.kind !== 'midi' || lanes.get(c.trackId)?.src) return
-    const next = editZoomPps(pps, clipLength(c, rate) / rate, 60 / c.bpm, scroll.clientWidth - HEADER)
-    if (next == null) return
-    savedZoom = savedZoom && savedZoom.auto === pps ? { ...savedZoom, auto: next } : { pps, left: scroll.scrollLeft, auto: next }
-    pps = next
-    syncScale()
-    const left = Math.max(0, (c.start / rate) * next - 8)
-    requestAnimationFrame(() => (scroll.scrollLeft = left))
-  }
-
   function select(ids: string[]) {
     sel.selectClips(ids)
     s.setLocal({ selection: ids })
   }
+
+  const zoom = createZoom({
+    scroll, rulerBody, header: HEADER, store, sel, rate: () => rate, pps: () => pps, isSource: (id) => !!lanes.get(id)?.src,
+    setPps: (v) => ((pps = v), syncScale()),
+  })
 
   // the gestures and the blocks on the lanes see the layout through these
   const geo: GestureCtx['geo'] = {
@@ -813,7 +790,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     })
     createEffect(() => (hint.hidden = store.tracks().length > 0))
     createEffect(() => (store.tracks(), untrack(syncRec))) // (the armed track may have been deleted)
-    createEffect(() => syncEditZoom(sel.editing))
+    createEffect(() => zoom.editing(sel.editing))
     // what the selection points at may be gone from the doc (the doc is asked as well: a just-made entity may not have reached the store yet)
     createEffect(() => sel.pruneEditing((id) => (void store.clipById[id], clipsMap(doc).get(id)?.get('kind') === 'midi')))
     createEffect(() => sel.pruneClips((id) => (void store.clipById[id], clipsMap(doc).has(id))))
@@ -903,60 +880,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   resizes?.observe(scroll)
   resizes?.observe(laneBox)
   resizes?.observe(master)
-  /** Zoom the timeline by `factor`, keeping the time under screen x `clientX` where it is. */
-  function zoomAt(factor: number, clientX: number) {
-    const t = (clientX - rulerBody.getBoundingClientRect().left) / pps
-    pps = Math.min(MAX_PPS, Math.max(MIN_PPS, pps * factor))
-    syncScale()
-    scroll.scrollLeft += HEADER + t * pps - (clientX - scroll.getBoundingClientRect().left) - scroll.scrollLeft
-  }
-  scroll.addEventListener('wheel', (e) => {
-    if (!(e.ctrlKey || e.metaKey)) return
-    e.preventDefault()
-    zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX)
-  }, { passive: false })
-  // Touch pinch: two fingers zoom around their midpoint. (The page itself cannot pinch-zoom, see styles.css; handling
-  // the gesture here also keeps iOS Safari from taking it as its tab-overview pinch.)
-  let pinch = 0
-  const spread = (e: TouchEvent) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY)
-  scroll.addEventListener('touchstart', (e) => { pinch = e.touches.length === 2 ? spread(e) : 0 }, { passive: true })
-  scroll.addEventListener('touchmove', (e) => {
-    if (e.touches.length !== 2 || !pinch) return
-    if (e.cancelable) e.preventDefault()
-    const d = spread(e)
-    if (d > 0) zoomAt(d / pinch, (e.touches[0].clientX + e.touches[1].clientX) / 2)
-    pinch = d
-  }, { passive: false })
-  scroll.addEventListener('touchend', (e) => { pinch = e.touches.length === 2 ? spread(e) : 0 }, { passive: true })
-  scroll.addEventListener('touchcancel', () => (pinch = 0), { passive: true })
-  /** Zoom so everything from 0 to the last clip / pad (main timeline only; source lanes have their own time) fits the visible width. */
-  let fitRaf = 0
-  function zoomFit(tries = 0) {
-    cancelAnimationFrame(fitRaf)
-    const view = scroll.clientWidth - HEADER
-    if (view < 100) { // not laid out yet
-      if (tries < 60) fitRaf = requestAnimationFrame(() => zoomFit(tries + 1))
-      return
-    }
-    const scapes = new Set(store.tracks().filter((t) => t.kind === 'soundscape').map((t) => t.id))
-    const end = Math.max(0,
-      ...store.clips().filter((c) => !scapes.has(c.trackId)).map((c) => c.start + clipLength(c, rate)),
-      ...store.pads().map((p) => p.start + p.length))
-    pps = fitPps(end / rate, view)
-    syncScale()
-    scroll.scrollLeft = 0
-  }
-  /** The buttons zoom around the middle of what is visible (right of the track headers). */
-  function zoomButton(factor: number) {
-    const r = scroll.getBoundingClientRect()
-    zoomAt(factor, r.left + HEADER + (r.width - HEADER) / 2)
-  }
   const key = (e: KeyboardEvent) => {
     const tag = (e.target as HTMLElement).tagName
     if (tag === 'SELECT' || (tag === 'INPUT' && (e.target as HTMLInputElement).type !== 'range')) return
     const mod = e.metaKey || e.ctrlKey
     if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void rec.toggleRecord() : toggle() }
-    else if (!mod && !e.shiftKey && e.key.toLowerCase() === 'z') zoomFit()
+    else if (!mod && !e.shiftKey && e.key.toLowerCase() === 'z') zoom.fit()
     else if (e.key === 'Escape' && sel.escape()) return
     else if (!readOnly && tag !== 'TEXTAREA' && !(e.target as HTMLElement).isContentEditable && !mod && !e.altKey && !e.repeat && cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)) {
       e.preventDefault()
@@ -1014,7 +943,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     syncRec()
     measure()
     if (refreshPreviews()) ensurePreviewTick()
-    zoomFit() // (zoom is not remembered per project, so every open fits the song to the window)
+    zoom.fit() // (zoom is not remembered per project, so every open fits the song to the window)
     if (!readOnly) sweepUnusedTakes(rec.takeCtx())
     if (!readOnly) recoverTakes(rec.takeCtx()).then((n) => {
       if (n && !destroyed) say(`recovered ${n} unfinished take${n > 1 ? 's' : ''}`)
@@ -1025,7 +954,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     el,
     destroy() {
       destroyed = true
-      cancelAnimationFrame(fitRaf)
+      zoom.destroy()
       cancelAnimationFrame(meterRaf)
       cancelAnimationFrame(previewRaf)
       removeEventListener('keydown', key)
