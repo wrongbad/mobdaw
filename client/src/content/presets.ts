@@ -56,11 +56,11 @@ export const INSTRUMENT_PRESETS: InstrumentPreset[] = [
 /** bore (waveguide) params by name; turned into the engine's ids by `bw`. `bore`: 0 closed, 1 open. */
 type Bw = {
   character: number; stiffness?: number; aperture?: number; position: number; bore: 0 | 1; damping?: number; decay?: number; breath?: number; noise?: number
-  vibRate?: number; vibDepth?: number; attack: number; release: number; gain?: number
+  vibRate?: number; vibDepth?: number; vibPitch?: number; attack: number; release: number; gain?: number
 }
 const bw = (p: Bw): Record<string, number> => ({
   0: p.character, 1: p.stiffness ?? 0.5, 2: p.aperture ?? 0.5, 3: p.position, 4: p.bore, 5: p.damping ?? 0.3, 6: p.decay ?? 0.7, 7: p.breath ?? 0.5,
-  8: p.noise ?? 0, 9: p.vibRate ?? 5, 10: p.vibDepth ?? 0, 11: p.attack, 12: p.release, 13: p.gain ?? 1,
+  8: p.noise ?? 0, 9: p.vibRate ?? 5, 10: p.vibDepth ?? 0, 11: p.attack, 12: p.release, 13: p.gain ?? 1, 14: p.vibPitch ?? 0,
 })
 const bore = (id: string, name: string, category: InstrumentCategory, p: Bw): InstrumentPreset => ({ id, name, type: BORE, category, params: bw(p) })
 

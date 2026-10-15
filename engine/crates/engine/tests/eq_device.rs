@@ -51,3 +51,38 @@ fn single_active_bell_matches_filter_device_bell() {
     }
     assert_eq!(el, er);
 }
+
+/// Peak magnitude of the steady output for a sine at `hz`.
+fn sine_gain(e: &mut EqDevice, hz: f32) -> f32 {
+    let n = 9600;
+    let x: Vec<f32> = (0..n).map(|i| (std::f32::consts::TAU * hz * i as f32 / SR).sin()).collect();
+    let (mut l, mut r) = (x.clone(), x.clone());
+    for (a, b) in l.chunks_mut(128).zip(r.chunks_mut(128)) {
+        e.process(a, b, SR);
+    }
+    l[n / 2..].iter().fold(0.0f32, |m, v| m.max(v.abs()))
+}
+
+#[test]
+fn body_is_eight_bells_with_output_at_24() {
+    let x = noise(3000);
+    let mut b = EqDevice::body(SR);
+    let (mut l, mut r) = (x.clone(), x.clone());
+    for (a, c) in l.chunks_mut(128).zip(r.chunks_mut(128)) {
+        b.process(a, c, SR);
+    }
+    assert_eq!(l, x, "all bands at 0 dB is a passthrough");
+
+    // Band 7 (the last) as a narrow +12 dB bell at 3 kHz: boosts 3 kHz by ~4x, leaves 300 Hz alone.
+    let mut b = EqDevice::body(SR);
+    b.set_param_smooth(21, 3000.0, 0.0);
+    b.set_param_smooth(22, 12.0, 0.0);
+    assert!((sine_gain(&mut b, 3000.0) - 3.98).abs() < 0.1);
+    b.reset();
+    assert!((sine_gain(&mut b, 300.0) - 1.0).abs() < 0.02);
+
+    // Output gain is param 24 for the body (12 for the EQ).
+    let mut b = EqDevice::body(SR);
+    b.set_param_smooth(24, -6.0, 0.0);
+    assert!((sine_gain(&mut b, 1000.0) - 0.501).abs() < 0.01);
+}

@@ -25,6 +25,8 @@ export const EQ = 8
 /** The track's (or master's) fader and pan: hidden, pinned last in its chain, one per track and one for the master bus. */
 export const MIX = 9
 export const BORE = 10
+/** Body resonator: the EQ's engine device with eight bells (docs/engine-api.md kind 11). */
+export const BODY = 11
 export const MIX_GAIN = 0
 export const MIX_PAN = 1
 
@@ -34,13 +36,14 @@ const EQ_BANDS = [
   { name: 'bell 2', hz: 2000 },
   { name: 'high', hz: 8000 },
 ]
-const eqParams = (): ParamDef[] => [
-  ...EQ_BANDS.flatMap((b, i): ParamDef[] => [
+const BODY_BANDS = [275, 400, 460, 540, 700, 1000, 2500, 3200].map((hz, i) => ({ name: `peak ${i + 1}`, hz }))
+const eqParams = (bands: { name: string; hz: number }[] = EQ_BANDS, damping = 0.7071): ParamDef[] => [
+  ...bands.flatMap((b, i): ParamDef[] => [
     { id: i * 3, name: `${b.name} freq`, min: 20, max: 20000, def: b.hz, scale: 'log', unit: 'hz' },
     { id: i * 3 + 1, name: `${b.name} gain`, min: -24, max: 24, def: 0, scale: 'lin', unit: 'db' },
-    { id: i * 3 + 2, name: `${b.name} damping`, min: 0.05, max: 2, def: 0.7071, scale: 'lin' },
+    { id: i * 3 + 2, name: `${b.name} damping`, min: 0.05, max: 2, def: damping, scale: 'lin' },
   ]),
-  { id: 12, name: 'output', min: -24, max: 24, def: 0, scale: 'lin', unit: 'db' },
+  { id: bands.length * 3, name: 'output', min: -24, max: 24, def: 0, scale: 'lin', unit: 'db' },
 ]
 
 export const DEVICES: Record<number, DeviceDef> = {
@@ -61,6 +64,7 @@ export const DEVICES: Record<number, DeviceDef> = {
     ],
   },
   [EQ]: { type: EQ, name: 'EQ', instrument: false, params: eqParams() },
+  [BODY]: { type: BODY, name: 'body', instrument: false, params: eqParams(BODY_BANDS, 0.1) },
   [REVERB]: {
     type: REVERB, name: 'reverb', instrument: false,
     params: [

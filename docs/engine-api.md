@@ -476,14 +476,27 @@ for the note, so any value in 0..1 speaks and levels out.
 | breath | 7 | 0..1 | 0.5 | Breath pressure / bow speed. Smoothed. |
 | noise | 8 | 0..1 | 0 | Smoothed. |
 | vibrato rate | 9 | 0.1..12 Hz | 5 | |
-| vibrato depth | 10 | 0..1 | 0 | Smoothed. |
+| vibrato depth | 10 | 0..1 | 0 | Breath vibrato (drive). Smoothed. |
 | attack | 11 | 0..2000 ms | 30 | Read when a note starts. |
 | release | 12 | 1..5000 ms | 120 | Read when a note is released. |
 | gain | 13 | 0..2 | 1 | Smoothed. |
+| vibrato pitch | 14 | 0..1 | 0 | Pitch vibrato (loop retuned per 32-sample sub-block at the vibrato rate), 60 cents peak at 1. Smoothed. |
 
 - Notes outside the working range of the current character, position and bore get no voice. When all 8 voices are
   busy the oldest is stolen with a 64-sample fade. Velocity sets a breath burst and scales level (0.5 + 0.5 v).
 - No allocation after construction. A voice is idle once released and its loop has died away.
+
+
+**kind 11: Body** (effect). An instrument body's fixed resonances (a violin's air mode, body modes and bridge hill): the
+EQ device (kind 8) with eight bells instead of shelf/bell/bell/shelf. Same param layout, smoothing and passthrough rule.
+Used by the matched string presets (docs/matching.md).
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| freq | band·3 (bands 0..7) | 20..20000 Hz | 275 / 400 / 460 / 540 / 700 / 1000 / 2500 / 3200 | Roughly a violin's main resonances. |
+| gain | band·3+1 | -24..24 dB | 0 | |
+| damping | band·3+2 | 0.05..2 | 0.1 | Q = 1/(2·damping), so 5 by default: narrow. |
+| output | 24 | -24..24 dB | 0 | |
 
 **kind 7: Lofi drum** (instrument). `dsp::lofidrum`: white noise → SVF low-pass (`dsp::svf`) → exponential
 decay envelope → gain. A one-shot.

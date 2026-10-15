@@ -12,6 +12,7 @@ pub const KIND_LOFI_DRUM: u32 = 7;
 pub const KIND_EQ: u32 = 8;
 pub const KIND_MIX: u32 = 9;
 pub const KIND_BORE: u32 = 10;
+pub const KIND_BODY: u32 = 11;
 
 const SMOOTH_MS: f64 = 10.0;
 
@@ -57,6 +58,7 @@ impl Device {
             KIND_DELAY => DeviceKind::Delay(Box::new(DelayDevice::new(sample_rate))),
             KIND_LOFI_DRUM => DeviceKind::Lofi(Box::new(LofiDrum::new(sample_rate))),
             KIND_EQ => DeviceKind::Eq(Box::new(EqDevice::new(sample_rate))),
+            KIND_BODY => DeviceKind::Eq(Box::new(EqDevice::body(sample_rate))),
             KIND_MIX => DeviceKind::Mix(Box::new(MixDevice::new(sample_rate, track == crate::engine::MASTER_TRACK))),
             KIND_BORE => DeviceKind::Bore(Box::new(BoreSynth::new(sample_rate))),
             _ => DeviceKind::Unknown,
@@ -251,7 +253,7 @@ impl Device {
             DeviceKind::Tremolo(_) => matches!(param, 0 | 1 | 3),
             DeviceKind::Delay(_) => matches!(param, 0 | 2 | 4 | 6 | 7),
             DeviceKind::Lofi(_) => matches!(param, dsp::lofidrum::P_CUTOFF | dsp::lofidrum::P_RESONANCE | dsp::lofidrum::P_GAIN),
-            DeviceKind::Eq(_) => param <= 12,
+            DeviceKind::Eq(e) => param as usize <= 3 * e.bands.len(),
             DeviceKind::Mix(_) => param <= 1,
             DeviceKind::Unknown => false,
         }
@@ -440,16 +442,28 @@ impl FilterDevice {
     }
 }
 
-/// Kind 8: four-band EQ (low shelf, bell, bell, high shelf). Params: `band*3 + {0 freq Hz, 1 gain dB, 2 damping}`
-/// for bands 0..3, and 12 output gain (dB). Same smoothing and SVF mixes as `FilterDevice`'s bell and shelves, but
-/// all active bands run in one fused per-sample loop with L and R interleaved.
+/// Kind 8: four-band EQ (low shelf, bell, bell, high shelf), and kind 11: body resonator (eight bells, for an
+/// instrument body's fixed resonances; see docs/matching.md). Params: `band*3 + {0 freq Hz, 1 gain dB, 2 damping}` for
+/// each band, then `3*bands` output gain (dB): 12 for the EQ, 24 for the body. Same smoothing and SVF mixes as
+/// `FilterDevice`'s bell and shelves, but all active bands run in one fused per-sample loop with L and R interleaved.
 pub struct EqDevice {
     smooth_samples: f64,
-    bands: [EqBand; 4],
+    bands: Vec<EqBand>,
     out_db: Ramp,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    LowShelf,
+    Bell,
+    HighShelf,
+}
+
+/// Most bands an `EqDevice` has (the body's).
+const MAX_BANDS: usize = 8;
+
 struct EqBand {
+    shape: Shape,
     freq_log2: Ramp,
     gain_db: Ramp,
     damping: Ramp,
@@ -460,18 +474,33 @@ struct EqBand {
 }
 
 const EQ_DEFAULT_HZ: [f64; 4] = [100.0, 500.0, 2000.0, 8000.0];
+/// Body defaults: roughly a violin's main resonances (air mode, body modes, bridge hill). All at 0 dB until set.
+pub const BODY_DEFAULT_HZ: [f64; MAX_BANDS] = [275.0, 400.0, 460.0, 540.0, 700.0, 1000.0, 2500.0, 3200.0];
+pub const BODY_DEFAULT_DAMPING: f64 = 0.1;
 
 impl EqDevice {
     pub fn new(sample_rate: f32) -> Self {
-        let band = |i: usize| EqBand {
-            freq_log2: Ramp::new(EQ_DEFAULT_HZ[i].log2()),
-            gain_db: Ramp::new(0.0),
-            damping: Ramp::new(std::f64::consts::FRAC_1_SQRT_2),
-            st: [[0.0; 2]; 2],
-            key: None,
-            coefs: dsp::svf::SvfCoefs::from_g(0.0, 1.0),
-        };
-        Self { smooth_samples: sample_rate as f64 * SMOOTH_MS * 1e-3, bands: [band(0), band(1), band(2), band(3)], out_db: Ramp::new(0.0) }
+        let shapes = [Shape::LowShelf, Shape::Bell, Shape::Bell, Shape::HighShelf];
+        Self::with_bands(sample_rate, (0..4).map(|i| (shapes[i], EQ_DEFAULT_HZ[i], std::f64::consts::FRAC_1_SQRT_2)))
+    }
+
+    pub fn body(sample_rate: f32) -> Self {
+        Self::with_bands(sample_rate, BODY_DEFAULT_HZ.iter().map(|&hz| (Shape::Bell, hz, BODY_DEFAULT_DAMPING)))
+    }
+
+    fn with_bands(sample_rate: f32, bands: impl Iterator<Item = (Shape, f64, f64)>) -> Self {
+        let bands = bands
+            .map(|(shape, hz, damping)| EqBand {
+                shape,
+                freq_log2: Ramp::new(hz.log2()),
+                gain_db: Ramp::new(0.0),
+                damping: Ramp::new(damping),
+                st: [[0.0; 2]; 2],
+                key: None,
+                coefs: dsp::svf::SvfCoefs::from_g(0.0, 1.0),
+            })
+            .collect();
+        Self { smooth_samples: sample_rate as f64 * SMOOTH_MS * 1e-3, bands, out_db: Ramp::new(0.0) }
     }
 
     pub fn set_param(&mut self, param: u32, value: f32) {
@@ -482,7 +511,7 @@ impl EqDevice {
         if !value.is_finite() {
             return;
         }
-        if param == 12 {
+        if param as usize == 3 * self.bands.len() {
             self.out_db.set_target(value.clamp(-24.0, 24.0) as f64, s);
             return;
         }
@@ -503,7 +532,7 @@ impl EqDevice {
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
         let len = l.len();
         let nyquist_limit = 0.99 * 0.5 * sample_rate as f64;
-        let mut active = [0usize; 4];
+        let mut active = [0usize; MAX_BANDS];
         let mut n = 0;
         for (i, b) in self.bands.iter_mut().enumerate() {
             let freq = b.freq_log2.value().exp2().min(nyquist_limit) as f32;
@@ -524,10 +553,10 @@ impl EqDevice {
                 let a = 10f32.powf(gain_db / 40.0);
                 let a2 = a * a;
                 let k = 2.0 * damping;
-                let (warp, damping, m0, m1, m2) = match i {
-                    0 => (1.0 / a.sqrt(), damping, 1.0, k * (a - 1.0), a2 - 1.0),
-                    3 => (a.sqrt(), damping, a2, k * (1.0 - a) * a, 1.0 - a2),
-                    _ => (1.0, damping / a, 1.0, k / a * (a2 - 1.0), 0.0),
+                let (warp, damping, m0, m1, m2) = match b.shape {
+                    Shape::LowShelf => (1.0 / a.sqrt(), damping, 1.0, k * (a - 1.0), a2 - 1.0),
+                    Shape::HighShelf => (a.sqrt(), damping, a2, k * (1.0 - a) * a, 1.0 - a2),
+                    Shape::Bell => (1.0, damping / a, 1.0, k / a * (a2 - 1.0), 0.0),
                 };
                 b.coefs = dsp::svf::SvfCoefs::from_hz(freq, damping, sample_rate, warp).with_mix(m0, m1, m2);
             }
@@ -540,8 +569,8 @@ impl EqDevice {
         let out_gain = if out_db == 0.0 && out_rest { None } else { Some(10f32.powf(out_db as f32 / 20.0)) };
 
         if n > 0 {
-            let mut c = [self.bands[0].coefs; 4];
-            let mut s = [[[0.0f32; 2]; 2]; 4];
+            let mut c = [self.bands[0].coefs; MAX_BANDS];
+            let mut s = [[[0.0f32; 2]; 2]; MAX_BANDS];
             for (j, &i) in active[..n].iter().enumerate() {
                 c[j] = self.bands[i].coefs;
                 s[j] = self.bands[i].st;
