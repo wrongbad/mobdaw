@@ -45,12 +45,13 @@ import { mountMasterHead, mountTrackHead, type HeadCtx, type HeadRefs } from './
 import { mountRemoteHeads } from './remoteHeads'
 import { follow, peakToFill } from './meter'
 import { addImportedClip, automateParam, commitParam, commitParams, deleteClips, loopForever, reorderDevice, unloopClip } from '../project/actions'
+import { importSmf, isMidiFile, parseSmf } from '../content/midifile'
 import { createRecorder } from '../project/recorder'
 import { createProjectStore } from '../project/store'
 import { createAutoValues, createDrawers, createMixDrive, createSelection, createTabAvailability, type TabName } from '../project/viewState'
 
-const audioFiles = (list: FileList | null | undefined) =>
-  [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
+const importableFiles = (list: FileList | null | undefined) =>
+  [...(list ?? [])].filter((f) => isMidiFile(f) || f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
 
 type Lane = {
   el: HTMLElement; row: HTMLElement; body: HTMLElement; head: HeadRefs
@@ -194,9 +195,19 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let bgTarget: { trackId: string; at: number } | null = null
   const bgPicker = h('input', { type: 'file', accept: 'audio/*', multiple: true, hidden: true })
   bgPicker.onchange = () => {
-    const files = audioFiles(bgPicker.files)
+    const files = importableFiles(bgPicker.files)
     bgPicker.value = ''
     if (bgTarget && files.length) void dropFiles(files, bgTarget.trackId, bgTarget.at)
+  }
+  // "upload midi" in the new-track menu: each instrument of the score becomes a track, at the playhead.
+  let midiTarget: { trackId: string; at: number } | null = null // (null: new tracks at the playhead)
+  const midiPicker = h('input', { type: 'file', accept: '.mid,.midi,.kar,.rmi,audio/midi,audio/x-midi', multiple: true, hidden: true })
+  midiPicker.onchange = () => {
+    const files = [...(midiPicker.files ?? [])]
+    midiPicker.value = ''
+    const to = midiTarget
+    midiTarget = null
+    if (files.length) void dropFiles(files, to?.trackId ?? null, to?.at ?? Math.round(position()))
   }
   const addLink = h('button', { className: 'add-track', title: 'new track', onclick: () => {
     const n = getTracks(doc).length + 1
@@ -206,6 +217,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         doc.transact(() => addDevice(doc, addTrack(doc, `midi ${n}`, 'midi', undefined, undefined, nextTrackColor(getTracks(doc))), FINNWAVE))
       }],
       ['soundscape', () => addTrack(doc, `soundscape ${n}`, 'soundscape', undefined, undefined, nextTrackColor(getTracks(doc)))],
+      ['upload midi', () => midiPicker.click()],
     ])
   } }, '+')
   const overlay = h('div', { className: 'overlay' })
@@ -215,16 +227,16 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const rulerHead = h('div', { className: 'playhead' })
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
   overlay.append(playhead, snapLine)
-  const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio files here, or use + track.')
+  const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio or midi files here, or use + track.')
   const master = h('div', { className: 'lane master' }) // like a track's lane: the fx row, then its automation, as one block (filled below)
-  const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, readOnly ? null : addLink, bgPicker, overlay)
+  const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, readOnly ? null : addLink, bgPicker, midiPicker, overlay)
   const scroll = h('div', { className: 'scroll' }, content)
   // Drops outside any lane start a new track.
   scroll.ondragover = (e) => e.preventDefault()
   scroll.ondrop = (e) => {
     e.preventDefault()
     if (readOnly) return
-    void dropFiles(audioFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
+    void dropFiles(importableFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   }
   // The global fx lane: the master bus chain. It closes the track list, directly above the global automation (one unit, after every track).
   const masterHead = h('div', { className: 'head' }) // (filled by `MasterHead`)
@@ -552,12 +564,16 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       e.preventDefault()
       e.stopPropagation()
       if (readOnly) return
-      const audio = tracksMap(doc).get(t.id)?.get('kind') === 'audio'
-      void dropFiles(audioFiles(e.dataTransfer?.files), audio ? t.id : null, fromX(e.clientX - body.getBoundingClientRect().left))
+      const kind = tracksMap(doc).get(t.id)?.get('kind')
+      const at = fromX(e.clientX - body.getBoundingClientRect().left)
+      const files = importableFiles(e.dataTransfer?.files)
+      // a score merges into a MIDI lane; audio only lands on an audio lane (elsewhere it starts a new track)
+      void dropFiles(files.filter(isMidiFile), kind === 'midi' ? t.id : null, at)
+      void dropFiles(files.filter((f) => !isMidiFile(f)), kind === 'audio' ? t.id : null, at)
     }
     // background menu: audio lanes take uploads; MIDI lanes and soundscapes make a new region
     if (t.kind === 'audio') bgMenu(body, (e) => [['upload', () => pickInto(t.id, atX(e))]])
-    else if (t.kind === 'midi') bgMenu(body, (e) => [['new piano roll', () => newMidiClip(t.id, atX(e))], ['new drum grid', () => newMidiClip(t.id, atX(e), true)]])
+    else if (t.kind === 'midi') bgMenu(body, (e) => [['new piano roll', () => newMidiClip(t.id, atX(e))], ['new drum grid', () => newMidiClip(t.id, atX(e), true)], ['upload midi', () => { midiTarget = { trackId: t.id, at: atX(e) }; midiPicker.click() }]])
     else if (t.kind === 'soundscape') bgMenu(body, (e) => [['new region', () => newPad(t.id, atX(e))]])
     // soundscape tracks: the main lane is blank like an empty track (regions turn the loopers on); the source audio gets its own lane
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
@@ -742,7 +758,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       e.preventDefault()
       e.stopPropagation()
       if (readOnly) return
-      void dropFiles(audioFiles(e.dataTransfer?.files), trackId, at(e.clientX))
+      void dropFiles(importableFiles(e.dataTransfer?.files), trackId, at(e.clientX))
     }
     bgMenu(body, (e) => [['upload', () => pickInto(trackId, at(e.clientX))]])
     view.addEventListener('scroll', () => setScrollX(view.scrollLeft), { passive: true })
@@ -878,6 +894,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       return
     }
     for (const f of files) {
+      if (isMidiFile(f)) {
+        try {
+          importSmf(doc, parseSmf(await f.arrayBuffer()), { at, trackId, base: f.name.replace(/\.[^.]+$/, '') })
+          say('')
+        } catch (err) {
+          say(`${f.name}: ${(err as Error).message}`, true)
+        }
+        continue
+      }
       say(`uploading ${f.name}…`)
       try {
         const m = await importFile(s.projectId, doc, f)
