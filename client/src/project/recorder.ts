@@ -56,6 +56,8 @@ export function createRecorder(d: RecorderDeps) {
   let loopLive: { source: number; clip?: number } | null = null // the live source (and engine-only clip) of the loop being recorded
   let loopTimer: ReturnType<typeof setInterval> | 0 = 0 // while a loop records: ends its take when it has what it needs
   let closingTake: Promise<unknown> = Promise.resolve() // a loop take being stopped by the recorder
+  let closing = 0 // how many are being stopped
+  const closeTake = (p: Promise<unknown>) => (closingTake = p, closing++, void p.then(() => closing--, () => closing--))
   let loopArming = false // asking for the microphone
   let preparing = false // asking for the microphone for ●: ignore further presses
   let destroyed = false
@@ -234,7 +236,7 @@ export function createRecorder(d: RecorderDeps) {
     s.setLocal({ recording: null })
     if (!tk || !live || !pb) return
     const stopped = pb.recorder.stop()
-    closingTake = stopped
+    closeTake(stopped)
     void saveLoopTake(tk, stopped, t, live)
     changed()
   }
@@ -245,7 +247,7 @@ export function createRecorder(d: RecorderDeps) {
     clearLoopTimer()
     s.setLocal({ recording: null })
     const stopped = pb?.recorder.stop()
-    if (stopped) closingTake = stopped
+    if (stopped) closeTake(stopped)
     loopLive = null
     void stopped?.then(() => live && pb?.dropLiveSource(live.source))
     tk?.journal.discard()
@@ -341,6 +343,8 @@ export function createRecorder(d: RecorderDeps) {
     /** The loop commands' current track (where record and mute act). */
     get currentTrack() { return current.v },
     get loops() { return loops },
+    /** A take or loop is recording or closing, or a command is asking for the microphone: the transport must not stop by itself. */
+    get busy() { return !!take || !!loopLive || !!loops?.recording || closing > 0 || preparing },
     arm, toggleRecord, stop, command, listenMidi, reopenInput, resetLoops, takeCtx,
     toggleMonitoring() { monitor.v = !monitor.v; changed() },
     /** The project's sample rate changed: playback is opened again, and nothing stays armed. */

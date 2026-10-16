@@ -27,6 +27,7 @@ import { HEADER, applyLayout } from './layout'
 import { importFile, PLAYBACK_MAX_BYTES } from '../samples'
 import { discardTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, uploadAll, uploadTake } from '../takes'
 import type { Session } from '../project/session'
+import { shouldAutoStop, type MeterSample } from '../audio/autoStop'
 import { chatPanel } from './chat'
 import { automateMenu, type AutoInfo } from './automation'
 import { mountLaneDrawers, mountMasterDrawers, type DrawCtx } from './drawers'
@@ -244,14 +245,17 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const disposers: (() => void)[] = []
   const owner = createRoot((dispose) => (disposers.push(dispose), getOwner()!))
   const inRoot = <T,>(f: () => T) => runWithOwner(owner, f)!
-  /** The main timeline's extent (samples): the last clip or region and 30 s more, at least a minute. Source clips live in their own time world. */
-  const total = inRoot(() => createMemo(() => {
-    const r = scale().rate
+  const mainClips = () => {
     const scapes = new Set(store.tracks().filter((t) => t.kind === 'soundscape').map((t) => t.id))
-    return Math.max(60 * r,
-      ...store.clips().filter((c) => !scapes.has(c.trackId)).map((c) => c.start + clipLength(c, r) + 30 * r),
-      ...store.pads().map((p) => p.start + p.length + 30 * r))
+    return store.clips().filter((c) => !scapes.has(c.trackId))
+  }
+  /** Where the last clip or region of the main timeline ends (samples; 0 when empty). Source clips live in their own time world. */
+  const contentEnd = inRoot(() => createMemo(() => {
+    const r = scale().rate
+    return Math.max(0, ...mainClips().map((c) => c.start + clipLength(c, r)), ...store.pads().map((p) => p.start + p.length))
   }))
+  /** The main timeline's extent (samples): the content and 30 s more, at least a minute. */
+  const total = inRoot(() => createMemo(() => Math.max(60 * scale().rate, contentEnd() + 30 * scale().rate)))
   const totalPx = inRoot(() => createMemo(() => xs(total()))) // (the automation rows are drawn at both)
   // the peers' knob drags go to our engine as overrides (and show on the cards, which follow `store.drags`)
   const applyOverrides = () => pb?.setOverrides(store.overrides())
@@ -267,18 +271,32 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const ne = noteEditor({
     doc, undo, readOnly,
     selectNote: (id) => sel.selectNote(id),
-    noteLive: (trackId, pitch, velocity, on) => pb?.noteLive(trackId, pitch, velocity, on),
+    noteLive: (trackId, pitch, velocity, on) => liveNote(trackId, pitch, velocity, on),
   })
   const dg = drumGrid({ doc, undo, readOnly })
 
   // --- transport
+  // Auto-stop (audio/autoStop.ts): the master reports and the live notes it needs; decided in `tick`.
+  let playedAt = 0
+  const masterSeen: MeterSample[] = []
+  let noteAt = -Infinity // no live-note state in the engine API: held keys are counted here, with a recency guard
+  let held = 0
+  const liveNote = (trackId: string, pitch: number, velocity: number, on: boolean) => {
+    held = Math.max(0, held + (on ? 1 : -1))
+    noteAt = performance.now()
+    pb?.noteLive(trackId, pitch, velocity, on)
+  }
+  const autoStopNow = (now: number) => shouldAutoStop({
+    now, since: playedAt, position: position(), end: contentEnd(), busy: rec.busy, armed: !!rec.armedTrack, monitoring: rec.monitoring,
+    forever: mainClips().some(isForever), loopers: store.loopers().some((l) => pb?.looperHead(l.id) != null), held, noteAt,
+  }, masterSeen)
   function toggle() {
     if (!pb) return
     if (pb.playing) stop()
     else startTransport()
   }
   function startTransport(from?: number) {
-    if (!pb?.playing) pb?.play(from)
+    if (!pb?.playing) { pb?.play(from); playedAt = performance.now() }
     transport.setPlaying(true)
     tick()
     ensurePreviewTick() // the loopers' playheads
@@ -318,6 +336,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let meterRaf = 0
   let meterAt = 0
   function onMeters(m: Meters) {
+    masterSeen.push({ at: performance.now(), peak: m.master })
+    if (masterSeen.length > 64) masterSeen.shift()
     for (const id of [...lanes.keys(), MASTER_TRACK]) {
       const p = id === MASTER_TRACK ? m.master : m.tracks.get(id)
       meterTo.set(id, p ? [peakToFill(p[0]), peakToFill(p[1])] : [0, 0])
@@ -375,6 +395,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     }
     drawPlayhead()
     const now = performance.now()
+    if (autoStopNow(now)) return stop()
     if (now - lastAware > 100) {
       lastAware = now
       s.setLocal({ playhead: position() })
