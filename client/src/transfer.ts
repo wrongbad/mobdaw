@@ -6,7 +6,7 @@ import { getAudio, listAudio, putAudio } from './local/audio'
 import { createLocal, getLocal, removeLocal, type LocalProject } from './local/projects'
 import { readLocalState, writeLocalState } from './local/session'
 import { readProjectFile, type ProjectContents } from './projectFile'
-import { openSession } from './project/session'
+import { fetchSnapshot, openSession } from './project/session'
 import { uploadToProject } from './samples'
 
 export type Progress = (message: string) => void
@@ -19,14 +19,14 @@ export async function collectLocal(id: string): Promise<ProjectContents> {
   return { name: p.name, state, audio: audio.map((a) => ({ hash: a.hash, mime: a.mime, name: a.name, blob: a.blob })) }
 }
 
-/** Everything in a cloud project: the live document and the audio it uses (downloaded from the project's library). */
-export async function collectCloud(id: string, me: Pick<Me, 'id' | 'username'> | { id: null }, progress?: Progress, open?: Y.Doc): Promise<ProjectContents> {
+/**
+ * Everything in a cloud project: its document and the audio it uses (downloaded from the project's library).
+ * `open`: the document already open in the editor (a visitor's snapshot with their edits); otherwise the project's current one is fetched.
+ */
+export async function collectCloud(id: string, me: { id: number | null }, progress?: Progress, open?: Y.Doc): Promise<ProjectContents> {
   const detail = await api.project(id)
-  // `open`: the document already open in the editor (a visitor's copy, with their edits); otherwise the live one is fetched.
-  const session = open ? null : openSession(id, me as Pick<Me, 'id' | 'username'>)
+  const source = open ?? (await fetchSnapshot(id))
   try {
-    await session?.synced
-    const source = open ?? session!.doc
     const metas = Object.values(samplesMap(source).toJSON())
     const audio: ProjectContents['audio'] = []
     // The copy owns its audio: our own incoming takes come from this device and are ready there (docs/engine.md §9.3).
@@ -52,7 +52,7 @@ export async function collectCloud(id: string, me: Pick<Me, 'id' | 'username'> |
     }
     return { name: detail.name, state: Y.encodeStateAsUpdate(copy), audio }
   } finally {
-    session?.destroy()
+    if (!open) source.destroy()
   }
 }
 

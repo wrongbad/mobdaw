@@ -1,25 +1,27 @@
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import { docName, undoScope, userColor, type AwarenessState } from '@mobdaw/shared'
-import type { Awareness } from 'y-protocols/awareness'
 import * as Y from 'yjs'
-import { getToken } from '../api'
+import { Awareness } from 'y-protocols/awareness'
+import { api, getToken } from '../api'
 
-/** What the editor needs from a project, whether it is synced with the cloud or lives on this device. */
+/** What the editor needs from a project, whether it is synced with the cloud, a snapshot of one, or lives on this device. */
 export type Session = {
   projectId: string
   doc: Y.Doc
-  /** The collaboration connection; null for a project on this device (nothing to sync, no one to collaborate with). */
+  /** The collaboration connection; null when nothing is synced (a project on this device, or a snapshot). */
   provider: HocuspocusProvider | null
+  /** A project on this device: saved to IndexedDB. */
   local: boolean
   /**
-   * A signed-out visitor to a public project: the server drops their writes, but they may edit their own copy of the document
-   * in the page (nothing is saved or shared unless they save a copy to this device). No uploads, no recording.
+   * A snapshot of a cloud project that this user cannot edit live (a viewer, a public visitor, a frozen project or a
+   * read-only account). Edits stay on this page, nothing is sent and no updates arrive; the visitor can save a copy to
+   * this device. No uploads or recording.
    */
-  scratch: boolean
+  snapshot: boolean
   awareness: Awareness
   undo: Y.UndoManager
   user: AwarenessState['user']
-  /** The signed-in account's id; null in a project on this device. */
+  /** The signed-in account's id; null for a signed-out visitor and in a project on this device. */
   userId: number | null
   /** Resolves once the document is loaded (from the server, or from this device). */
   synced: Promise<void>
@@ -28,12 +30,8 @@ export type Session = {
   destroy(): void
 }
 
-/** Y.Doc + provider + awareness + undo for one project. Call destroy() on route leave. */
-/**
- * `watching`: not a collaborator (a signed-out visitor, or anyone who got in through a public link). They only read:
- * nothing of theirs is published, presence included, and the server drops it anyway.
- */
-export function openSession(projectId: string, me: { id: number | null; username: string }, watching = me.id === null): Session {
+/** Y.Doc + provider + awareness + undo for a project the user edits live. Call destroy() on route leave. */
+export function openSession(projectId: string, me: { id: number; username: string }): Session {
   const doc = new Y.Doc()
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const provider = new HocuspocusProvider({
@@ -44,16 +42,13 @@ export function openSession(projectId: string, me: { id: number | null; username
   })
   const awareness = provider.awareness!
   const user: AwarenessState['user'] = { username: me.username, color: userColor(me.username) }
-  // Presence is a write too.
-  if (watching) awareness.setLocalState(null)
-  else awareness.setLocalStateField('user', user)
+  awareness.setLocalStateField('user', user)
   // Local edits have origin null (tracked by default); remote updates carry the provider as origin.
   const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
   const synced = new Promise<void>((resolve) => (provider.synced ? resolve() : provider.on('synced', () => resolve())))
   return {
-    projectId, doc, provider, local: false, scratch: watching && me.id === null, awareness, undo, user, userId: me.id, synced,
+    projectId, doc, provider, local: false, snapshot: false, awareness, undo, user, userId: me.id, synced,
     setLocal: (patch) => {
-      if (watching) return
       for (const [k, v] of Object.entries(patch)) awareness.setLocalStateField(k, v)
     },
     remoteStates: () =>
@@ -61,6 +56,33 @@ export function openSession(projectId: string, me: { id: number | null; username
     destroy() {
       undo.destroy()
       provider.destroy()
+      doc.destroy()
+    },
+  }
+}
+
+/** The document of a cloud project as it is now, without a connection (`me` is null for a signed-out visitor). */
+export async function fetchSnapshot(projectId: string): Promise<Y.Doc> {
+  const doc = new Y.Doc()
+  Y.applyUpdate(doc, await api.projectSnapshot(projectId), 'snapshot') // (an origin the undo manager does not track)
+  return doc
+}
+
+/** A cloud project the user cannot edit live: its document as of now, edited only in this page. Call destroy() on route leave. */
+export function openSnapshotSession(projectId: string, me: { id: number; username: string } | null): Session {
+  const doc = new Y.Doc()
+  const awareness = new Awareness(doc)
+  awareness.setLocalState(null) // no presence: no one is told about us
+  const user: AwarenessState['user'] = { username: me?.username ?? 'guest', color: userColor(me?.username ?? 'guest') }
+  const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
+  const synced = api.projectSnapshot(projectId).then((state) => Y.applyUpdate(doc, state, 'snapshot'))
+  return {
+    projectId, doc, provider: null, local: false, snapshot: true, awareness, undo, user, userId: me?.id ?? null, synced,
+    setLocal: () => {},
+    remoteStates: () => [],
+    destroy() {
+      undo.destroy()
+      awareness.destroy()
       doc.destroy()
     },
   }

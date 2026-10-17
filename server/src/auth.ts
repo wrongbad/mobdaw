@@ -87,8 +87,8 @@ export function projectRole(ctx: Ctx, projectId: string, userId: number | null):
 }
 export const isPublic = (ctx: Ctx, projectId: string) => !!ctx.db.prepare('SELECT 1 FROM projects WHERE id = ? AND is_public = 1').get(projectId)
 
-/** Anonymous visitors may only read a public project: its details, preview and sample list / download links. */
-const PUBLIC_READ = /\/projects\/([^/]+)(?:\/preview|\/samples|\/samples\/[^/]+\/url)?$/
+/** Anonymous visitors may only read a public project: its details, preview, snapshot and sample list / download links. */
+const PUBLIC_READ = /\/projects\/([^/]+)(?:\/preview|\/snapshot|\/samples|\/samples\/[^/]+\/url)?$/
 /** The list of demo projects is public too. */
 const DEMO_LIST = /\/projects\/demos$/
 /** Like `requireSignedIn`, but lets a signed-out GET through when it only reads a public project (handlers then see `session` null). */

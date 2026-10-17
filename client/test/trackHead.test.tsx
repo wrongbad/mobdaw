@@ -13,7 +13,7 @@ import { mountBar } from '../src/ui/bar'
 const cleanup: (() => void)[] = []
 afterEach(() => cleanup.splice(0).forEach((f) => f()))
 
-function setup(readOnly = false) {
+function setup() {
   const doc = new Y.Doc()
   const awareness = new Awareness(doc)
   let peers: AwarenessState[] = []
@@ -26,7 +26,7 @@ function setup(readOnly = false) {
   } as unknown as HeadCtx['rec']
   const drawers = createDrawers(), avail = createTabAvailability(), drive = createMixDrive()
   const ctx: HeadCtx = {
-    doc, undo: new Y.UndoManager([tracksMap(doc)]), readOnly, store, rec, drawers, avail, drive,
+    doc, undo: new Y.UndoManager([tracksMap(doc)]), store, rec, drawers, avail, drive,
     toggleTab: (id, tab) => void drawers.toggle(id, tab), autoMenu: () => {},
   }
   cleanup.push(() => store.dispose())
@@ -75,15 +75,6 @@ describe('track header', () => {
     expect(host.querySelector('.record')!.classList.contains('on')).toBe(true)
     t.setArmed(null)
     expect(meter.hidden).toBe(true)
-  })
-
-  it('read-only disables the buttons and the fader', () => {
-    const t = setup(true)
-    const id = addTrack(t.doc, 'a')
-    const { host } = head(t, id)
-    expect(host.querySelector<HTMLButtonElement>('.mute')!.disabled).toBe(true)
-    expect(host.querySelector<HTMLInputElement>('.gain')!.disabled).toBe(true)
-    expect(host.querySelector('.knob')!.classList.contains('disabled')).toBe(true)
   })
 
   it('midi tracks have no record button and their own tabs; tabs follow the drawers and availability', () => {
@@ -180,7 +171,7 @@ describe('remote playheads and the bar', () => {
     const transport = document.createElement('div')
     const [status] = createSignal({ text: '', bad: false })
     cleanup.push(mountBar(host, {
-      store: t.store, readOnly: false, local: false, user: { username: 'me', color: 'blue' }, transport, status, cpu: () => null, loopText: () => null,
+      store: t.store, live: true, snapshot: false, user: { username: 'me', color: 'blue' }, transport, status, cpu: () => null, loopText: () => null,
       unread: () => 2, chatOpen: () => false, onStatus() {}, onClickTrack() {}, onZoom() {}, onExport() {}, onChat() {},
     }))
     const me = host.querySelector('.dot')!
@@ -191,5 +182,30 @@ describe('remote playheads and the bar', () => {
     expect(host.querySelector('.chat-btn')!.textContent).toBe('chat (2)')
     expect(host.querySelector('.pedal-st')!.hasAttribute('hidden')).toBe(true)
     expect(transport.querySelector('.metro')).not.toBeNull()
+  })
+
+  it('without collaborators there is no presence, no chat, and a snapshot says its changes stay on the page', () => {
+    const t = setup()
+    const bar = (snapshot: boolean) => {
+      const host = document.createElement('header')
+      const [status] = createSignal({ text: '', bad: false })
+      const [edited, setEdited] = createSignal(false)
+      cleanup.push(mountBar(host, {
+        store: t.store, live: false, snapshot, user: { username: 'me', color: 'blue' }, transport: document.createElement('div'), status, cpu: () => null, loopText: () => null,
+        unread: () => 0, chatOpen: () => false, onStatus() {}, onClickTrack() {}, onZoom() {}, onExport() {}, onChat() {},
+        saveCopy: snapshot ? { shown: edited, onSave() {} } : undefined,
+      }))
+      return { host, setEdited }
+    }
+    const local = bar(false)
+    expect(local.host.querySelector('.dot')).toBeNull()
+    expect(local.host.querySelector('.chat-btn')).toBeNull()
+    expect(local.host.textContent).not.toContain('stay on this page')
+    const snap = bar(true)
+    expect(snap.host.querySelector('.dot')).toBeNull()
+    expect(snap.host.textContent).toContain('changes stay on this page')
+    expect(snap.host.textContent).not.toContain('save a copy')
+    snap.setEdited(true)
+    expect(snap.host.textContent).toContain('save a copy')
   })
 })

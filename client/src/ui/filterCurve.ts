@@ -28,7 +28,7 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string,
   return el
 }
 
-/** Params that automation drives (or a read-only viewer): the curve can't move them. */
+/** Params that automation drives: the curve can't move them. */
 export type FilterLocks = { cutoff: boolean; damping: boolean; gain: boolean }
 export type FilterChange = { cutoff?: number; damping?: number; gain?: number }
 /** A filter of the run as the curve sees it; a bypassed one is drawn dim and adds nothing to the response. */

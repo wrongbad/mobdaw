@@ -13,7 +13,7 @@ import { transportControls } from '../src/ui/transport'
 const cleanup: (() => void)[] = []
 afterEach(() => cleanup.splice(0).forEach((f) => f()))
 
-function setup(readOnly = false) {
+function setup() {
   const doc = new Y.Doc()
   const awareness = new Awareness(doc)
   let peers: AwarenessState[] = []
@@ -23,7 +23,7 @@ function setup(readOnly = false) {
   const [scale] = createSignal({ pps: 100, rate: 48000 })
   const calls: string[] = []
   const ctx: DrawCtx = {
-    doc, undo: new Y.UndoManager([tracksMap(doc)]), readOnly, store, rec: {} as DrawCtx['rec'], drawers, avail: createTabAvailability(), drive: createMixDrive(),
+    doc, undo: new Y.UndoManager([tracksMap(doc)]), store, rec: {} as DrawCtx['rec'], drawers, avail: createTabAvailability(), drive: createMixDrive(),
     toggleTab: (id, tab) => void drawers.toggle(id, tab), autoMenu: () => {},
     auto, reordering, armed: () => null, width: () => 1000, scale,
     deps: {
@@ -31,7 +31,7 @@ function setup(readOnly = false) {
       reorderStart: () => setReordering(true), reorderDrop: () => {}, reorderEnd: () => setReordering(false),
     },
     loops: {} as DrawCtx['loops'],
-    rows: { doc, readOnly, grab() {}, x: (s) => s / 480, fromX: (px) => px * 480, rate: 48000 },
+    rows: { doc, grab() {}, x: (s) => s / 480, fromX: (px) => px * 480, rate: 48000 },
   }
   cleanup.push(() => store.dispose())
   return { doc, awareness, store, ctx, auto, calls, setReordering, setPeers: (p: AwarenessState[]) => ((peers = p), awareness.emit('change', [{ added: [], updated: [], removed: [] }, 'test'])) }
@@ -166,15 +166,15 @@ describe('device cards', () => {
     expect(host.querySelector('.node')).toBe(node) // (the circle is replaced on every curve.draw)
   })
 
-  it('read-only disables the controls; the master bus has its own row', () => {
-    const t = setup(true)
+  it('the master bus has its own row', () => {
+    const t = setup()
     addDevice(t.doc, MASTER_TRACK, REVERB)
     const host = document.createElement('div')
     cleanup.push(mountMasterDrawers(host, t.ctx).dispose)
     t.ctx.drawers.open(MASTER_TRACK, 'fx')
     expect(host.querySelector('.fx-toggle')!.textContent).toBe('master fx (1)')
-    expect(host.querySelector('.dev .knob')!.classList.contains('disabled')).toBe(true)
-    expect(host.querySelector<HTMLButtonElement>('.add-fx')!.disabled).toBe(true)
+    expect(host.querySelector('.dev .knob')!.classList.contains('disabled')).toBe(false)
+    expect(host.querySelector<HTMLButtonElement>('.add-fx')!.disabled).toBe(false)
   })
 })
 

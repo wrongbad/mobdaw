@@ -16,7 +16,7 @@ export type ProjectMenuOpts = {
   /** Absent for projects on this device. */
   cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean; onPublic(v: boolean): void; onDemo(v: boolean): void }
   /** The project's sample rate; `locked` says why it can't change (it is only possible while the project has no tracks). */
-  sampleRate: { value: number; locked: 'tracks' | 'readonly' | null; set(rate: number): void }
+  sampleRate: { value: number; locked: 'tracks' | null; set(rate: number): void }
   /** The microphone choice changed: re-open the input if it is in use. */
   onInputChanged(): void
   /** Absent when the commands can't be used (viewers). The MIDI input or a binding changed. */
@@ -78,7 +78,7 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
     } }, 'collaborators…')
     sharing = section('sharing',
       h('p', { className: 'dim who' }, who),
-      h('label', { className: 'check', title: 'anyone signed in who has the link can open it, read-only' }, pub, h('span', {}, 'public: anyone with the link can view')),
+      h('label', { className: 'check', title: 'anyone with the link can open a snapshot of it, which they can change only in their own page' }, pub, h('span', {}, 'public: anyone with the link can view')),
       demoRow,
       h('div', { className: 'row' }, link, toggle), people)
   }
@@ -135,7 +135,7 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   const sr = o.sampleRate
   const rate = h('select', { disabled: !!sr.locked, title: sr.locked === 'tracks'
     ? 'the sample rate can only be changed in an empty project (one without any tracks or automation)'
-    : sr.locked === 'readonly' ? 'you cannot change this project' : 'the project is recorded, played and exported at this rate; it cannot be changed once there are tracks' },
+    : 'the project is recorded, played and exported at this rate; it cannot be changed once there are tracks' },
   ...SAMPLE_RATES.map((r) => h('option', { value: String(r) }, `${+(r / 1000).toFixed(1)} kHz`)))
   rate.value = String(sr.value)
   rate.onchange = () => sr.set(Number(rate.value))

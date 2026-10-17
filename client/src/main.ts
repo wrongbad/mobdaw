@@ -68,7 +68,7 @@ route(/^\/uploads$/, guarded((me) => uploadsPage(me)))
 route(/^\/account$/, guarded((me) => accountPage(me)))
 route(/^\/local\/([^/]+)$/, ([id]) => localProjectPage(id))
 route(/^\/admin$/, guarded((me) => adminPage(me), { admin: true }))
-// (signed-out visitors may open a public project, read-only; projectPage sends them to login if it isn't one)
+// (signed-out visitors may open a snapshot of a public project; projectPage sends them to login if it isn't one)
 route(/^\/project\/([^/]+)$/, ([id]) => optional((me) => projectPage(me, id))())
 route(/^\/engine-test$/, guarded((me) => engineTestPage(me))) // dev tool, linked from nowhere
 start('/')

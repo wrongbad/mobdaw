@@ -1,7 +1,7 @@
 import { Database } from '@hocuspocus/extension-database'
 import { Server } from '@hocuspocus/server'
 import { docName, samplesMap } from '@mobdaw/shared'
-import { isPublic, memberRole, projectRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
+import { memberRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
 import type { Link } from './uploads.ts'
 
 export type Collab = ReturnType<typeof createCollab>
@@ -20,13 +20,13 @@ export function kickUser(collab: Collab, userId: number) {
 }
 
 /**
- * Drop connections that can still write although their user or project is now read-only (a plan change made
- * outside this process, e.g. by the admin CLI). The client reconnects and gets a read-only connection.
+ * Drop connections whose user or project is now read-only (a plan change made outside this process, e.g. by the
+ * admin CLI). The client reloads and gets a snapshot instead (see `GET /projects/:id/snapshot`).
  */
 export function enforceReadOnly(ctx: Ctx, collab: Collab) {
   for (const [name, doc] of collab.hocuspocus.documents)
     for (const c of doc.getConnections())
-      if (!c.readOnly && writeBlock(ctx, name.slice('project:'.length), c.context.userId)) c.close({ code: 1000, reason: KICK_REASON })
+      if (writeBlock(ctx, name.slice('project:'.length), c.context.userId)) c.close({ code: 1000, reason: KICK_REASON })
 }
 
 /**
@@ -90,24 +90,16 @@ export function createCollab(ctx: Ctx) {
         },
       }),
     ],
-    // Presence is a write too: whoever is not a collaborator (a signed-out visitor, or anyone who got in through a
-    // public link) only watches, and is never shown to others.
-    async beforeHandleAwareness({ context, states }) {
-      if (context?.watching) states.clear()
-    },
-    async onAuthenticate({ token, documentName, connectionConfig }) {
+    // Only collaborators who can write take part live (edits, presence, chat). Everyone else with access (viewers,
+    // public visitors, frozen projects and read-only accounts) gets a snapshot over HTTP and edits their own copy.
+    async onAuthenticate({ token, documentName }) {
       const user = sessionUser(ctx, token)
+      if (!user) throw new Error('not_signed_in')
       const projectId = documentName.startsWith('project:') ? documentName.slice(8) : null
-      if (!user) {
-        // Signed out: only a public project, read-only.
-        if (!projectId || !isPublic(ctx, projectId)) throw new Error('not_signed_in')
-        connectionConfig.readOnly = true
-        return { userId: null, username: 'guest', role: 'viewer' as const, watching: true }
-      }
-      const role = projectId && projectRole(ctx, projectId, user.id)
-      if (!role) throw new Error('forbidden')
-      connectionConfig.readOnly = role === 'viewer' || !!writeBlock(ctx, projectId!, user.id)
-      return { userId: user.id, username: user.username, role, watching: !memberRole(ctx, projectId!, user.id) }
+      const role = projectId && memberRole(ctx, projectId, user.id)
+      if (role !== 'owner' && role !== 'editor') throw new Error('forbidden')
+      if (writeBlock(ctx, projectId!, user.id)) throw new Error('forbidden')
+      return { userId: user.id, username: user.username, role }
     },
   })
 }

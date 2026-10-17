@@ -36,7 +36,6 @@ export type Geo = {
 export type GestureCtx = {
   doc: Y.Doc
   undo: Y.UndoManager
-  readOnly: boolean
   store: ProjectStore
   sel: Selection
   geo: Geo
@@ -148,7 +147,7 @@ export function clipDown(g: GestureCtx, ev: PointerEvent, id: string) {
     sel.toggleEditing(id)
   }
   g.select([id])
-  if (g.readOnly || lane0?.src || store.locks().has(clip.trackId)) return zoom() // source audio stays anchored: only the loop windows move
+  if (lane0?.src || store.locks().has(clip.trackId)) return zoom() // source audio stays anchored: only the loop windows move
   undo.stopCapturing()
   ev.preventDefault()
   const grab = ev.clientX - box.left // where in the clip it was picked up
@@ -214,7 +213,6 @@ export function padDown(g: GestureCtx, ev: PointerEvent, id: string) {
   const mode = grabAt(ev.clientX, (ev.currentTarget as HTMLElement).getBoundingClientRect())
   sel.selectPad(id)
   g.select([])
-  if (g.readOnly) return
   undo.stopCapturing()
   ev.preventDefault()
   dragPointer(ev, {
@@ -238,7 +236,7 @@ export function loopBoxDown(g: GestureCtx, ev: PointerEvent, id: string, el: HTM
   ev.stopPropagation()
   const found = g.store.looperById[id]
   const l = found && geo.lane(found.trackId)
-  if (!found || !l?.src || g.readOnly || sel.armedLooper) return
+  if (!found || !l?.src || sel.armedLooper) return
   const lp = { ...found }
   ev.preventDefault()
   const mode = grabAt(ev.clientX, el.getBoundingClientRect())

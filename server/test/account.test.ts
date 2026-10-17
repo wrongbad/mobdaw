@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { addTrack, getTracks } from '@mobdaw/shared'
 import { RETENTION_MS, endSubscription, giftMonths, purgeExpiredData, resumeSubscription } from '../src/accounts.ts'
 import { enforceReadOnly } from '../src/collab.ts'
-import { ADMIN, admit, client, connect, login, pw, startTest, until, userId, type Client } from './helpers.ts'
+import { ADMIN, admit, client, connect, denied as deniedAt, login, pw, snapshot, startTest, until, userId, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 let admin: Client
@@ -93,14 +93,11 @@ describe('read-only accounts (subscription ended)', () => {
 
     o.provider.destroy()
     m.provider.destroy()
-    o = connect(t.port, A, owner.token!)
-    m = connect(t.port, A, member.token!)
-    await until(() => o.provider.synced && m.provider.synced)
-    addTrack(m.doc, 'While frozen')
-    await new Promise((res) => setTimeout(res, 400))
-    expect(names(o)).toEqual(['Before']) // still readable, not writable
-    o.provider.destroy()
-    m.provider.destroy()
+    // frozen: no live connection for anyone, but the project can still be read as a snapshot
+    for (const who of [owner, member]) {
+      await deniedAt(t.port, A, who.token!)
+      expect(getTracks((await snapshot(t.base, A, who.token!)).doc).map((x) => x.name)).toEqual(['Before'])
+    }
 
     resumeSubscription(t.ctx, t.collab, uid('olga'))
     o = connect(t.port, A, owner.token!)

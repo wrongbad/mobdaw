@@ -24,13 +24,12 @@ const BLACK = [1, 3, 6, 8, 10]
 export type NoteEditorDeps = {
   doc: Y.Doc
   undo: Y.UndoManager
-  readOnly: boolean
   selectNote(id: string | null): void
   /** Gate a key on the clip's track's instruments (on) or let it go: the sound while a note is drawn or dragged. */
   noteLive?(trackId: string, pitch: number, velocity: number, on: boolean): void
 }
 
-export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEditorDeps) {
+export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) {
   let clip: MidiClip | null = null
   let notes = new Map<string, Note>()
   let centered = false
@@ -42,8 +41,8 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   const els = new Map<string, HTMLElement>()
   const bars = new Map<string, HTMLElement>()
 
-  const bpm = h('input', { type: 'number', min: 20, max: 400, step: 1, title: 'clip bpm', disabled: readOnly })
-  const barsIn = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in bars (4/4)', disabled: readOnly })
+  const bpm = h('input', { type: 'number', min: 20, max: 400, step: 1, title: 'clip bpm' })
+  const barsIn = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in bars (4/4)' })
   bpm.onchange = () => clip && Number(bpm.value) > 0 && updateClip(doc, clip.id, { bpm: Number(bpm.value) })
   barsIn.onchange = () => {
     if (!clip || !(Number(barsIn.value) >= 1)) return
@@ -54,7 +53,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     else updateClip(doc, clip.id, { lengthTicks: ticks, loopTicks: 0 }) // the pattern fills the clip: no repeats left
   }
   const view = segmented([{ value: 'piano', label: 'piano roll' }, { value: 'drums', label: 'drums' }], 'piano',
-    (v) => (readOnly ? view.set(v === 'drums' ? 'piano' : 'drums') : clip && setMidiView(doc, clip.id, v === 'drums' ? 'drums' : 'piano')), 'show this clip as a piano roll or a drum grid')
+    (v) => clip && setMidiView(doc, clip.id, v === 'drums' ? 'drums' : 'piano'), 'show this clip as a piano roll or a drum grid')
   const gridPick = segmented(GRIDS.map(([g, label]) => ({ value: String(g), label })), String(gridSel),
     (v) => { gridSel = v === 'bar' ? 'bar' : Number(v); layoutLines() }, 'grid and snap (hold alt or ctrl while dragging to place freely)')
   const field = (label: string, ...kids: (Node | string)[]) => h('label', { className: 'ne-field' }, h('span', { className: 'ne-lbl' }, label), ...kids)
@@ -108,7 +107,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     e.classList.toggle('named', ok)
   }
   const loopEnd = h('div', { className: 'ne-loop', hidden: true }) // the pattern's end: the notes past it are ignored
-  const grip = h('i', { className: 'ne-grip', title: readOnly ? '' : 'drag to change the loop length' }) // ...and its handle
+  const grip = h('i', { className: 'ne-grip', title: 'drag to change the loop length' }) // ...and its handle
   loopEnd.append(grip)
   const marq = h('div', { className: 'ne-marq', hidden: true })
   grid.append(loopEnd, marq)
@@ -165,11 +164,6 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   grid.onpointerdown = (e) => {
     e.stopPropagation() // the clip underneath would otherwise start dragging
     if (e.button !== 0 || !clip || !e.isPrimary) return
-    if (readOnly) { // read-only: selecting is still fine
-      const id = (e.target as HTMLElement).closest<HTMLElement>('.note')?.dataset.id
-      setSel(id ? [id] : [])
-      return
-    }
     // a finger long-presses to add or drag a note (until then it scrolls); a tap on a note just selects it
     const token = { id: e.pointerId, dead: false, cancel() { this.dead = true; if (active === token) active = null } }
     active = token // (covers the finger's long-press wait)
@@ -321,7 +315,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   // --- the velocity lane
   vel.onpointerdown = (e) => {
     e.stopPropagation()
-    if (readOnly || e.button !== 0 || !clip) return
+    if (e.button !== 0 || !clip) return
     const r = vel.getBoundingClientRect()
     // the bar nearest the pointer, within a few px (a later note on top of an earlier one wins)
     let hit: Note | undefined
@@ -348,7 +342,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
 
   grip.onpointerdown = (e) => {
     e.stopPropagation() // not the grid's add-a-note, nor the clip underneath
-    if (readOnly || e.button !== 0 || !clip) return
+    if (e.button !== 0 || !clip) return
     const c = clip
     const loop0 = patternTicks(c)
     e.preventDefault()
@@ -365,7 +359,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
 
   // --- keys, only while this editor is open: q quantize, arrows transpose / nudge, cmd-a select all, cmd-d duplicate, delete
   const key = (e: KeyboardEvent) => {
-    if (!clip || !el.isConnected || readOnly) return
+    if (!clip || !el.isConnected) return
     const t = e.target as HTMLElement
     if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return
     const mod = e.metaKey || e.ctrlKey
@@ -428,7 +422,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
       let e = els.get(n.id)
       if (!e) {
         e = h('div', { className: 'note', 'data-id': n.id })
-        deleteMenu(e, 'delete note', () => removeNotes(doc, undo, sel.has(n.id) ? [...sel] : [n.id]), () => !readOnly)
+        deleteMenu(e, 'delete note', () => removeNotes(doc, undo, sel.has(n.id) ? [...sel] : [n.id]))
         els.set(n.id, e)
         grid.append(e)
         const b = h('i', { className: 'ne-bar' })

@@ -105,6 +105,22 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
     return c.json<ProjectPreview>(projectPreview(doc))
   })
 
+  // The whole document as one Yjs update, from the live document if it is open, else the stored one. This is all that
+  // anyone who cannot edit live (viewers, public visitors) gets: no websocket, no updates after it.
+  r.get('/:id/snapshot', (c) => {
+    const denied = gate(c)
+    if (denied) return denied
+    const name = docName(c.req.param('id'))
+    const live = collab.hocuspocus.documents.get(name)
+    let state: Uint8Array
+    if (live) state = Y.encodeStateAsUpdate(live)
+    else {
+      const row = db.prepare('SELECT data FROM documents WHERE name = ?').get(name) as { data: Uint8Array } | undefined
+      state = row ? new Uint8Array(row.data) : Y.encodeStateAsUpdate(new Y.Doc())
+    }
+    return c.body(state as Uint8Array<ArrayBuffer>, 200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' })
+  })
+
   r.patch('/:id', async (c) => {
     const denied = gate(c, true, true)
     if (denied) return denied
@@ -161,7 +177,7 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
     db.prepare(
       'INSERT INTO project_members(project_id, user_id, role) VALUES(?,?,?) ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role',
     ).run(id, target.id, newRole)
-    if (current !== newRole) kick(collab, id, target.id) // reconnects with the new role (or as a collaborator, if they were only watching)
+    if (current !== newRole) kick(collab, id, target.id) // reconnects with the new role (or as a collaborator, if they were only looking at a snapshot)
     return c.json(detail(id, c.var.session!.id))
   })
 

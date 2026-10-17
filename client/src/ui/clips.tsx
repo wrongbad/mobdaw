@@ -87,7 +87,7 @@ export function midiPreview(e: HTMLElement, c: Pick<MidiClip, 'view'>, notes: Pi
 /** One clip. `src`: set for the clips of a soundscape's source lane, which draws them in its own scale. */
 function ClipEl(p: { ctx: ClipsCtx; clip: Clip; src: SrcView | null }) {
   const { ctx } = p
-  const { store, sel, readOnly, geo } = ctx
+  const { store, sel, geo } = ctx
   const c = p.clip
   const rate = () => ctx.scale().rate
   const cpps = () => (p.src ? p.src.pps() : ctx.scale().pps)
@@ -148,7 +148,7 @@ function ClipEl(p: { ctx: ClipsCtx; clip: Clip; src: SrcView | null }) {
   return (
     <div class="clip" ref={el}
       classList={{
-        forever: forever(), looping: isLooping(c), loopable: !readOnly && !p.src && !store.locks().has(c.trackId), midi: !audio,
+        forever: forever(), looping: isLooping(c), loopable: !p.src && !store.locks().has(c.trackId), midi: !audio,
         editing: open(), sel: sel.clips.includes(c.id), unplayable: !canPlay(), incoming: status() === 'incoming', missing: status() === 'missing',
       }}
       style={{ left: `${(c.start / rate()) * cpps()}px`, width: `${width()}px`, outline: ctx.store.outlines().has(c.id) ? `2px solid ${ctx.store.outlines().get(c.id)}` : '' }}
@@ -156,14 +156,14 @@ function ClipEl(p: { ctx: ClipsCtx; clip: Clip; src: SrcView | null }) {
       on:pointermove={(ev) => { // which handle is under the pointer drives the cursor and the edge highlight (CSS, by data-zone)
         if (ev.buttons) return
         const cur = store.clipById[c.id]
-        const zone = cur && !readOnly && !geo.lane(cur.trackId)?.src && !store.locks().has(cur.trackId) ? clipZone(ctx, ev, el, cur) : 'move'
+        const zone = cur && !geo.lane(cur.trackId)?.src && !store.locks().has(cur.trackId) ? clipZone(ctx, ev, el, cur) : 'move'
         if (el.dataset.zone !== zone) el.dataset.zone = zone
       }}
       on:contextmenu={(ev) => {
         ev.preventDefault()
         ev.stopPropagation() // not the lane's background menu underneath
         const trackId = store.clipById[c.id]?.trackId
-        if (!readOnly && trackId != null && !store.locks().has(trackId)) popover(el, ctx.menu(c.id), [ev.clientX, ev.clientY])
+        if (trackId != null && !store.locks().has(trackId)) popover(el, ctx.menu(c.id), [ev.clientX, ev.clientY])
       }}>
       {w ? <>{w.cv}{w.seams}{w.first}{w.label}</> : null}
     </div>
@@ -184,7 +184,7 @@ function PadEl(p: { ctx: ClipsCtx; id: string }) {
     <div class="clip region" classList={{ sel: ctx.sel.pad === p.id }}
       style={{ left: `${x(pad()?.start ?? 0)}px`, width: `${Math.max(2, x(pad()?.length ?? 0))}px` }}
       on:pointerdown={(ev) => padDown(ctx, ev, p.id)}
-      ref={(e) => deleteMenu(e, 'delete region', () => { deletePad(ctx.doc, p.id); ctx.sel.forgetPad(p.id) }, () => !ctx.readOnly)}>loopers on</div>
+      ref={(e) => deleteMenu(e, 'delete region', () => { deletePad(ctx.doc, p.id); ctx.sel.forgetPad(p.id) })}>loopers on</div>
   )
 }
 

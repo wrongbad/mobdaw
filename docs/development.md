@@ -54,8 +54,8 @@ Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Ru
   list of projects is in `localStorage`. A `.mobdaw` file (`client/src/projectFile.ts`) holds a project with its audio and is
   how projects are exported, imported and moved between "on this device" and the cloud (`client/src/transfer.ts`). Local
   project ids start with `local-`; `samples.ts` reads and writes audio on the device for those and in the cloud otherwise.
-- Roles: owner, editor, viewer. Viewers can open, play and download but their WebSocket is
-  read-only and they can't upload. Anyone can "save a copy" into a new project they own; only
+- Roles: owner, editor, viewer. Viewers (and anyone without edit rights) get a snapshot over HTTP instead of a
+  live connection: they can open, play, download and edit their own copy in the page, but can't upload and nothing is shared. Anyone can "save a copy" into a new project they own; only
   the owner renames, deletes, or manages members. Editors and viewers can leave.
 - Access changes take effect immediately: removing, downgrading or a leave closes that user's
   open connections to the project (the client then re-checks access). Deleting a project closes

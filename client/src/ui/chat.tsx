@@ -13,19 +13,18 @@ const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: 'numer
 export type ChatDeps = {
   doc: Y.Doc
   user: AwarenessState['user']
-  readOnly: boolean
   /** Messages that arrived while the panel was closed. */
   onUnread(n: number): void
 }
 
-export function chatPanel({ doc, user, readOnly, onUnread }: ChatDeps) {
+export function chatPanel({ doc, user, onUnread }: ChatDeps) {
   const log = chatLog(doc)
   let open = false
   let seen = 0
 
   const list = h('div', { className: 'chat-log' })
-  const input = h('input', { type: 'text', placeholder: readOnly ? 'view only' : 'message', maxLength: 2000, disabled: readOnly })
-  const send = h('button', { title: 'send', disabled: readOnly }, '↑')
+  const input = h('input', { type: 'text', placeholder: 'message', maxLength: 2000 })
+  const send = h('button', { title: 'send' }, '↑')
   const submit = () => {
     if (addChatMessage(doc, user, input.value)) input.value = ''
     list.scrollTop = list.scrollHeight
@@ -51,7 +50,7 @@ export function chatPanel({ doc, user, readOnly, onUnread }: ChatDeps) {
         <div
           class={`msg ${side}`}
           style={me ? undefined : { 'box-shadow': `inset 2px 0 0 ${m.color}` }}
-          oncontextmenu={me && !readOnly ? (e) => { // own messages only: the server can't tell who wrote what
+          oncontextmenu={me ? (e) => { // own messages only: the server can't tell who wrote what
             e.preventDefault()
             popover(e.currentTarget, [['delete message', () => deleteChatMessage(doc, m.id)]], [e.clientX, e.clientY])
           } : undefined}
@@ -78,7 +77,7 @@ export function chatPanel({ doc, user, readOnly, onUnread }: ChatDeps) {
       open = o
       el.hidden = !o
       sync()
-      if (o) { list.scrollTop = list.scrollHeight; if (!readOnly) input.focus() }
+      if (o) { list.scrollTop = list.scrollHeight; input.focus() }
     },
     /** Treat everything already in the log as read (history loaded on sync). */
     markSeen() { seen = log.length; onUnread(0) },

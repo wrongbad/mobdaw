@@ -10,7 +10,6 @@ import { valueTip } from './valueTip'
 export const LOOP_COLORS = ['#ff6b6b', '#ffd166', '#06d6a0', '#4cc9f0']
 
 export type LooperDeps = {
-  readOnly: boolean
   /** A slider drag begins (so it undoes as one step). */
   grab(): void
   /** Write the speed to the doc as the slider moves: the engine applies it live, smoothed. */
@@ -47,13 +46,12 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   const draw = h('button', { title: 'draw the loop region on the track', onclick: () => deps.toggleArm(id) }, 'draw')
   const clear = h('button', { title: 'clear region', onclick: () => deps.clear(id) }, 'clear')
   const power = onOffSwitch('mute', () => deps.setMuted(id, !muted))
-  draw.disabled = clear.disabled = power.disabled = deps.readOnly
   let muted = false
-  const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, disabled: deps.readOnly, title: 'volume' })
+  const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, title: 'volume' })
   valueTip(vol, () => fmtDb(Number(vol.value)))
   vol.onpointerdown = () => deps.grab()
   vol.oninput = () => deps.setGain(id, Number(vol.value))
-  const speed = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly, title: 'speed' })
+  const speed = h('input', { type: 'range', min: 0, max: 1, step: 'any', title: 'speed' })
   const out = h('span', { className: 'dim out' })
   valueTip(speed, out)
   speed.onpointerdown = () => deps.grab()
@@ -63,7 +61,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
     deps.commit(id, v)
   }
   const tapeSlider = (title: string) => {
-    const el = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly, title })
+    const el = h('input', { type: 'range', min: 0, max: 1, step: 'any', title })
     el.onpointerdown = () => deps.grab()
     return el
   }
@@ -107,7 +105,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
     h('label', { className: 'prm' }, name('cutoff', 'filter'), filter),
     h('label', { className: 'prm' }, name('warble', 'warble'), warble),
     h('div', { className: 'prm' }, h('span', { className: 'dim' }, 'region'), h('div', { className: 'btns' }, draw, clear)))
-  cardMenu(el, head, title, 'delete looper', () => deps.remove(id), () => !deps.readOnly)
+  cardMenu(el, head, title, 'delete looper', () => deps.remove(id))
 
   /** `auto`: the params a lane drives, keyed by `Looper` field; those show the lane's value and can't be dragged. */
   function update(l: Looper, armed: boolean, rate: number, auto: ReadonlyMap<string, AutoInfo> = new Map()) {
@@ -117,7 +115,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
       const driven = !!a?.on && a.value != null
       names[key].classList.toggle('auto', !!a)
       names[key].classList.toggle('driven', driven)
-      input.disabled = deps.readOnly || driven
+      input.disabled = driven
       return { v: driven ? a!.value! : stat, show: driven || !inUse(input) }
     }
     const sp = val('speed', speed, l.speed)

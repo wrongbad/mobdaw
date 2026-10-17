@@ -44,7 +44,7 @@ export type AutoMenu = {
 }
 
 /** Left or right click on a param's name (only right-click with `clickToo` off, for controls a click drives) offers Automate (or, once it has a lane, show / disable / delete it). */
-export function automateMenu(label: HTMLElement, m: AutoMenu, readOnly: boolean, clickToo = true) {
+export function automateMenu(label: HTMLElement, m: AutoMenu, clickToo = true) {
   if (clickToo) {
     label.classList.add('automatable')
     label.title = 'click to automate'
@@ -54,9 +54,9 @@ export function automateMenu(label: HTMLElement, m: AutoMenu, readOnly: boolean,
     e.stopPropagation() // not the card's own menu, nor the <label> focusing its control
     const s = m.state()
     const items: [string, () => void][] =
-      s === 'none' ? (readOnly ? [] : [['automate', m.automate], ['modulate with lfo', m.lfo]])
-        : [['show automation', m.show], ...(readOnly ? [] : [[s === 'on' ? 'disable automation' : 'enable automation', m.toggle], ['delete automation', m.remove]] as [string, () => void][])]
-    if (items.length) popover(label, items, [e.clientX, e.clientY])
+      s === 'none' ? [['automate', m.automate], ['modulate with lfo', m.lfo]]
+        : [['show automation', m.show], [s === 'on' ? 'disable automation' : 'enable automation', m.toggle], ['delete automation', m.remove]]
+    popover(label, items, [e.clientX, e.clientY])
   }
   if (clickToo) label.addEventListener('click', open)
   label.addEventListener('contextmenu', open)
@@ -65,7 +65,6 @@ export function automateMenu(label: HTMLElement, m: AutoMenu, readOnly: boolean,
 // --- one lane
 export type RowDeps = {
   doc: Y.Doc
-  readOnly: boolean
   /** A drag begins or ends (so it undoes as one step). */
   grab(): void
   /** Timeline sample <-> surface pixel, at the current zoom. */
@@ -88,7 +87,7 @@ export type RowView = {
 const yOf = (v: number, h = AUTO_H) => PAD + (1 - v) * (h - 2 * PAD)
 
 export function autoRow(deps: RowDeps) {
-  const { doc, readOnly } = deps
+  const { doc } = deps
   let lane!: Lane
   let pts: Point[] = []
   let view!: RowView
@@ -99,13 +98,12 @@ export function autoRow(deps: RowDeps) {
   const mode = h('select', { className: 'auto-mode', title: 'what drives the parameter', onchange: () => setLaneState(doc, lane.id, mode.value as LaneState) },
     ...modes.map(([v, t]) => h('option', { value: v }, t)))
   const del = h('button', { className: 'x', title: 'delete automation', onclick: () => deleteLane(doc, lane.id) }, '×')
-  mode.disabled = readOnly
 
   // LFO controls, shown in LFO mode. The slider positions are 0..1; rate is logarithmic.
   const rateToPos = (hz: number) => Math.log(hz / LFO_RATE_MIN) / Math.log(LFO_RATE_MAX / LFO_RATE_MIN)
   const posToRate = (t: number) => LFO_RATE_MIN * (LFO_RATE_MAX / LFO_RATE_MIN) ** t
   const slider = (title: string, fmtTip: (t: number) => string, onInput: (t: number) => void) => {
-    const el = h('input', { type: 'range', min: '0', max: '1', step: 'any', title, disabled: readOnly })
+    const el = h('input', { type: 'range', min: '0', max: '1', step: 'any', title })
     el.addEventListener('pointerdown', () => deps.grab()) // one drag, one undo step
     el.addEventListener('input', () => onInput(el.valueAsNumber))
     valueTip(el, () => fmtTip(el.valueAsNumber))
@@ -113,14 +111,13 @@ export function autoRow(deps: RowDeps) {
   }
   const shape = h('select', { className: 'auto-shape', title: 'wave shape', hidden: true, onchange: () => updateLaneLfo(doc, lane.id, { shape: Number(shape.value) }) },
     ...LFO_SHAPES.map((t, i) => h('option', { value: String(i) }, t)))
-  shape.disabled = readOnly
   const rate = slider('rate', (t) => `${posToRate(t).toFixed(2)} Hz`, (t) => updateLaneLfo(doc, lane.id, { rate: posToRate(t) }))
   const depth = slider('depth', (t) => `${Math.round(t * 100)}%`, (t) => updateLaneLfo(doc, lane.id, { depth: t }))
   const lfoRow = (label: string, input: HTMLElement) => h('div', { className: 'ctl lfo-ctl', hidden: true }, h('span', { className: 'lfo-label' }, label), input)
   const lfoRows = [lfoRow('rate', rate), lfoRow('depth', depth)]
 
   const head = h('div', { className: 'head auto-head' },
-    h('div', { className: 'auto-title' }, name, readOnly ? null : del),
+    h('div', { className: 'auto-title' }, name, del),
     h('div', { className: 'ctl' }, mode, shape),
     ...lfoRows)
   const surface = svg('svg', { class: 'auto-svg', height: AUTO_H })
@@ -140,7 +137,7 @@ export function autoRow(deps: RowDeps) {
 
   /** Press on empty space: add a point there and carry on dragging it. Shift: draw a line freehand. */
   surface.addEventListener('pointerdown', (e) => {
-    if (readOnly || e.button !== 0 || e.target !== surface || laneState(lane) === 'lfo') return
+    if (e.button !== 0 || e.target !== surface || laneState(lane) === 'lfo') return
     lift(e, () => addAt(e)) // (a finger long-presses to add a point; until then it scrolls)
   })
   function addAt(e: PointerEvent) {
@@ -182,7 +179,6 @@ export function autoRow(deps: RowDeps) {
   function pointMenu(e: MouseEvent, p: Point) {
     e.preventDefault()
     e.stopPropagation()
-    if (readOnly) return
     const next: AutoCurve = p.curve === 'hold' ? 'linear' : 'hold'
     popover(surface as unknown as HTMLElement, [
       ['delete point', () => deletePoint(doc, p.id)],
@@ -266,7 +262,7 @@ export function autoRow(deps: RowDeps) {
     pts.forEach((p, i) => {
       const dot: SVGElement = p.curve === 'hold' ? svg('rect', { x: xs[i] - 4, y: ys[i] - 4, width: 8, height: 8, class: 'auto-pt' }) : svg('circle', { cx: xs[i], cy: ys[i], r: 4.5, class: 'auto-pt' })
       dot.addEventListener('pointerdown', (e) => {
-        if (readOnly || e.button !== 0) return
+        if (e.button !== 0) return
         e.preventDefault()
         e.stopPropagation()
         deps.grab()

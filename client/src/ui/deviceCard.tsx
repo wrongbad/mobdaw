@@ -36,7 +36,6 @@ export type CardDeps = {
 
 /** What the cards share. */
 export type CardCtx = {
-  readOnly: boolean
   store: ProjectStore
   auto: AutoValues
   deps: CardDeps
@@ -84,7 +83,7 @@ export type Chain = ReturnType<typeof createChain>
 
 /** One card. `chain` is the row it is in (its filters' runs share a curve). */
 export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
-  const { readOnly, store, deps } = p.ctx
+  const { store, deps } = p.ctx
   const id = p.id
   // (the device can be gone from the doc a moment before its card is: keep showing the last one)
   const dev = createMemo<Device>((prev) => store.deviceById[id] ?? prev)
@@ -118,7 +117,7 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
     /** Whether the doc's / lane's value may be put on the control now. */
     const free = (busy: boolean) => driven() || (!busy && nodeDrag?.get(pd.id) == null)
     const lock = () => {
-      if (pd.id >= 1 && pd.id <= 3) setLocks((['cutoff', 'damping', 'gain'] as const)[pd.id - 1], readOnly || driven())
+      if (pd.id >= 1 && pd.id <= 3) setLocks((['cutoff', 'damping', 'gain'] as const)[pd.id - 1], driven())
     }
     const choose = (v: number) => {
       deps.live(id, pd.id, v)
@@ -128,7 +127,7 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
     if (pd.options && pd.options.length <= SEG_MAX) {
       const seg = segmented(pd.options.map((o, i) => ({ value: String(i), label: o })), String(pd.def), (sv) => choose(Number(sv)), pd.name)
       createRenderEffect(() => {
-        const dis = readOnly || driven()
+        const dis = driven()
         seg.el.classList.toggle('off', dis)
         seg.el.querySelectorAll('button').forEach((b) => (b.disabled = dis))
         lock()
@@ -139,12 +138,12 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
     }
     if (pd.options) {
       const input = (
-        <select title={pd.name} disabled={readOnly} on:change={() => choose(Number(input.value))}>
+        <select title={pd.name} on:change={() => choose(Number(input.value))}>
           {pd.options.map((o, i) => <option value={String(i)}>{o}</option>)}
         </select>
       ) as HTMLSelectElement
       createRenderEffect(() => {
-        input.disabled = readOnly || driven()
+        input.disabled = driven()
         lock()
         const v = value()
         if (free(inUse(input))) { setShown(pd.id, v); input.value = String(Math.round(v)) }
@@ -152,7 +151,7 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
       return (<label class="kn sel" data-param={pd.id} style={`--span:${span(pd)}`}>{input}{label}</label>) as HTMLElement
     }
     const k = knob({
-      min: pd.min, max: pd.max, value: pd.def, def: pd.def, size: 30, disabled: readOnly,
+      min: pd.min, max: pd.max, value: pd.def, def: pd.def, size: 30,
       toPos: (v) => paramToPos(pd, v), fromPos: (t) => paramToValue(pd, t), bipolar: isBipolar(pd),
       format: (v) => formatParam(pd, v),
       onInput: (v) => {
@@ -168,7 +167,7 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
     knobs.set(pd.id, k)
     p.ctx.autoMenu(k.el, target, false)
     createRenderEffect(() => {
-      k.setDisabled(readOnly || driven())
+      k.setDisabled(driven())
       lock()
       const v = value()
       if (free(false)) { setShown(pd.id, v); k.set(v) }
@@ -200,7 +199,6 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
   }
 
   const bypass = onOffSwitch('bypass', () => deps.bypass(id, !dev().bypass))
-  bypass.disabled = readOnly
   const name = () => dev().name ?? def?.name ?? `device ${dev().type}`
   // The response curve is one view per run of adjacent filters: the run's first card hosts it, as wide as the run, over
   // the curve slots of the cards after it (a run that wraps onto another row gets a view per row). The other cards keep their (empty) slot so everything lines up.
@@ -232,8 +230,8 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
       </div>
     </div>
   ) as HTMLElement
-  if (!readOnly) dragToReorder(head, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(id, before), end: deps.reorderEnd })
-  cardMenu(el, head, title, def?.instrument ? 'delete instrument' : 'delete effect', () => deps.remove(id), () => !readOnly,
+  dragToReorder(head, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(id, before), end: deps.reorderEnd })
+  cardMenu(el, head, title, def?.instrument ? 'delete instrument' : 'delete effect', () => deps.remove(id),
     def?.instrument ? [['rename', () => deps.rename(id)]] : [])
 
   createRenderEffect(() => setSwitch(bypass, el, !dev().bypass))

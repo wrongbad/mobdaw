@@ -4,7 +4,7 @@ import { addAudioClip, addMonths, addTrack, getTracks } from '@mobdaw/shared'
 import { audit } from '../src/audit.ts'
 import { openDb } from '../src/db.ts'
 import { createStorage, objectKey } from '../src/storage/index.ts'
-import { ADMIN, admit, client, connect, login, startTest, until, userId, type Client } from './helpers.ts'
+import { ADMIN, admit, client, connect, denied as deniedAt, login, snapshot, startTest, until, userId, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 let admin: Client, alice: Client
@@ -24,13 +24,7 @@ const kicked = (c: ReturnType<typeof connect>) => {
   c.provider.on('close', ({ event }: { event: { reason?: string } }) => { if (event.reason === 'access_changed') flag.closed = true })
   return flag
 }
-const denied = (token: string, project: string) =>
-  new Promise<void>((resolve, reject) => {
-    const { provider } = connect(t.port, project, token)
-    provider.on('authenticationFailed', () => { provider.destroy(); resolve() })
-    provider.on('synced', () => { provider.destroy(); reject(new Error('synced but should be rejected')) })
-    setTimeout(() => reject(new Error('timeout')), 5000)
-  })
+const denied = (token: string, project: string) => deniedAt(t.port, project, token)
 
 describe('websocket access', () => {
   it('removed member is disconnected and cannot reconnect', async () => {
@@ -76,7 +70,7 @@ describe('websocket access', () => {
 })
 
 describe('public projects', () => {
-  it('a public project opens read-only for any signed-in account, and making it private drops them', async () => {
+  it('a public project opens as a snapshot for any signed-in account, and making it private closes it', async () => {
     const p = await create('Open')
     expect((await alice.get(`/api/projects/${p}`)).status).toBe(404)
     await denied(alice.token!, p)
@@ -87,12 +81,9 @@ describe('public projects', () => {
     expect((await alice.patch(`/api/projects/${p}`, { public: false })).status).toBe(403) // owner only
     expect((await alice.get('/api/projects')).body.map((x: any) => x.id)).not.toContain(p) // not listed
     expect((await alice.get(`/api/projects/${p}/samples`)).status).toBe(200)
-    const v = connect(t.port, p, alice.token!)
-    await until(() => v.provider.synced)
-    const gone = kicked(v)
+    expect((await snapshot(t.base, p, alice.token!)).status).toBe(200)
     await admin.patch(`/api/projects/${p}`, { public: false })
-    await until(() => gone.closed)
-    v.provider.destroy()
+    expect((await snapshot(t.base, p, alice.token!)).status).toBe(404)
     expect((await alice.get(`/api/projects/${p}`)).status).toBe(404)
   })
 
@@ -112,7 +103,7 @@ describe('public projects', () => {
     expect((await admin.get(`/api/projects/${p}`)).body.demo).toBe(false)
   })
 
-  it('signed-out visitors can read a public project, read-only, and nothing else', async () => {
+  it('signed-out visitors can read a snapshot of a public project, and nothing else', async () => {
     const p = await create('Anon')
     const anon = client(t.base)
     expect((await anon.get(`/api/projects/${p}`)).status).toBe(401) // private
@@ -128,41 +119,41 @@ describe('public projects', () => {
     expect((await anon.post(`/api/projects/${p}/members`, { username: 'alice' })).status).toBe(401)
     expect((await anon.post(`/api/projects/${p}/copy`, {})).status).toBe(401)
 
+    // No live connection for a visitor, only a snapshot of what is there now
+    await denied('', p)
     const a = connect(t.port, p, admin.token!)
-    const g = connect(t.port, p, '')
-    await until(() => a.provider.synced && g.provider.synced)
-    addTrack(g.doc, 'Sneaky') // applied locally only
-    g.provider.awareness!.setLocalStateField('user', { username: 'guest' }) // presence is a write too
-    a.provider.awareness!.setLocalStateField('user', { username: 'owner' })
+    await until(() => a.provider.synced)
     addTrack(a.doc, 'Real')
-    await until(() => names(g).includes('Real'))
-    await until(() => [...g.provider.awareness!.getStates().values()].some((s: any) => s.user?.username === 'owner')) // sees others
-    await new Promise((r) => setTimeout(r, 300))
+    await until(() => a.provider.unsyncedChanges === 0)
+    const snap = await snapshot(t.base, p)
+    expect(snap.status).toBe(200)
+    expect(getTracks(snap.doc).map((x) => x.name)).toEqual(['Real'])
+    addTrack(snap.doc, 'Sneaky') // edited in the visitor's page only
     expect(names(a)).toEqual(['Real'])
-    expect([...a.provider.awareness!.getStates().values()].some((s: any) => s.user?.username === 'guest')).toBe(false)
-    const gone = kicked(g)
-    await admin.patch(`/api/projects/${p}`, { public: false })
-    await until(() => gone.closed)
     a.provider.destroy()
-    g.provider.destroy()
+    await admin.patch(`/api/projects/${p}`, { public: false })
+    expect((await snapshot(t.base, p)).status).toBe(401)
   })
 
-  it('a signed-in non-member viewing a public project is invisible too, a viewer member is not', async () => {
+  it('only owners and editors connect live: viewers and non-members get a snapshot', async () => {
     const p = await create('Watchers')
     await admin.patch(`/api/projects/${p}`, { public: true })
-    const a = connect(t.port, p, admin.token!)
-    const v = connect(t.port, p, alice.token!) // not a member: in through the link
-    await until(() => a.provider.synced && v.provider.synced)
-    v.provider.awareness!.setLocalStateField('user', { username: 'alice' })
-    await new Promise((r) => setTimeout(r, 300))
-    const seen = () => [...a.provider.awareness!.getStates().values()].some((s: any) => s.user?.username === 'alice')
-    expect(seen()).toBe(false)
-    await admin.post(`/api/projects/${p}/members`, { username: 'alice', role: 'viewer' }) // now a collaborator
-    const v2 = connect(t.port, p, alice.token!)
-    await until(() => v2.provider.synced)
-    v2.provider.awareness!.setLocalStateField('user', { username: 'alice' })
-    await until(seen)
-    for (const c of [a, v, v2]) c.provider.destroy()
+    await denied(alice.token!, p) // not a member: in through the link
+    expect((await snapshot(t.base, p, alice.token!)).status).toBe(200)
+    await admin.post(`/api/projects/${p}/members`, { username: 'alice', role: 'viewer' })
+    await denied(alice.token!, p) // a viewer member too
+    expect((await snapshot(t.base, p, alice.token!)).status).toBe(200)
+    await admin.post(`/api/projects/${p}/members`, { username: 'alice', role: 'editor' })
+    const e = connect(t.port, p, alice.token!)
+    await until(() => e.provider.synced)
+    e.provider.destroy()
+  })
+
+  it('a private project has no snapshot for non-members', async () => {
+    const p = await create('Hidden')
+    expect((await snapshot(t.base, p, alice.token!)).status).toBe(404)
+    expect((await snapshot(t.base, p)).status).toBe(401)
+    expect((await snapshot(t.base, p, admin.token!)).status).toBe(200)
   })
 
   it('rejects an empty patch and non-boolean values', async () => {
@@ -313,22 +304,20 @@ describe('migration', () => {
   })
 })
 
-// Last: restarts the server to prove the viewer's edit was never persisted.
-describe('read-only viewers', () => {
-  it('viewer edits are not applied or persisted', async () => {
+// Last: restarts the server to prove a viewer's snapshot edits were never persisted.
+describe('viewers', () => {
+  it('edits to a snapshot are not sent or persisted', async () => {
     const p = await create('Viewer')
     await admin.post(`/api/projects/${p}/members`, { username: 'alice', role: 'viewer' })
     const a = connect(t.port, p, admin.token!)
-    const v = connect(t.port, p, alice.token!)
-    await until(() => a.provider.synced && v.provider.synced)
-    addTrack(v.doc, 'Sneaky') // applied locally only
+    await until(() => a.provider.synced)
     addTrack(a.doc, 'Real')
-    await until(() => names(v).includes('Real')) // viewer still receives the owner's edits
     await until(() => a.provider.unsyncedChanges === 0)
+    const v = await snapshot(t.base, p, alice.token!)
+    addTrack(v.doc, 'Sneaky') // no connection to send it on
     await new Promise((r) => setTimeout(r, 300))
     expect(names(a)).toEqual(['Real'])
     a.provider.destroy()
-    v.provider.destroy()
     await t.close() // flush; then reload from the DB
     const t2 = await startTest({}, t.dir)
     try {

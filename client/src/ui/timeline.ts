@@ -70,7 +70,7 @@ type Src = SrcView & {
 }
 
 /** The project's name in the bar opens its settings; `renameProject`, when given, lets them change the name (it saves it). `cloud` is set for server projects. */
-export function mountTimeline(s: Session, projectName: string, readOnly = false, renameProject?: (name: string) => Promise<unknown> | void,
+export function mountTimeline(s: Session, projectName: string, renameProject?: (name: string) => Promise<unknown> | void,
   cloud?: { projectId: string; me: string; role: Role; saveCopy?: () => Promise<void>; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean }) {
   const { doc, undo } = s
   applyLayout()
@@ -83,7 +83,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let autoInfos = new Map<string, Map<string, AutoInfo>>() // owner id -> param -> what drives it
   const lanes = new Map<string, Lane>()
   /** A card is being dragged by its title bar: merged filter views split until it lands. */
-  /** A visitor (`s.scratch`) has changed their copy of the document. */
+  /** The user changed their snapshot (`s.snapshot`) of the document, which is not saved anywhere. */
   const [edited, setEdited] = createSignal(false)
   const [reordering, setReordering] = createSignal(false)
   let destroyed = false
@@ -91,7 +91,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   // --- static structure
   const transport = transportControls({
     title: 'play / pause (space)', onToggle: () => toggle(), onRewind: () => { seek(0); scroll.scrollLeft = 0 },
-    record: readOnly ? undefined : { onToggle: () => void rec.toggleRecord(), onMenu: (e) => offsetMenu(e) },
+    record: s.snapshot ? undefined : { onToggle: () => void rec.toggleRecord(), onMenu: (e) => offsetMenu(e) },
   })
   const store = createProjectStore(s)
   const drive = createMixDrive() // what automation drives the faders and pans to at the playhead (written every frame while a lane plays)
@@ -118,7 +118,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const [myTake, setMyTake] = createSignal<{ trackId: string; start: number } | null>(null, { equals: (a, b) => a?.trackId === b?.trackId && a?.start === b?.start })
   const [takePos, setTakePos] = createSignal(0) // the transport position, written every frame while a take grows
   const chat = chatPanel({
-    doc, user: s.user, readOnly,
+    doc, user: s.user,
     onUnread: setUnread,
   })
   /** The project's name in the bar: a button that opens the project settings (rename, sharing, audio input). */
@@ -131,11 +131,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         cloud: cloud && { ...cloud, onPublic: (v) => (cloud.public = v), onDemo: (v) => (cloud.demo = v) },
         sampleRate: {
           value: rate(),
-          locked: readOnly ? 'readonly' : isBlank() ? null : 'tracks',
+          locked: isBlank() ? null : 'tracks',
           set: (r) => isBlank() && metaMap(doc).set('sampleRate', r),
         },
         onInputChanged: () => void rec.reopenInput(),
-        onLoopBindings: readOnly ? undefined : () => rec.listenMidi(), // (the keys are read at each press; the input may have changed)
+        onLoopBindings: () => rec.listenMidi(), // (the keys are read at each press; the input may have changed)
       })
     } }, projectName)
     return el
@@ -186,7 +186,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     measure() // the timeline's width changed
   }
   // Where the project lives: a phone for this device's browser storage, a cloud for the server.
-  const where = h('span', { className: 'dim where', onpointerdown: (e) => e.stopPropagation(), title: s.local ? 'saved in this browser, on this device' : 'saved in the cloud' })
+  const where = h('span', { className: 'dim where', onpointerdown: (e) => e.stopPropagation(), title: s.local ? 'saved in this browser, on this device' : s.snapshot ? 'a snapshot of a cloud project: your changes are not saved' : 'saved in the cloud' })
   where.append(s.local ? icon('phone', 16) : icon('cloud', 18))
   const bar = h('header', { className: 'bar' }) // (filled by `Bar` once the recorder exists)
   const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }, where, projectTitle()))
@@ -229,15 +229,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const rulerHead = h('div', { className: 'playhead' })
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
   overlay.append(playhead, snapLine)
-  const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio or midi files here, or use + track.')
+  const hint = h('div', { className: 'hint dim' }, 'drop audio or midi files here, or use + track.')
   const master = h('div', { className: 'lane master' }) // like a track's lane: the fx row, then its automation, as one block (filled below)
-  const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, readOnly ? null : addLink, bgPicker, midiPicker, overlay)
+  const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, addLink, bgPicker, midiPicker, overlay)
   const scroll = h('div', { className: 'scroll' }, content)
   // Drops outside any lane start a new track.
   scroll.ondragover = (e) => e.preventDefault()
   scroll.ondrop = (e) => {
     e.preventDefault()
-    if (readOnly) return
     void dropFiles(importableFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   }
   // The global fx lane: the master bus chain. It closes the track list, directly above the global automation (one unit, after every track).
@@ -251,7 +250,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const position = () => pb?.position() ?? 0
 
   const rec = createRecorder({
-    s, doc, undo, readOnly: readOnly || s.scratch, rate, pb: () => pb, position: () => position(), say, onChange: () => syncRec(),
+    s, doc, undo, rate, pb: () => pb, position: () => position(), say, onChange: () => syncRec(),
     startTransport, stop, loopStatus: () => drawLoopStatus(),
   })
   // the top bar, the remote playheads, the headers, the drawers and the blocks on the lanes are Solid components; what is left here
@@ -273,9 +272,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const totalPx = inRoot(() => createMemo(() => xs(total()))) // (the automation rows are drawn at both)
   // the peers' knob drags go to our engine as overrides (and show on the cards, which follow `store.drags`)
   const applyOverrides = () => pb?.setOverrides(store.overrides())
-  const headCtx: HeadCtx = { doc, undo, readOnly, store, rec, drawers, avail, drive, toggleTab, autoMenu }
+  const headCtx: HeadCtx = { doc, undo, store, rec, drawers, avail, drive, toggleTab, autoMenu }
   disposers.push(
-    mountBar(bar, { store, readOnly, local: s.local, user: s.user, transport: transport.el, status, cpu, loopText, unread, chatOpen,
+    mountBar(bar, { store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, chatOpen,
       onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: (f) => zoom.button(f), onExport: exportProject, onChat: toggleChat,
       saveCopy: cloud?.saveCopy && { shown: edited, onSave: () => {
         say('saving a copy on this device…')
@@ -287,11 +286,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     createRoot((dispose) => (createEffect(() => (store.overrides(), applyOverrides())), dispose)),
   )
   const ne = noteEditor({
-    doc, undo, readOnly,
+    doc, undo,
     selectNote: (id) => sel.selectNote(id),
     noteLive: (trackId, pitch, velocity, on) => liveNote(trackId, pitch, velocity, on),
   })
-  const dg = drumGrid({ doc, undo, readOnly })
+  const dg = drumGrid({ doc, undo })
 
   // --- transport
   // Auto-stop (audio/autoStop.ts): the master reports and the live notes it needs; decided in `tick`.
@@ -452,7 +451,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     reorderDrop: (d: string, before: string | null) => reorderDevice(doc, undo, d, before),
   }
   const loopDeps = {
-    readOnly,
     grab: () => undo.stopCapturing(),
     commit: (id: string, speed: number) => updateLooper(doc, id, { speed }),
     setMuted: (id: string, muted: boolean) => updateLooper(doc, id, { muted }),
@@ -465,7 +463,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
-  const rowDeps = { doc, readOnly, grab: () => undo.stopCapturing(), x, fromX, get rate() { return getSampleRate(doc) } }
+  const rowDeps = { doc, grab: () => undo.stopCapturing(), x, fromX, get rate() { return getSampleRate(doc) } }
   const drawCtx: DrawCtx = { ...headCtx, auto: autoValues, deps: cardDeps, reordering, loops: loopDeps, rows: rowDeps, armed: () => sel.armedLooper, width: totalPx, scale }
   const masterDrawers = mountMasterDrawers(master, drawCtx)
   disposers.push(masterDrawers.dispose)
@@ -479,7 +477,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       show: () => reveal(target().scope),
       toggle: () => { const l = lane(); if (l) setLaneEnabled(doc, l.id, !l.enabled) },
       remove: () => { const l = lane(); if (l) deleteLane(doc, l.id) },
-    }, readOnly, clickToo)
+    }, clickToo)
   }
 
   /** Automate a param: a lane that starts flat at its current value, so nothing changes until a point is moved (or, with `lfo`, one in LFO mode). */
@@ -562,14 +560,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     }
     const atX = (e: MouseEvent) => fromX(e.clientX - body.getBoundingClientRect().left)
     body.ondblclick = (e) => { // empty space on a MIDI lane: new 4-bar clip
-      if (readOnly || e.target !== body || t.kind !== 'midi') return
+      if (e.target !== body || t.kind !== 'midi') return
       newMidiClip(t.id, atX(e))
     }
     body.ondragover = (e) => e.preventDefault()
     body.ondrop = (e) => {
       e.preventDefault()
       e.stopPropagation()
-      if (readOnly) return
       const kind = tracksMap(doc).get(t.id)?.get('kind')
       const at = fromX(e.clientX - body.getBoundingClientRect().left)
       const files = importableFiles(e.dataTransfer?.files)
@@ -593,7 +590,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     el.dataset.kind = t.kind
     createEffect(() => el.style.setProperty('--tc', trackColor(t, index())))
     createEffect(() => el.classList.toggle('locked', store.locks().has(t.id)))
-    createEffect(() => el.classList.toggle('current', !readOnly && rec.currentTrack === t.id))
+    createEffect(() => el.classList.toggle('current', rec.currentTrack === t.id))
     createEffect(() => el.classList.toggle('muted', !!store.trackById[t.id]?.muted))
     const editClip = createMemo(() => (sel.editing ? store.clipById[sel.editing] : undefined))
     const editing = () => editClip()?.trackId === t.id
@@ -697,7 +694,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     // (the popover's own capture listener runs first, so `closedBy` says whether this press closed a menu)
     body.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, armed: !!sel.armedLooper, closed: closedBy(e) }), true)
     const open = (e: MouseEvent) => {
-      if (!readOnly && e.target === body) popover(body, entries(e), [e.clientX, e.clientY])
+      if (e.target === body) popover(body, entries(e), [e.clientX, e.clientY])
     }
     body.addEventListener('contextmenu', (e) => { e.preventDefault(); open(e) })
     body.addEventListener('click', (e) => { // not after a drag (e.g. drawing a region)
@@ -763,7 +760,6 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     body.ondrop = (e) => {
       e.preventDefault()
       e.stopPropagation()
-      if (readOnly) return
       void dropFiles(importableFiles(e.dataTransfer?.files), trackId, at(e.clientX))
     }
     bgMenu(body, (e) => [['upload', () => pickInto(trackId, at(e.clientX))]])
@@ -779,7 +775,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     // while a looper is armed, a drag here draws its region (capture: clips must not start a drag)
     body.addEventListener('pointerdown', (e) => {
       const lp = sel.armedLooper ? store.loopers().find((x) => x.id === sel.armedLooper && x.trackId === trackId) : undefined
-      if (!lp || readOnly || e.button !== 0) return
+      if (!lp || e.button !== 0) return
       e.preventDefault()
       e.stopPropagation()
       drawRegion(gctx, e, { ...lp }, src)
@@ -807,7 +803,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (at != null) snapLine.style.left = `${HEADER + x(at)}px`
     },
   }
-  const gctx: GestureCtx = { doc, undo, readOnly, store, sel, geo, select }
+  const gctx: GestureCtx = { doc, undo, store, sel, geo, select }
   const clipsCtx: ClipsCtx = {
     ...gctx, scale, total, ready, peaks: peakVer, viewW, scrollX, scroller: scroll, header: HEADER, projectId: s.projectId, ne, dg,
     menu: (id) => clipMenu(id), incomingLabel: (m) => incomingLabel(m), myTake, position: takePos,
@@ -909,8 +905,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         }
         continue
       }
-      if (s.scratch) {
-        say('sign in to upload audio', true)
+      if (s.snapshot) {
+        say('save a copy to this device to add audio', true)
         continue
       }
       say(`uploading ${f.name}…`)
@@ -941,11 +937,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void rec.toggleRecord() : toggle() }
     else if (!mod && !e.shiftKey && e.key.toLowerCase() === 'z') zoom.fit()
     else if (e.key === 'Escape' && sel.escape()) return
-    else if (!readOnly && tag !== 'TEXTAREA' && !(e.target as HTMLElement).isContentEditable && !mod && !e.altKey && !e.repeat && cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)) {
+    else if (tag !== 'TEXTAREA' && !(e.target as HTMLElement).isContentEditable && !mod && !e.altKey && !e.repeat && cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)) {
       e.preventDefault()
       void rec.command(cmdForKey(getKeys(), e.key.length === 1 ? e.key.toLowerCase() : e.key)!, e.timeStamp)
     } // the loop commands, wherever the focus is not a text field
-    else if (readOnly) return
     else if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? undo.redo() : undo.undo() }
     else if (!mod && e.key.toLowerCase() === 's') {
       const at = Math.round(position())
@@ -975,20 +970,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   s.provider?.on('status', onStatus)
   const onDenied = () => say('no access')
   s.provider?.on('authenticationFailed', onDenied)
-  // After the first sync: migrate old projects (editors only: a viewer's writes never reach the server),
-  // then start the engine at the project's sample rate.
+  // After the first sync: migrate old projects, then start the engine at the project's sample rate.
   void s.synced.then(() => {
     if (destroyed) return
-    if (s.scratch) {
-      // (after the first sync, so what the server sent is not counted as an edit)
-      doc.on('update', (_u: Uint8Array, origin: unknown) => origin !== s.provider && setEdited(true))
-    }
-    if (!readOnly && !s.scratch) {
-      migrateToV2(doc)
-      migrateToV3(doc)
-      sweepOrphans(doc)
-      stashLaneRanges(doc)
-    }
+    migrateToV2(doc)
+    migrateToV3(doc)
+    sweepOrphans(doc)
+    stashLaneRanges(doc)
+    // (after the migrations, which are not the user's edits)
+    if (s.snapshot) doc.on('update', () => setEdited(true))
     chat.markSeen()
     setRate(getSampleRate(doc))
     pb = openPlayback(doc, s.projectId, rate(), s.userId)
@@ -1002,11 +992,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     measure()
     if (refreshPreviews()) ensurePreviewTick()
     zoom.fit() // (zoom is not remembered per project, so every open fits the song to the window)
-    if (!readOnly && !s.scratch) sweepUnusedTakes(rec.takeCtx())
-    if (!readOnly && !s.scratch) recoverTakes(rec.takeCtx()).then((n) => {
+    if (!s.snapshot) sweepUnusedTakes(rec.takeCtx())
+    if (!s.snapshot) recoverTakes(rec.takeCtx()).then((n) => {
       if (n && !destroyed) say(`recovered ${n} unfinished take${n > 1 ? 's' : ''}`)
     }, (err) => console.warn('take recovery:', err))
-  })
+  }, () => say('could not load the project', true))
 
   return {
     el,

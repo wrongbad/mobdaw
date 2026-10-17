@@ -53,7 +53,7 @@ function DevicesRow(p: {
         <Show when={p.open()}>
           <For each={p.devices()}>{(d) => <DeviceCard id={d.id} ctx={p.ctx} chain={chain} />}</For>
         </Show>
-        <button class="add-fx" title={p.add.title} disabled={p.ctx.readOnly} on:click={(e) => popover(e.currentTarget, p.add.items())}>+</button>
+        <button class="add-fx" title={p.add.title} on:click={(e) => popover(e.currentTarget, p.add.items())}>+</button>
       </div>
     </div>
   )
@@ -75,7 +75,7 @@ function LooperCard(p: { id: string; ctx: DrawCtx }) {
 }
 
 function LoopersRow(p: { ctx: DrawCtx; id: string; tc: TransportControls }) {
-  const { store, doc, readOnly, drawers } = p.ctx
+  const { store, doc, drawers } = p.ctx
   const mine = createMemo(() => store.loopers().filter((l) => l.trackId === p.id), EMPTY as Looper[], { equals: sameList })
   const open = () => drawers.isOpen(p.id, 'loopers')
   createRenderEffect(() => (p.tc.el.hidden = !open()))
@@ -86,7 +86,7 @@ function LoopersRow(p: { ctx: DrawCtx; id: string; tc: TransportControls }) {
         <Show when={open()}>
           <For each={mine()}>{(l) => <LooperCard id={l.id} ctx={p.ctx} />}</For>
         </Show>
-        <button class="add-fx" title="add looper" disabled={readOnly} on:click={() => addNextLooper(doc, p.id)}>+</button>
+        <button class="add-fx" title="add looper" on:click={() => addNextLooper(doc, p.id)}>+</button>
       </div>
     </div>
   )
@@ -94,7 +94,7 @@ function LoopersRow(p: { ctx: DrawCtx; id: string; tc: TransportControls }) {
 
 /** The presets drawer: a section like the automation one (same toggle and box), holding one column of plain-text buttons per group. */
 function PresetsDrawer(p: { ctx: DrawCtx; id: string }) {
-  const { store, doc, undo, readOnly, drawers, avail } = p.ctx
+  const { store, doc, undo, drawers, avail } = p.ctx
   // the offer depends on the kind of the track only; it is made once, so the buttons live as long as the track does
   const groups = createMemo(() => {
     void store.trackById[p.id]?.kind
@@ -105,7 +105,7 @@ function PresetsDrawer(p: { ctx: DrawCtx; id: string }) {
   const has = () => groups().length > 0
   const open = () => drawers.isOpen(p.id, 'presets')
   const preset = () => store.trackById[p.id]?.preset
-  const disabled = () => readOnly || store.locks().has(p.id)
+  const disabled = () => store.locks().has(p.id)
   createEffect(() => avail.set(p.id, 'presets', has()))
   return (
     <div class="auto-section" hidden={!(has() && open())}>

@@ -10,10 +10,10 @@ afterEach(() => cleanup.splice(0).forEach((f) => f()))
 const me = { username: 'me', color: '#fff' }
 const them = { username: 'ann', color: '#f00' }
 
-function setup(readOnly = false) {
+function setup() {
   const doc = new Y.Doc()
   const unread: number[] = []
-  const chat = chatPanel({ doc, user: me, readOnly, onUnread: (n) => unread.push(n) })
+  const chat = chatPanel({ doc, user: me, onUnread: (n) => unread.push(n) })
   document.body.append(chat.el)
   cleanup.push(() => (chat.destroy(), chat.el.remove()))
   const rows = () => [...chat.el.querySelectorAll('.chat-log > div')] as HTMLElement[]

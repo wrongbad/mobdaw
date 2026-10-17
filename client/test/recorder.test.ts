@@ -39,8 +39,8 @@ function rig(opts: { micFails?: boolean } = {}) {
   const journals: { discarded: boolean; released: boolean }[] = []
   const finished: unknown[] = []
   const r = createRecorder({
-    s: { projectId: 'p', userId: null, user: { username: 'me', color: '#fff' }, setLocal: (patch) => void local.push(patch) },
-    doc, undo, readOnly: false, rate: () => 1000, pb: () => pb, position: () => state.pos,
+    s: { projectId: 'p', userId: null, user: { username: 'me', color: '#fff' }, setLocal: (patch) => void local.push(patch), snapshot: false },
+    doc, undo, rate: () => 1000, pb: () => pb, position: () => state.pos,
     say: (m, bad) => void said.push(bad ? `!${m}` : m),
     onChange: () => void state.changes++,
     startTransport: (from) => { if (!state.playing) pb.play(from) },

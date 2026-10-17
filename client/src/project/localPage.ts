@@ -12,7 +12,7 @@ export function localProjectPage(id: string) {
     return
   }
   const session = openLocalSession(id)
-  const tl = mountTimeline(session, project.name, false, (n) => renameLocal(id, n))
+  const tl = mountTimeline(session, project.name, (n) => renameLocal(id, n))
   mount(tl.el)
   return () => {
     tl.destroy()

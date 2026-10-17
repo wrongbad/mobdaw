@@ -302,7 +302,7 @@ users <──charged── samples(hash, size, mime, uploaded_by, state) ──>
 | action | owner | editor | viewer |
 |---|---|---|---|
 | open project, play, download samples | ✓ | ✓ | ✓ |
-| edit arrangement (Yjs writes) | ✓ | ✓ | ✗ (read-only WS connection) |
+| edit arrangement live (Yjs writes, presence, chat) | ✓ | ✓ | ✗ (a snapshot, edited only in their own page) |
 | add samples to the library (upload/attach) | ✓ | ✓ | ✗ |
 | save a copy (new project owned by the caller) | ✓ | ✓ | ✓ |
 | leave project | ✗ | ✓ | ✓ |
@@ -368,7 +368,7 @@ All sample routes are scoped to a project, and the caller must be a member.
 - `POST /projects/:id/leave`: editors and viewers only. The owner gets 400
   `{error:"owner_cannot_leave"}`.
 - `PATCH /projects/:id` with `{name?, public?}`: owner only. `public: true` lets anyone that has the link open the project
-  as a read-only `viewer`, signed in or not (document, samples, preview; signed-out visitors can't list members or copy);
+  as a `viewer`, signed in or not (a snapshot of the document, samples, preview; signed-out visitors can't list members or copy);
   it is not listed in anyone's projects.
   Turning it off closes the connections of everyone who was only there through the link. `ProjectSummary.public`.
   `demo?: boolean` is admin only (403 otherwise) and needs the project to be public (400 otherwise); turning `public` off
@@ -382,8 +382,10 @@ All sample routes are scoped to a project, and the caller must be a member.
     Hocuspocus, flush it first or read the live doc (check the API)
   - copies all `project_samples` links
   - adds no members other than the caller
-- **WebSocket:** `onAuthenticate` makes the connection read-only for viewers (Hocuspocus
-  `connectionConfig.readOnly = true` or the v4 equivalent; verify in node_modules).
+- **WebSocket:** `onAuthenticate` accepts only an owner or editor of a project that is not frozen. Everyone else with access
+  (viewers, public visitors, frozen projects, read-only accounts) has no live connection, so no presence and no
+  broadcast to them: `GET /projects/:id/snapshot` returns the whole document as one Yjs update (from the live document if open),
+  and the client edits it in the page only (nothing is sent; "save a copy" keeps it on the device).
 - **Access changes take effect immediately.** When a member is removed or downgraded, or
   leaves, close their open connections to that project. This supersedes the earlier "stays
   connected until reconnect" note.
@@ -406,8 +408,9 @@ All sample routes are scoped to a project, and the caller must be a member.
 ## Client changes
 - Use the project-scoped sample endpoints. On 409 `sample_deleting`, retry after about 2s,
   up to 3 times.
-- **Viewer mode:** no drag, trim, delete, file drop or "+ track"; mute and gain are
-  disabled; play/stop still works. Show a subtle "view only" label in the top bar.
+- **Snapshot mode** (viewers, signed-out visitors, frozen projects, read-only accounts): the editor is fully usable on a
+  snapshot of the document, but nothing is saved or shared. The top bar says "changes stay on this page" and offers
+  "save a copy" (to this device) once something changed. No chat, presence, recording or audio upload.
 - **Projects page:**
   - The owner can rename, delete (with a confirm that names the project and says "deletes
     for all members"), share with a role picker, and change or remove members.

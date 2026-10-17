@@ -58,6 +58,23 @@ export function client(base: string, token?: string) {
   }
 }
 
+/** Resolves once the server refuses this token a live connection to the project (rejects if it syncs). */
+export const denied = (port: number, project: string, token: string) =>
+  new Promise<void>((resolve, reject) => {
+    const { provider } = connect(port, project, token)
+    provider.on('authenticationFailed', () => { provider.destroy(); resolve() })
+    provider.on('synced', () => { provider.destroy(); reject(new Error('synced but should be rejected')) })
+    setTimeout(() => reject(new Error('timeout')), 5000)
+  })
+
+/** `GET /projects/:id/snapshot`: the status and the document it carries (empty unless 200). */
+export async function snapshot(base: string, project: string, token?: string) {
+  const res = await fetch(`${base}/api/projects/${project}/snapshot`, { headers: token ? { authorization: `Bearer ${token}` } : {} })
+  const doc = new Y.Doc()
+  if (res.ok) Y.applyUpdate(doc, new Uint8Array(await res.arrayBuffer()))
+  return { status: res.status, doc }
+}
+
 export async function login(base: string, username: string, password = pw(username)) {
   const r = await client(base).post('/api/auth/login', { username, password })
   if (!r.body?.token) throw new Error(`login failed for ${username}: ${JSON.stringify(r.body)}`)

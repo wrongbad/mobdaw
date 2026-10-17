@@ -25,7 +25,6 @@ export const TABS: Record<string, TabName[]> = {
 export type HeadCtx = {
   doc: Y.Doc
   undo: Y.UndoManager
-  readOnly: boolean
   store: ProjectStore
   rec: Recorder
   drawers: ReturnType<typeof createDrawers>
@@ -61,7 +60,7 @@ function Tabs(p: { ctx: HeadCtx; id: string; names: TabName[] }) {
  * lane (as device knobs do) and can't be dragged.
  */
 function MixRow(p: { ctx: HeadCtx; scope: string; refs: (gain: HTMLInputElement) => void }) {
-  const { doc, undo, readOnly, store } = p.ctx
+  const { doc, undo, store } = p.ctx
   const mix = () => store.mixDevice(p.scope)
   const drive = () => p.ctx.drive.get(p.scope)
   const gain = (<input type="range" class="gain" min={0} max={1} step="any" title="volume" />) as HTMLInputElement
@@ -70,7 +69,7 @@ function MixRow(p: { ctx: HeadCtx; scope: string; refs: (gain: HTMLInputElement)
   gain.addEventListener('input', () => setMixParam(doc, p.scope, 'gain', posToGain(gain.valueAsNumber)))
   gain.addEventListener('pointerdown', () => undo.stopCapturing())
   const pan = knob({
-    min: -1, max: 1, value: 0, def: 0, bipolar: true, size: 20, disabled: readOnly,
+    min: -1, max: 1, value: 0, def: 0, bipolar: true, size: 20,
     title: (v) => (Math.abs(v) < 0.005 ? 'pan: centre (double-click to reset)' : `pan: ${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v) * 100)}`),
     onStart: () => undo.stopCapturing(), // one undo step per gesture
     onInput: (v) => setMixParam(doc, p.scope, 'pan', Math.abs(v) < 0.02 ? 0 : v),
@@ -82,13 +81,13 @@ function MixRow(p: { ctx: HeadCtx; scope: string; refs: (gain: HTMLInputElement)
   p.refs(gain)
   createEffect(() => {
     const g = drive().gain
-    gain.disabled = readOnly || g != null
+    gain.disabled = g != null
     const v = g ?? mix()?.params?.[MIX_GAIN] ?? 1
     if (g != null || !inUse(gain)) gain.value = String(gainToPos(v)) // (not while it is being dragged)
   })
   createEffect(() => {
     const pn = drive().pan
-    pan.setDisabled(readOnly || pn != null)
+    pan.setDisabled(pn != null)
     pan.set(pn ?? mix()?.params?.[MIX_PAN] ?? 0)
   })
   return <div class="ctl gain-row">{gain}{pan.el}</div>
@@ -110,7 +109,7 @@ export function MasterHead(p: { ctx: HeadCtx; refs: (r: HeadRefs) => void }) {
  * offers the track's menu.
  */
 export function TrackHead(p: { ctx: HeadCtx; id: string; host: HTMLElement; refs: (r: HeadRefs) => void }) {
-  const { doc, readOnly, store, rec } = p.ctx
+  const { doc, store, rec } = p.ctx
   const id = p.id
   // (the track can be gone from the doc a moment before its lane is: keep showing the last one)
   const track = createMemo<ReturnType<typeof store.tracks>[number]>((prev) => store.trackById[id] ?? prev)
@@ -123,7 +122,7 @@ export function TrackHead(p: { ctx: HeadCtx; id: string; host: HTMLElement; refs
   createEffect(on(kindIcon, (n) => setIcon(glyph, n)))
 
   const [renaming, setRenaming] = createSignal(false)
-  const rename = () => !readOnly && setRenaming(true)
+  const rename = () => setRenaming(true)
   const Name = () => (
     <Show when={renaming()} fallback={<span class="name" on:dblclick={rename}>{track().name}</span>}>
       <input class="rename" value={track().name}
@@ -145,7 +144,7 @@ export function TrackHead(p: { ctx: HeadCtx; id: string; host: HTMLElement; refs
   const delTrack = () => !locked() && confirm('delete this track and its clips?') && deleteTrack(doc, id)
   let menuClosed = false // this press just closed the menu: don't open it again
   const trackMenu = (e: MouseEvent) => {
-    if (readOnly || locked()) return
+    if (locked()) return
     popover(p.host, [
       ['rename', () => setRenaming(true)],
       ['delete track', () => void delTrack()],
@@ -178,12 +177,12 @@ export function TrackHead(p: { ctx: HeadCtx; id: string; host: HTMLElement; refs
         <span class="kind" data-icon={kindIcon()} title={kindLabel()}>{glyph}</span>
         <Name />
         <div class="ctl track-btns">
-          <button class="mute" classList={{ on: track().muted }} title="mute" disabled={readOnly}
+          <button class="mute" classList={{ on: track().muted }} title="mute"
             on:click={() => updateTrack(doc, id, { muted: !tracksMap(doc).get(id)?.get('muted') })}>M</button>
-          <button class="solo" classList={{ on: track().soloed }} title="solo" disabled={readOnly}
+          <button class="solo" classList={{ on: track().soloed }} title="solo"
             on:click={() => updateTrack(doc, id, { soloed: !tracksMap(doc).get(id)?.get('soloed') })}>S</button>
           <Show when={audio}>
-            <button class="record" classList={{ on: armed() }} title="arm for recording" disabled={readOnly} on:click={() => void rec.arm(id)}>R</button>
+            <button class="record" classList={{ on: armed() }} title="arm for recording" on:click={() => void rec.arm(id)}>R</button>
             <button class="listen" classList={{ on: rec.monitoring }} hidden={!armed()} title="monitor the input through this track's effects (use headphones)"
               on:click={() => rec.toggleMonitoring()}>I</button>
             <i class="meter" hidden={!armed()} title="input level" ref={(el) => (meter = el)} />

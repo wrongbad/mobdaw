@@ -51,7 +51,7 @@ export type ProjectSummary = {
   /** The owner's subscription has ended: nobody can edit until they resubscribe, and it is deleted at `retentionEndsAt`. */
   frozen: boolean
   retentionEndsAt: number | null
-  /** Anyone signed in who has the link can open it, read-only (not listed in their projects). */
+  /** Anyone who has the link can open a snapshot of it (not listed in their projects). */
   public: boolean
   /** An admin flagged this public project as a demo: it is listed on everyone's home page. */
   demo: boolean

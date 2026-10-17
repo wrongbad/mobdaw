@@ -10,18 +10,18 @@ import { HEADER } from './layout'
 
 const STEPS = 4 // steps per beat (a 1/16 note)
 
-export type DrumGridDeps = { doc: Y.Doc; undo: Y.UndoManager; readOnly: boolean }
+export type DrumGridDeps = { doc: Y.Doc; undo: Y.UndoManager }
 
-export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
+export function drumGrid({ doc, undo }: DrumGridDeps) {
   let clip: MidiClip | null = null
   let notes: Note[] = []
   let pxBeat = 48 // follows the timeline zoom
   let extent = 0 // ticks drawn: the clip's length, or out to the end of the timeline for a `forever` clip
 
-  const bpm = h('input', { type: 'number', min: 20, max: 400, step: 1, title: 'clip bpm', disabled: readOnly })
-  const beats = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in beats (3 for 3/4)', disabled: readOnly })
+  const bpm = h('input', { type: 'number', min: 20, max: 400, step: 1, title: 'clip bpm' })
+  const beats = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in beats (3 for 3/4)' })
   const view = segmented([{ value: 'piano', label: 'piano roll' }, { value: 'drums', label: 'drums' }], 'drums',
-    (v) => (readOnly ? view.set(v === 'drums' ? 'piano' : 'drums') : clip && setMidiView(doc, clip.id, v === 'drums' ? 'drums' : 'piano')), 'show this clip as a piano roll or a drum grid')
+    (v) => clip && setMidiView(doc, clip.id, v === 'drums' ? 'drums' : 'piano'), 'show this clip as a piano roll or a drum grid')
   const field = (label: string, ...kids: (Node | string)[]) => h('label', { className: 'ne-field' }, h('span', { className: 'ne-lbl' }, label), ...kids)
   bpm.onchange = () => clip && Number(bpm.value) > 0 && updateClip(doc, clip.id, { bpm: Number(bpm.value) })
   // The pattern is the loop when the clip loops, else the whole clip.
@@ -44,7 +44,7 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
   /** Toggle the hit at the cell under the pointer: a repeat's cell is its pattern's. */
   function toggle(e: PointerEvent, row: HTMLElement, pitch: number) {
     e.stopPropagation() // the clip underneath would otherwise start dragging
-    if (readOnly || e.button !== 0 || !clip) return
+    if (e.button !== 0 || !clip) return
     const pattern = patternTicks(clip)
     const at = Math.floor((((e.clientX - row.getBoundingClientRect().left) / pxBeat) * clip.ppq) / step()) * step()
     const tick = at % pattern
@@ -122,7 +122,7 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
       }
       return row
     })
-    const add = h('button', { className: 'dg-add', title: 'add a lofi drum on the next free note', disabled: readOnly, onclick: () => addDrum(doc, c.trackId) }, '+ add drum')
+    const add = h('button', { className: 'dg-add', title: 'add a lofi drum on the next free note', onclick: () => addDrum(doc, c.trackId) }, '+ add drum')
     add.onpointerdown = (e) => e.stopPropagation()
     grid.replaceChildren(...rows, add)
     grid.style.width = `${px(extent)}px`

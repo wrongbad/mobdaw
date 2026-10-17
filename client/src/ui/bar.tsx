@@ -11,9 +11,10 @@ const initials = (n: string) => n.split(/[\s@.]+/).filter(Boolean).slice(0, 2).m
 
 export type BarProps = {
   store: ProjectStore
-  readOnly: boolean
-  /** A project on this device: no chat. */
-  local: boolean
+  /** Synced with collaborators: only then are there chat and presence (and your own dot among them). */
+  live: boolean
+  /** A snapshot of a cloud project: edits stay on this page. */
+  snapshot: boolean
   user: AwarenessState['user']
   /** The existing transport widget (`transportControls().el`); the metronome button joins it, right of the time readout. */
   transport: HTMLElement
@@ -37,14 +38,16 @@ export function Bar(p: BarProps) {
   const clicking = () => p.store.tracks().some((t) => t.role === 'click' && !t.muted) // lit: a click track exists and is unmuted
   // The metronome is an ordinary MIDI track (role 'click'): the button makes it, and then mutes / unmutes it.
   const metro = (
-    <button class="metro" classList={{ on: clicking() }} disabled={p.readOnly} title="metronome: add a click track, then mute / unmute it" on:click={p.onClickTrack} />
+    <button class="metro" classList={{ on: clicking() }} title="metronome: add a click track, then mute / unmute it" on:click={p.onClickTrack} />
   ) as HTMLElement
   p.transport.append(metro) // sits right of the time readout
   return (
     <>
       <div class="bar-l">
         <a href={homeLink.href} on:click={homeLink.onclick} class="logo" title="all projects">mobdaw</a>
-        <Show when={p.readOnly}><span class="dim">view only</span></Show>
+        <Show when={p.snapshot}>
+          <span class="dim" title="you are looking at a snapshot of this project. Your changes stay on this page, are not shared and are lost when you leave, unless you save a copy to this device.">changes stay on this page</span>
+        </Show>
         <Show when={p.saveCopy?.shown()}>
           <button class="bar-btn" title="your changes are not saved: keep them as a project on this device" on:click={() => p.saveCopy!.onSave()}>save a copy</button>
         </Show>
@@ -54,14 +57,16 @@ export function Bar(p: BarProps) {
         <span class="pedal-st rec" hidden={p.loopText() == null} title="recording a loop: the time to the next boundary of the cycle (a loop starts and ends on it); the first loop runs press to press">{p.loopText()}</span>
         <span class="cpu" classList={{ hot: !!p.cpu()?.hot }} title="audio engine load: share of the real-time budget used by DSP (peak call in the last half second)">{p.cpu()?.text}</span>
         <span class={`status ${p.status().bad ? 'error' : 'dim'}`} on:click={p.onStatus}>{p.status().text}</span>
-        <span class="presence">
-          <Index each={users()}>{(u) => <span class="dot" title={u().username} style={{ background: u().color }}>{initials(u().username)}</span>}</Index>
-        </span>
+        <Show when={p.live}>
+          <span class="presence">
+            <Index each={users()}>{(u) => <span class="dot" title={u().username} style={{ background: u().color }}>{initials(u().username)}</span>}</Index>
+          </span>
+        </Show>
         <div class="bar-btns">
           <button class="bar-btn zoom" title="zoom out (ctrl + scroll)" on:click={() => p.onZoom(1 / 1.5)} innerHTML={iconHtml('zoomOut', 18)} />
           <button class="bar-btn zoom" title="zoom in (ctrl + scroll)" on:click={() => p.onZoom(1.5)} innerHTML={iconHtml('zoomIn', 18)} />
           <button class="bar-btn" title="render the whole project to a file" on:click={p.onExport}>export</button>
-          <Show when={!p.local}>
+          <Show when={p.live}>
             <button class="chat-btn" classList={{ on: p.chatOpen() }} title="chat" on:click={p.onChat}>{p.unread() ? `chat (${p.unread()})` : 'chat'}</button>
           </Show>
         </div>

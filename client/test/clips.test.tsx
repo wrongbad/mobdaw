@@ -12,7 +12,7 @@ const cleanup: (() => void)[] = []
 afterEach(() => cleanup.splice(0).forEach((f) => f()))
 
 const RATE = 48000
-function setup(readOnly = false) {
+function setup() {
   const doc = new Y.Doc()
   const awareness = new Awareness(doc)
   let peers: AwarenessState[] = []
@@ -25,7 +25,7 @@ function setup(readOnly = false) {
   const editor = () => ({ el: document.createElement('div'), update: vi.fn(), reset: vi.fn(), destroy() {} })
   const ne = editor(), dg = editor()
   const ctx = {
-    doc, undo: new Y.UndoManager([tracksMap(doc), clipsMap(doc)]), readOnly, store, sel,
+    doc, undo: new Y.UndoManager([tracksMap(doc), clipsMap(doc)]), store, sel,
     geo: { rate: () => RATE, pps: () => scale().pps, position: () => 0, lane: () => undefined, lanes: () => [], content: document.body, snapLine() {} },
     select: (ids: string[]) => sel.selectClips(ids),
     scale, total, ready: () => false, peaks: () => 0, viewW: () => 1000, scrollX: () => 0, scroller: document.body, header: 146, projectId: 'p',
@@ -146,13 +146,6 @@ describe('clips', () => {
     t.setPeers([{ user: { username: 'bob', color: 'red' }, recording: { trackId: a, start: 0 } }])
     expect(e1.classList.contains('loopable')).toBe(false)
     expect(e1).toBe(clips(host)[0])
-  })
-
-  it('loopable is off when read-only', () => {
-    const t = setup(true)
-    const a = addTrack(t.doc, 'a', 'midi')
-    addMidiClip(t.doc, { trackId: a, start: 0 })
-    expect(clips(lane(t, a))[0].classList.contains('loopable')).toBe(false)
   })
 
   it('a MIDI clip previews its notes, rebuilt when they change', () => {

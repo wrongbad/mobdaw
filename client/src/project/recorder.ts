@@ -14,10 +14,9 @@ import type { Session } from './session'
 export type Take = { trackId: string; trackName: string; start: number; journal: ReturnType<typeof takeJournal> }
 
 export type RecorderDeps = {
-  s: Pick<Session, 'projectId' | 'userId' | 'user' | 'setLocal'>
+  s: Pick<Session, 'projectId' | 'userId' | 'user' | 'setLocal' | 'snapshot'>
   doc: Y.Doc
   undo: Y.UndoManager
-  readOnly: boolean
   /** Read at each use: the project's sample rate and playback change (and are absent until the doc has synced). */
   rate(): number
   pb(): Playback | null
@@ -43,7 +42,7 @@ function sig<T>(init: T) {
 }
 
 export function createRecorder(d: RecorderDeps) {
-  const { s, doc, undo, readOnly } = d
+  const { s, doc, undo } = d
   const journalOf = d.journal ?? takeJournal
   const finish = d.finish ?? finishTake
   const current = sig<string | null>(null) // the loop commands' current track, as of the last change
@@ -89,7 +88,7 @@ export function createRecorder(d: RecorderDeps) {
   /** ●: play and capture from the playhead (onto a new track if none is armed); again to stop. */
   async function toggleRecord() {
     const pb = d.pb()
-    if (!pb || readOnly || preparing) return
+    if (!pb || s.snapshot || preparing) return
     if (loops?.recording) return void say('record: a loop is recording', true)
     if (take) return d.stop()
     if (!armed.v || !tracksMap(doc).has(armed.v) || !pb.recorder.armed) {
@@ -184,7 +183,7 @@ export function createRecorder(d: RecorderDeps) {
   }
   function makeLoops(): LoopPedal | null {
     const pb = d.pb()
-    if (!pb || readOnly) return null
+    if (!pb || s.snapshot) return null
     const io: LoopIO = {
       playing: () => !!d.pb()?.playing,
       play: () => d.startTransport(),
@@ -275,7 +274,7 @@ export function createRecorder(d: RecorderDeps) {
   /** Run a command heard at `perfTime` (performance.now clock; a key or MIDI event's timeStamp). */
   async function command(cmd: Cmd, perfTime: number) {
     const pb = d.pb()
-    if (!pb || readOnly || destroyed || loopArming) return
+    if (!pb || s.snapshot || destroyed || loopArming) return
     let at = perfTime
     if (cmd === 'record' && !loops?.recording) {
       if (take) return void say('loop: stop recording first', true)
@@ -306,7 +305,7 @@ export function createRecorder(d: RecorderDeps) {
     offMidi()
     offMidi = () => {}
     const id = getMidiInput()
-    if (!id || !midiSupported() || readOnly) return
+    if (!id || !midiSupported() || s.snapshot) return
     void openMidi().then(() => {
       if (destroyed || id !== getMidiInput()) return
       offMidi = onPress(id, (t, at) => {

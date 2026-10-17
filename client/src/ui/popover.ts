@@ -86,11 +86,11 @@ export function popoverPanel(anchor: HTMLElement, content: HTMLElement) {
   return showMenu(anchor, h('div', { className: 'popover panel' }, content))
 }
 
-/** Right-click on `el` offers a delete entry (after any `extra` ones). `run` is skipped (no menu) when `enabled` says no. */
-export function deleteMenu(el: HTMLElement, label: string, run: () => void, enabled: () => boolean = () => true, extra: MenuItem[] = []) {
+/** Right-click on `el` offers a delete entry (after any `extra` ones). */
+export function deleteMenu(el: HTMLElement, label: string, run: () => void, extra: MenuItem[] = []) {
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault()
     e.stopPropagation() // not the lane's background menu underneath
-    if (enabled()) popover(el, [...extra, [label, run]], [e.clientX, e.clientY])
+    popover(el, [...extra, [label, run]], [e.clientX, e.clientY])
   })
 }

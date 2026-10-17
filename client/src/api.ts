@@ -53,6 +53,12 @@ export const api = {
   projects: () => get<ProjectSummary[]>('/projects'),
   demos: () => get<ProjectSummary[]>('/projects/demos'),
   project: (id: string) => get<ProjectDetail>(`/projects/${id}`),
+  /** The project's whole document as one Yjs update, as of now (no live connection: see `openSnapshotSession`). */
+  projectSnapshot: async (id: string): Promise<Uint8Array> => {
+    const res = await fetch(`${import.meta.env.BASE_URL}api/projects/${id}/snapshot`)
+    if (!res.ok) throw new ApiError(res.status, (await res.json().catch(() => ({}))).error ?? 'error')
+    return new Uint8Array(await res.arrayBuffer())
+  },
   projectPreview: (id: string) => get<ProjectPreview>(`/projects/${id}/preview`),
   createProject: (b: CreateProjectRequest) => post<ProjectSummary>('/projects', b),
   renameProject: (id: string, name: string) => req<ProjectDetail>('PATCH', `/projects/${id}`, { name }),
