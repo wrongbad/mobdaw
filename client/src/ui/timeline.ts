@@ -71,7 +71,7 @@ type Src = SrcView & {
 
 /** The project's name in the bar opens its settings; `renameProject`, when given, lets them change the name (it saves it). `cloud` is set for server projects. */
 export function mountTimeline(s: Session, projectName: string, readOnly = false, renameProject?: (name: string) => Promise<unknown> | void,
-  cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean }) {
+  cloud?: { projectId: string; me: string; role: Role; saveCopy?: () => Promise<void>; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean }) {
   const { doc, undo } = s
   applyLayout()
   let pb: Playback | null = null // created once the doc has synced (needs meta.sampleRate)
@@ -83,6 +83,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let autoInfos = new Map<string, Map<string, AutoInfo>>() // owner id -> param -> what drives it
   const lanes = new Map<string, Lane>()
   /** A card is being dragged by its title bar: merged filter views split until it lands. */
+  /** A visitor (`s.scratch`) has changed their copy of the document. */
+  const [edited, setEdited] = createSignal(false)
   const [reordering, setReordering] = createSignal(false)
   let destroyed = false
 
@@ -249,7 +251,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const position = () => pb?.position() ?? 0
 
   const rec = createRecorder({
-    s, doc, undo, readOnly, rate, pb: () => pb, position: () => position(), say, onChange: () => syncRec(),
+    s, doc, undo, readOnly: readOnly || s.scratch, rate, pb: () => pb, position: () => position(), say, onChange: () => syncRec(),
     startTransport, stop, loopStatus: () => drawLoopStatus(),
   })
   // the top bar, the remote playheads, the headers, the drawers and the blocks on the lanes are Solid components; what is left here
@@ -274,7 +276,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const headCtx: HeadCtx = { doc, undo, readOnly, store, rec, drawers, avail, drive, toggleTab, autoMenu }
   disposers.push(
     mountBar(bar, { store, readOnly, local: s.local, user: s.user, transport: transport.el, status, cpu, loopText, unread, chatOpen,
-      onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: (f) => zoom.button(f), onExport: exportProject, onChat: toggleChat }),
+      onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: (f) => zoom.button(f), onExport: exportProject, onChat: toggleChat,
+      saveCopy: cloud?.saveCopy && { shown: edited, onSave: () => {
+        say('saving a copy on this device…')
+        cloud.saveCopy!().catch((err) => say(`could not save a copy: ${(err as Error).message}`, true))
+      } } }),
     mountRemoteHeads(overlay, { store, offset: HEADER, scale }),
     mountRemoteHeads(rulerHeads, { store, offset: 0, scale }),
     mountMasterHead(masterHead, headCtx, (r) => (masterGain = r.gain)),
@@ -903,6 +909,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         }
         continue
       }
+      if (s.scratch) {
+        say('sign in to upload audio', true)
+        continue
+      }
       say(`uploading ${f.name}…`)
       try {
         const m = await importFile(s.projectId, doc, f)
@@ -969,7 +979,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   // then start the engine at the project's sample rate.
   void s.synced.then(() => {
     if (destroyed) return
-    if (!readOnly) {
+    if (s.scratch) {
+      // (after the first sync, so what the server sent is not counted as an edit)
+      doc.on('update', (_u: Uint8Array, origin: unknown) => origin !== s.provider && setEdited(true))
+    }
+    if (!readOnly && !s.scratch) {
       migrateToV2(doc)
       migrateToV3(doc)
       sweepOrphans(doc)
@@ -988,8 +1002,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     measure()
     if (refreshPreviews()) ensurePreviewTick()
     zoom.fit() // (zoom is not remembered per project, so every open fits the song to the window)
-    if (!readOnly) sweepUnusedTakes(rec.takeCtx())
-    if (!readOnly) recoverTakes(rec.takeCtx()).then((n) => {
+    if (!readOnly && !s.scratch) sweepUnusedTakes(rec.takeCtx())
+    if (!readOnly && !s.scratch) recoverTakes(rec.takeCtx()).then((n) => {
       if (n && !destroyed) say(`recovered ${n} unfinished take${n > 1 ? 's' : ''}`)
     }, (err) => console.warn('take recovery:', err))
   })

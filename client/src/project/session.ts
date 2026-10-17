@@ -11,6 +11,11 @@ export type Session = {
   /** The collaboration connection; null for a project on this device (nothing to sync, no one to collaborate with). */
   provider: HocuspocusProvider | null
   local: boolean
+  /**
+   * A signed-out visitor to a public project: the server drops their writes, but they may edit their own copy of the document
+   * in the page (nothing is saved or shared unless they save a copy to this device). No uploads, no recording.
+   */
+  scratch: boolean
   awareness: Awareness
   undo: Y.UndoManager
   user: AwarenessState['user']
@@ -46,7 +51,7 @@ export function openSession(projectId: string, me: { id: number | null; username
   const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
   const synced = new Promise<void>((resolve) => (provider.synced ? resolve() : provider.on('synced', () => resolve())))
   return {
-    projectId, doc, provider, local: false, awareness, undo, user, userId: me.id, synced,
+    projectId, doc, provider, local: false, scratch: watching && me.id === null, awareness, undo, user, userId: me.id, synced,
     setLocal: (patch) => {
       if (watching) return
       for (const [k, v] of Object.entries(patch)) awareness.setLocalStateField(k, v)

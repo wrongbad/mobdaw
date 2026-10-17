@@ -28,6 +28,8 @@ export type BarProps = {
   onZoom(factor: number): void
   onExport(): void
   onChat(): void
+  /** A visitor's edits live only on this page: shown once there are some, saves them as a project on this device. */
+  saveCopy?: { shown: Accessor<boolean>; onSave(): void }
 }
 
 export function Bar(p: BarProps) {
@@ -43,6 +45,9 @@ export function Bar(p: BarProps) {
       <div class="bar-l">
         <a href={homeLink.href} on:click={homeLink.onclick} class="logo" title="all projects">mobdaw</a>
         <Show when={p.readOnly}><span class="dim">view only</span></Show>
+        <Show when={p.saveCopy?.shown()}>
+          <button class="bar-btn" title="your changes are not saved: keep them as a project on this device" on:click={() => p.saveCopy!.onSave()}>save a copy</button>
+        </Show>
       </div>
       {p.transport}
       <div class="bar-r">

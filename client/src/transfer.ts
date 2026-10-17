@@ -20,16 +20,18 @@ export async function collectLocal(id: string): Promise<ProjectContents> {
 }
 
 /** Everything in a cloud project: the live document and the audio it uses (downloaded from the project's library). */
-export async function collectCloud(id: string, me: Pick<Me, 'id' | 'username'>, progress?: Progress): Promise<ProjectContents> {
+export async function collectCloud(id: string, me: Pick<Me, 'id' | 'username'> | { id: null }, progress?: Progress, open?: Y.Doc): Promise<ProjectContents> {
   const detail = await api.project(id)
-  const session = openSession(id, me)
+  // `open`: the document already open in the editor (a visitor's copy, with their edits); otherwise the live one is fetched.
+  const session = open ? null : openSession(id, me as Pick<Me, 'id' | 'username'>)
   try {
-    await session.synced
-    const metas = Object.values(samplesMap(session.doc).toJSON())
+    await session?.synced
+    const source = open ?? session!.doc
+    const metas = Object.values(samplesMap(source).toJSON())
     const audio: ProjectContents['audio'] = []
     // The copy owns its audio: our own incoming takes come from this device and are ready there (docs/engine.md §9.3).
     const copy = new Y.Doc()
-    Y.applyUpdate(copy, Y.encodeStateAsUpdate(session.doc))
+    Y.applyUpdate(copy, Y.encodeStateAsUpdate(source))
     for (const [i, m] of metas.entries()) {
       progress?.(`${detail.name}: downloading audio ${i + 1} of ${metas.length}…`)
       if (m.status === 'incoming') {
@@ -50,7 +52,7 @@ export async function collectCloud(id: string, me: Pick<Me, 'id' | 'username'>, 
     }
     return { name: detail.name, state: Y.encodeStateAsUpdate(copy), audio }
   } finally {
-    session.destroy()
+    session?.destroy()
   }
 }
 
