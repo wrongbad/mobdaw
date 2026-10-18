@@ -19,7 +19,6 @@ export async function startTest(env: Record<string, string> = {}, dir = mkdtempS
     PORT: '0',
     DB_PATH: join(dir, 'db.sqlite'),
     STORAGE_DIR: join(dir, 'samples'),
-    SESSION_SECRET: 'test-secret',
     ...env,
   })
   // Bootstrap the admin the way `admin create-user --admin` would (the first user needs no invite).

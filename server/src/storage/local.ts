@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createWriteStream, mkdirSync } from 'node:fs'
 import { copyFile, mkdir, open, readdir, rename, rm, rmdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises'
 import { Hono } from 'hono'
 import { hmac, safeEqual } from '../auth.ts'
 import type { Config } from '../config.ts'
+import type { Db } from '../db.ts'
 import { isHash, objectKey, parseKey, parseLegacyKey, type LegacyOwners, type Storage, type StoredObject } from './index.ts'
 
 const UPLOAD_TTL = 15 * 60 * 1000
@@ -14,9 +15,13 @@ const DOWNLOAD_TTL = 15 * 60 * 1000
 
 export class LocalStorage implements Storage {
   routes = new Hono()
+  /** Signs the urls; generated on first boot and kept in the DB so urls survive restarts. */
+  private key: string
 
-  constructor(private config: Config, getMime: (owner: number, hash: string) => string | undefined) {
+  constructor(private config: Config, db: Db, getMime: (owner: number, hash: string) => string | undefined) {
     mkdirSync(config.storageDir, { recursive: true })
+    db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES('storage_url_key', ?)").run(randomBytes(32).toString('hex'))
+    this.key = (db.prepare("SELECT value FROM settings WHERE key = 'storage_url_key'").get() as { value: string }).value
 
     // Authorized by signature alone (op is part of the signed data, so a GET url can't PUT).
     const check = (op: string, key: string, exp: string | undefined, sig: string | undefined) =>
@@ -83,7 +88,7 @@ export class LocalStorage implements Storage {
   }
 
   private sign(op: string, key: string, exp: string | number) {
-    return hmac(this.config.sessionSecret, `${op}:${key}:${exp}`)
+    return hmac(this.key, `${op}:${key}:${exp}`)
   }
 
   private url(op: 'get' | 'put', key: string, ttl: number) {

@@ -47,8 +47,8 @@ Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Ru
 
 ## Notes
 - `node:sqlite` is built into Node 24; it may print an ExperimentalWarning.
-- Without `SESSION_SECRET` in dev, a random secret is used per boot, so a server restart logs
-  everyone out. Set one in `.env`.
+- Sessions are rows in the `sessions` table (SHA-256 of the cookie value), so they survive restarts. The key that signs
+  local-storage URLs is generated on first boot and kept in the `settings` table. There is no secret to configure.
 - **free / pro** ([`pro-tier.md`](pro-tier.md)): with no account the editor runs entirely in the browser. A local
   project's document is saved with `y-indexeddb` and its audio as blobs in IndexedDB (per project, keyed by SHA-256); the
   list of projects is in `localStorage`. A `.mobdaw` file (`client/src/projectFile.ts`) holds a project with its audio and is

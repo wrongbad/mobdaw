@@ -1,6 +1,10 @@
+import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { SESSION_MS, revokeSessions, sweepSessions } from '../src/auth.ts'
 import { openDb } from '../src/db.ts'
-import { ADMIN, admit, client, login, pw, startTest } from './helpers.ts'
+import { ADMIN, admit, client, login, pw, startTest, userId } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
 beforeAll(async () => { t = await startTest() })
@@ -45,12 +49,64 @@ describe('auth', () => {
     for (let i = 0; i < 8; i++) expect((await bad()).status).toBe(401)
     expect((await bad()).status).toBe(429)
   })
-  it('tampered token is rejected', async () => {
+  it('unknown, tampered and old-format tokens are rejected', async () => {
     const a = await login(t.base, ADMIN)
-    const [body, sig] = a.token!.split('.')
-    const forged = Buffer.from(JSON.stringify({ username: 'evil', exp: Date.now() + 1e6 })).toString('base64url')
-    expect((await client(t.base, `${forged}.${sig}`).get('/api/me')).status).toBe(401)
-    expect(body).toBeTruthy()
+    const old = `${Buffer.from(JSON.stringify({ uid: 1, exp: Date.now() + 1e6 })).toString('base64url')}.sig`
+    for (const bad of [a.token!.slice(0, -1) + (a.token!.endsWith('A') ? 'B' : 'A'), `${a.token}x`, old, 'x'.repeat(43)])
+      expect((await client(t.base, bad).get('/api/me')).status).toBe(401)
+    expect((await a.get('/api/me')).status).toBe(200)
+  })
+})
+
+describe('sessions', () => {
+  const rows = (username: string) => t.ctx.db.prepare('SELECT * FROM sessions WHERE user_id = ?').all(userId(t.ctx.db, username)) as
+    { token_hash: string; expires_at: number; created_at: number }[]
+
+  it('login creates a session; only its hash is stored', async () => {
+    await admit(t.base, await login(t.base, ADMIN), 'sess1')
+    const c = await login(t.base, 'sess1')
+    expect((await c.get('/api/me')).body.username).toBe('sess1')
+    const [r] = rows('sess1').slice(-1)
+    expect(r.token_hash).toBe(createHash('sha256').update(c.token!).digest('hex'))
+    expect(r.expires_at - r.created_at).toBe(SESSION_MS)
+    const all = JSON.stringify(t.ctx.db.prepare('SELECT * FROM sessions').all())
+    expect(all).not.toContain(c.token!)
+  })
+  it('logout revokes that session only', async () => {
+    await admit(t.base, await login(t.base, ADMIN), 'sess2')
+    const a = await login(t.base, 'sess2'), b = await login(t.base, 'sess2')
+    expect((await a.post('/api/auth/logout')).body).toEqual({ ok: true })
+    expect((await a.get('/api/me')).status).toBe(401)
+    expect((await b.get('/api/me')).status).toBe(200)
+  })
+  it('revokeSessions signs the user out everywhere (password change)', async () => {
+    await admit(t.base, await login(t.base, ADMIN), 'sess3')
+    const a = await login(t.base, 'sess3'), b = await login(t.base, 'sess3'), admin = await login(t.base, ADMIN)
+    expect(revokeSessions(t.ctx.db, userId(t.ctx.db, 'sess3'))).toBeGreaterThanOrEqual(2)
+    expect((await a.get('/api/me')).status).toBe(401)
+    expect((await b.get('/api/me')).status).toBe(401)
+    expect((await admin.get('/api/me')).status).toBe(200)
+  })
+  it('the admin passwd command revokes sessions', async () => {
+    await admit(t.base, await login(t.base, ADMIN), 'sess4')
+    const a = await login(t.base, 'sess4')
+    const run = spawnSync('node', ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'scripts/admin.ts', 'passwd', 'sess4'], {
+      cwd: join(import.meta.dirname, '..'), encoding: 'utf8',
+      env: { ...process.env, DB_PATH: t.config.dbPath, STORAGE_DIR: t.config.storageDir, MOBDAW_PASSWORD: 'brand-new-password' },
+    })
+    expect(run.status, run.stderr).toBe(0)
+    expect((await a.get('/api/me')).status).toBe(401)
+    expect((await client(t.base).post('/api/auth/login', { username: 'sess4', password: 'brand-new-password' })).status).toBe(200)
+  })
+  it('expired sessions are rejected and swept', async () => {
+    await admit(t.base, await login(t.base, ADMIN), 'sess5')
+    const c = await login(t.base, 'sess5')
+    t.ctx.db.prepare('UPDATE sessions SET expires_at = ? WHERE user_id = ?').run(Date.now() - 1, userId(t.ctx.db, 'sess5'))
+    expect((await c.get('/api/me')).status).toBe(401)
+    expect(rows('sess5').length).toBeGreaterThan(0)
+    expect(sweepSessions(t.ctx.db)).toBeGreaterThanOrEqual(1)
+    expect(rows('sess5')).toHaveLength(0)
+    expect((await (await login(t.base, ADMIN)).get('/api/me')).status).toBe(200) // live sessions survive the sweep
   })
 })
 

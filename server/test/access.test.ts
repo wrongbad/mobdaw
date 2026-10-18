@@ -217,7 +217,7 @@ describe('preview', () => {
 describe('audit', () => {
   it('detects leaked objects and bytes_used drift; --fix repairs both', async () => {
     const db = openDb(t.config.dbPath)
-    const storage = createStorage(t.config, () => undefined)
+    const storage = createStorage(t.config, t.ctx.db, () => undefined)
     const ctx = { config: t.config, db }
     try {
       const p = await create('Audit')

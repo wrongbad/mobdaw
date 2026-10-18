@@ -1,6 +1,6 @@
 import { audit, isClean } from '../src/audit.ts'
 import { RETENTION_MS, endExpiredSubscriptions, endSubscription, giftMonths, purgeExpiredData, resumeSubscription } from '../src/accounts.ts'
-import { createUser, findUser, getUser } from '../src/auth.ts'
+import { createUser, findUser, getUser, revokeSessions } from '../src/auth.ts'
 import { loadConfig } from '../src/config.ts'
 import { openDb } from '../src/db.ts'
 import { DEFAULT_GIFT_MONTHS, createInvite, listInvites, validGiftMonths } from '../src/routes/invites.ts'
@@ -68,7 +68,8 @@ if (cmd === 'create-invite') {
 } else if (cmd === 'passwd') {
   const user = needUser(args[0])
   ctx.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await hashPassword(await askPassword()), user.id)
-  console.log(`password updated for ${user.username}`)
+  const ended = revokeSessions(ctx.db, user.id) // signed out everywhere (open collab connections last until they reconnect)
+  console.log(`password updated for ${user.username}${ended ? `; ${ended} session${ended > 1 ? 's' : ''} ended` : ''}`)
 } else if (cmd === 'make-admin') {
   const user = needUser(args[0])
   ctx.db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(user.id)
@@ -95,7 +96,7 @@ if (cmd === 'create-invite') {
   const ended = endExpiredSubscriptions(ctx, null)
   const names = (ids: number[]) => ids.map((id) => getUser(ctx.db, id)?.username ?? `#${id}`).join(', ')
   if (ended.length) console.log(`subscription ended (pre-paid time ran out): ${names(ended)}`)
-  const purged = await purgeExpiredData(ctx, createStorage(config, () => undefined), null)
+  const purged = await purgeExpiredData(ctx, createStorage(config, ctx.db, () => undefined), null)
   console.log(purged.length ? `cloud data deleted for: ${names(purged)} (their accounts remain)` : 'nothing to purge')
 } else if (cmd === 'tree') {
   const q = <T>(sql: string, ...p: (string | number)[]) => ctx.db.prepare(sql).all(...p) as T[]
@@ -124,7 +125,7 @@ if (cmd === 'create-invite') {
   console.log(`totals: ${t.users} users, ${t.projects} projects, ${t.uploads} uploads, ${kb(t.bytes)} owned`)
 } else if (cmd === 'audit') {
   const fix = args.includes('--fix')
-  const storage = createStorage(config, () => undefined)
+  const storage = createStorage(config, ctx.db, () => undefined)
   const r = await audit(ctx, storage, fix)
   const show = (label: string, items: string[]) => items.length && console.log(`${label}:\n${items.map((i) => `  ${i}`).join('\n')}`)
   show('leaked objects (no upload row)', r.leaked)

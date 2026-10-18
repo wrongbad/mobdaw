@@ -1,8 +1,8 @@
 import { Hono, type Context } from 'hono'
-import { deleteCookie, setCookie } from 'hono/cookie'
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import type { LoginResponse, UserInfo } from '@mobdaw/shared'
 import {
-  SESSION_COOKIE, SESSION_MS, findUser, getMe, insertUser, requireSignedIn, signSession,
+  SESSION_COOKIE, SESSION_MS, createSession, endSession, findUser, getMe, insertUser, requireSignedIn,
   type Ctx, type Env,
 } from '../auth.ts'
 import { tx } from '../db.ts'
@@ -28,7 +28,7 @@ export function authRoutes(ctx: Ctx) {
   const r = new Hono<Env>()
 
   const startSession = (c: Context<Env>, userId: number) => {
-    const token = signSession(config.sessionSecret, userId)
+    const token = createSession(ctx, userId)
     setCookie(c, SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: 'Lax',
@@ -83,6 +83,7 @@ export function authRoutes(ctx: Ctx) {
   })
 
   r.post('/auth/logout', (c) => {
+    endSession(ctx, c.req.header('authorization')?.match(/^Bearer (.+)$/)?.[1] ?? getCookie(c, SESSION_COOKIE))
     deleteCookie(c, SESSION_COOKIE, { path: config.basePath || '/' })
     return c.json({ ok: true })
   })

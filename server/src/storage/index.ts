@@ -1,5 +1,6 @@
 import type { Hono } from 'hono'
 import type { Config } from '../config.ts'
+import type { Db } from '../db.ts'
 import { LocalStorage } from './local.ts'
 import { S3Storage } from './s3.ts'
 
@@ -53,6 +54,6 @@ export function parseLegacyKey(key: string): { username: string; hash: string } 
   return m ? { username: Buffer.from(m[1], 'hex').toString(), hash: m[2] } : null
 }
 
-export function createStorage(config: Config, getMime: (owner: number, hash: string) => string | undefined): Storage {
-  return config.storageDriver === 's3' ? new S3Storage(config) : new LocalStorage(config, getMime)
+export function createStorage(config: Config, db: Db, getMime: (owner: number, hash: string) => string | undefined): Storage {
+  return config.storageDriver === 's3' ? new S3Storage(config) : new LocalStorage(config, db, getMime)
 }

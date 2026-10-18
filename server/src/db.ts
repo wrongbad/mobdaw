@@ -141,6 +141,15 @@ const migrations: (string | ((db: Db) => void))[] = [
   'ALTER TABLE projects ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0;',
   // A public project an admin has marked as a demo: listed on the home page for everyone, signed in or not.
   'ALTER TABLE projects ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0;',
+  // Server-side sessions, stored as the SHA-256 (hex) of the cookie value; replaces the HMAC-signed cookies (and SESSION_SECRET).
+  // Foreign keys are not enforced here: sessions are deleted explicitly where a user is (auth.ts revokeSessions).
+  // `settings` holds server-generated values such as the key that signs local storage URLs.
+  `CREATE TABLE sessions(
+     token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+   CREATE INDEX sessions_user ON sessions(user_id);
+   CREATE INDEX sessions_expires ON sessions(expires_at);
+   CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
 ]
 
 export function openDb(path: string): Db {

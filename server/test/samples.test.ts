@@ -35,7 +35,7 @@ beforeAll(async () => {
   alice = await admit(t.base, admin, 'alice')
   bob = await admit(t.base, admin, 'bob')
   db = openDb(t.config.dbPath)
-  storage = createStorage(t.config, () => undefined)
+  storage = createStorage(t.config, t.ctx.db, () => undefined)
   pA = await mk(admin, 'A')
 })
 afterAll(async () => {
@@ -218,7 +218,7 @@ describe('project delete and upload ownership', () => {
     const bobBefore = await used(bob)
     const Y = await upload(bob, A, dy)
     expect(await used(bob)).toBe(bobBefore + 32)
-    const storage = createStorage(t.config, () => undefined)
+    const storage = createStorage(t.config, t.ctx.db, () => undefined)
 
     expect((await alice.del(`/api/projects/${A}`)).status).toBe(404)
     expect((await bob.del(`/api/projects/${A}`)).status).toBe(403) // editor can't delete
@@ -269,7 +269,7 @@ describe('sweepSamples', () => {
     a = await login(s.base, ADMIN)
     P1 = await mk(a)
     sdb = openDb(s.config.dbPath)
-    storage = createStorage(s.config, () => undefined)
+    storage = createStorage(s.config, sdb, () => undefined)
   })
   afterAll(async () => {
     sdb.close()

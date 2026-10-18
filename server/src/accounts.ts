@@ -1,5 +1,5 @@
 import { addMonths, docName } from '@mobdaw/shared'
-import { getUser, type Ctx } from './auth.ts'
+import { getUser, revokeSessions, type Ctx } from './auth.ts'
 import { kick, kickUser, markMissing, type Collab } from './collab.ts'
 import { tx } from './db.ts'
 import { sweepSamples } from './routes/samples.ts'
@@ -101,6 +101,7 @@ export function deleteAccount(ctx: Ctx, collab: Collab | null, userId: number): 
   const { projects, links } = tx(db, () => {
     const deleted = deleteCloudData(ctx, userId)
     db.prepare('DELETE FROM project_members WHERE user_id = ?').run(userId)
+    revokeSessions(db, userId)
     db.prepare('DELETE FROM users WHERE id = ?').run(userId)
     return deleted
   })

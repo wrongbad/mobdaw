@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { Context, MiddlewareHandler } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { GRANDFATHERED_MONTHS, addMonths, type Me, type Role } from '@mobdaw/shared'
@@ -9,14 +9,10 @@ import { hashPassword } from './password.ts'
 export const SESSION_COOKIE = 'mobdaw_session'
 export const SESSION_MS = 30 * 24 * 3600 * 1000
 
-/** The signed token holds only the user's id: usernames can change. */
-export type SessionToken = { uid: number; exp: number }
 /** The signed-in user of a request. Key everything by `id`; `username` is for display. */
 export type Session = { id: number; username: string }
 export type Env = { Variables: { session: Session | null } }
 export type Ctx = { config: Config; db: Db }
-
-const b64u = (b: Buffer | string) => Buffer.from(b).toString('base64url')
 
 /** Constant-time HMAC-SHA256 (base64url) of `data`. */
 export const hmac = (secret: string, data: string) => createHmac('sha256', secret).update(data).digest('base64url')
@@ -24,22 +20,6 @@ export const hmac = (secret: string, data: string) => createHmac('sha256', secre
 export function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a), bb = Buffer.from(b)
   return ab.length === bb.length && timingSafeEqual(ab, bb)
-}
-
-export function signSession(secret: string, userId: number): string {
-  const body = b64u(JSON.stringify({ uid: userId, exp: Date.now() + SESSION_MS } satisfies SessionToken))
-  return `${body}.${hmac(secret, body)}`
-}
-
-export function verifySession(secret: string, token: string | undefined | null): SessionToken | null {
-  const [body, sig, extra] = (token ?? '').split('.')
-  if (!body || !sig || extra !== undefined || !safeEqual(sig, hmac(secret, body))) return null
-  try {
-    const s = JSON.parse(Buffer.from(body, 'base64url').toString()) as SessionToken
-    return Number.isInteger(s.uid) && s.exp > Date.now() ? s : null
-  } catch {
-    return null
-  }
 }
 
 export type UserRow = {
@@ -64,12 +44,34 @@ function devAccount(ctx: Ctx): Session {
 }
 export const isAdmin = (ctx: Ctx, userId: number) => !!getUser(ctx.db, userId)?.is_admin
 
-/** The signed-in user for a session token, or null if invalid, expired or the user was deleted. */
+/** Sessions are stored by the SHA-256 of the cookie value, so a leaked database can't be used to sign in. */
+const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
+
+/** Start a session for the user. Returns the raw token (the cookie value); only its hash is stored. */
+export function createSession(ctx: Ctx, userId: number, now = Date.now()): string {
+  const token = randomBytes(32).toString('base64url')
+  ctx.db.prepare('INSERT INTO sessions(token_hash, user_id, created_at, expires_at) VALUES(?, ?, ?, ?)').run(hashToken(token), userId, now, now + SESSION_MS)
+  return token
+}
+
+/** End one session (logout). */
+export const endSession = (ctx: Ctx, token: string | undefined | null) => {
+  if (token) ctx.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token))
+}
+
+/** Sign the user out everywhere (password change, account deletion). Returns how many sessions ended. */
+export const revokeSessions = (db: Db, userId: number) => Number(db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId).changes)
+
+/** Drop expired sessions (the periodic sweep). */
+export const sweepSessions = (db: Db, now = Date.now()) => Number(db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now).changes)
+
+/** The signed-in user for a session token, or null if unknown or expired. */
 export function sessionUser(ctx: Ctx, token: string | undefined | null): Session | null {
   if (ctx.config.devNoAuth) return devAccount(ctx) // DEV_NO_AUTH: everyone is the dev account
-  const s = verifySession(ctx.config.sessionSecret, token)
-  const u = s && getUser(ctx.db, s.uid)
-  return u ? { id: u.id, username: u.username } : null
+  if (!token) return null
+  return (ctx.db
+    .prepare('SELECT u.id, u.username FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?')
+    .get(hashToken(token), Date.now()) as Session | undefined) ?? null
 }
 
 /** The user's membership role in a project, or undefined. */

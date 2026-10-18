@@ -195,7 +195,10 @@ describe('deleting your account', () => {
     expect((await client(t.base).post('/api/me/delete', { password: pw('ned') })).status).toBe(401)
     expect((await ned.get('/api/me')).status).toBe(200) // nothing happened
 
+    const second = await login(t.base, 'ned')
     expect((await ned.post('/api/me/delete', { password: pw('ned') })).body).toEqual({ ok: true })
+    expect((await second.get('/api/me')).status).toBe(401)
+    expect(t.ctx.db.prepare('SELECT 1 FROM sessions WHERE user_id = ?').get(nedId)).toBeUndefined()
     expect((await ned.get('/api/me')).status).toBe(401)
     expect((await amy.get(`/api/projects/${N}`)).status).toBe(404)
     await until(() => t.ctx.db.prepare('SELECT 1 FROM uploads WHERE hash = ?').get(h) === undefined)

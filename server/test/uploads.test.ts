@@ -31,7 +31,7 @@ beforeAll(async () => {
   alice = await admit(t.base, admin, 'alice')
   bob = await admit(t.base, admin, 'bob')
   db = openDb(t.config.dbPath)
-  storage = createStorage(t.config, () => undefined)
+  storage = createStorage(t.config, t.ctx.db, () => undefined)
 })
 afterAll(async () => {
   db.close()

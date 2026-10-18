@@ -1,6 +1,6 @@
 import { getRequestListener } from '@hono/node-server'
 import { createApp } from './app.ts'
-import type { Ctx } from './auth.ts'
+import { sweepSessions, type Ctx } from './auth.ts'
 import { endExpiredSubscriptions, purgeExpiredData } from './accounts.ts'
 import { createCollab, enforceReadOnly } from './collab.ts'
 import { loadConfig, type Config } from './config.ts'
@@ -12,7 +12,7 @@ import { createStorage } from './storage/index.ts'
 export async function startServer(config: Config) {
   const db = openDb(config.dbPath)
   const ctx: Ctx = { config, db }
-  const storage = createStorage(config, (owner, hash) =>
+  const storage = createStorage(config, db, (owner, hash) =>
     (db.prepare('SELECT mime FROM uploads WHERE owner_id = ? AND hash = ?').get(owner, hash) as { mime: string } | undefined)?.mime,
   )
   const collab = createCollab(ctx)
@@ -30,7 +30,8 @@ export async function startServer(config: Config) {
     })
     .catch((e) => console.error('storage migration failed', e))
   const sweep = () =>
-    Promise.resolve(endExpiredSubscriptions(ctx, collab))
+    Promise.resolve(sweepSessions(db))
+      .then(() => endExpiredSubscriptions(ctx, collab))
       .then(() => purgeExpiredData(ctx, storage, collab))
       .then(() => sweepSamples(ctx, storage))
       .catch((e) => console.error('sweep failed', e))

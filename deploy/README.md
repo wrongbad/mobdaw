@@ -12,19 +12,18 @@ the server bundle `server/dist/main.mjs`, so boot doesn't transpile with tsx). O
 the `/www/sites/mobdaw/current` symlink to it; then `www@mobdaw` restarts and runs `deploy/start`. Caddy
 serves `current/client/dist` directly. Deploy log: `journalctl -u www-deploy@mobdaw -f`; server log:
 `journalctl -u www@mobdaw -f`; last built commit: `/www/sites/mobdaw/deployed`.
-The server needs Node 24 (the box installs it). `/www/sites/mobdaw/.env` and `/www/sites/mobdaw/data` exist
-only on the box, outside the checkout.
+The server needs Node 24 (the box installs it). `/www/sites/mobdaw/data` exists only on the box, outside the checkout.
 
 ## Server env
 Plain config is in the box repo, `env/mobdaw.env` (`PUBLIC_URL`, `DB_PATH`, S3 bucket and region); the box
-sets `PORT` and `DATA_DIR`. The only secret, `SESSION_SECRET`, goes in `/www/sites/mobdaw/.env` (owned by
-`www-mobdaw`, mode 600): `SESSION_SECRET=<openssl rand -hex 32>`.
+sets `PORT` and `DATA_DIR`. mobdaw needs no secrets file: sessions are stored hashed in the SQLite DB, and the key that
+signs local-storage URLs is generated into it on first boot. (A leftover `SESSION_SECRET` is ignored.)
 
 First admin and invites, on the server:
 ```
 cd /www/sites/mobdaw/current/server
-sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/box/env/mobdaw.env --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-user you --admin   # prompts for a password
-sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/box/env/mobdaw.env --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-invite --days 7   # prints a /#/register/<code> link
+sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/box/env/mobdaw.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-user you --admin   # prompts for a password
+sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/box/env/mobdaw.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-invite --days 7   # prints a /#/register/<code> link
 ```
 Admins can also make invites from the app (invites page). Friends register with username and
 password (no email); `passwd <username>` resets a password. Logins are rate-limited per username.

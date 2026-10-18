@@ -66,7 +66,6 @@ deploy/Caddyfile, deploy/mobdaw.service, deploy/README.md
 |---|---|---|
 | PORT | 8787 | |
 | PUBLIC_URL | http://localhost:5173 | Used to build invite links; its path (e.g. `/mobdaw`) is the base path the app is served under. |
-| SESSION_SECRET | random per boot in dev, required in prod | HMAC key for session tokens and signed storage URLs. |
 | DB_PATH | ./data/mobdaw.db | |
 | STORAGE_DRIVER | local | `local` or `s3`. |
 | STORAGE_DIR | ./data/samples | Used by the local driver. |
@@ -85,8 +84,8 @@ deploy/Caddyfile, deploy/mobdaw.service, deploy/README.md
     hash). 8 failures per username in 15 minutes return 429 `too_many_attempts` (in memory).
   - There is no self-serve password change; an admin runs `npm run admin -- passwd <username>`.
 - **Session:**
-  - The server mints its own token: `base64url(JSON{username,exp}) + "." + HMAC-SHA256`.
-    It lasts 30 days. It is only honored while the user still exists.
+  - The server mints a random 32-byte token (base64url) and stores only its SHA-256 in the `sessions` table.
+    It lasts 30 days. Logout, a password change (admin `passwd`) and account deletion delete the rows; expired rows are swept every 15 minutes.
   - The token is set as an httpOnly cookie `mobdaw_session` (SameSite=Lax; Secure when
     PUBLIC_URL is https; Path = PUBLIC_URL's path). It is also returned in the JSON body so the
     WS provider can pass it as `token`.
