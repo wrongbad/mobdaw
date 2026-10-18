@@ -31,6 +31,9 @@ function compute(buf: AudioBuffer) {
   return out
 }
 
+/** Whether decoding this sample's peaks failed (so a placeholder waiting on them should stop). */
+export const peaksFailed = (hash: string, rate: number) => failed.has(`${rate}:${hash}`)
+
 /** Peaks if already computed; otherwise starts the (cached) decode and returns undefined until `onPeaks` fires. */
 export function peaksFor(projectId: string, hash: string, rate: number): Float32Array | undefined {
   const k = `${rate}:${hash}`

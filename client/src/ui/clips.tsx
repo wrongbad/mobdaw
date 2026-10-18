@@ -5,7 +5,7 @@
 import { DEVICES, clipLength, deletePad, isForever, isLooping, type AudioClip, type Clip, type MidiClip, type Note, type SampleMeta } from '@mobdaw/shared'
 import { render } from 'solid-js/web'
 import { For, createEffect, createMemo, createRenderEffect, type Accessor } from 'solid-js'
-import { peaksFor, storedPeaks } from '../audio/peaks'
+import { peaksFailed, peaksFor, storedPeaks } from '../audio/peaks'
 import { h } from '../dom'
 import { playable } from '../samples'
 import { sameList } from './deviceCard'
@@ -99,9 +99,16 @@ function ClipEl(p: { ctx: ClipsCtx; clip: Clip; src: SrcView | null }) {
   const meta = () => (audio ? store.samples[(c as AudioClip).sourceHash] : undefined)
   const canPlay = () => !audio || (!!meta() && playable(meta()!))
   const status = () => meta()?.status // incoming and missing audio is drawn from the stored peaks (docs/engine.md §9.3)
+  /** An audio clip whose sample is still downloading/decoding: drawn as a pulsing placeholder (with the stored waveform, if any). */
+  const loading = () => audio && !!meta() && canPlay() && !status() && !livePeaks() && !peaksFailed((c as AudioClip).sourceHash, rate())
+  const livePeaks = () => {
+    void ctx.peaks() // (re-read when a decode finishes)
+    return ctx.ready() && meta() && canPlay() && !status() ? peaksFor(ctx.projectId, (c as AudioClip).sourceHash, rate()) : undefined
+  }
   const label = () => {
     const m = meta()
     if (!m) return '…'
+    if (loading()) return `${m.name} · loading…`
     if (status() === 'incoming') return `${m.name} · ${ctx.incomingLabel(m)}`
     if (status() === 'missing') return `${m.name} · audio deleted`
     return canPlay() ? m.name : `${m.name} · too long to play yet`
@@ -116,7 +123,7 @@ function ClipEl(p: { ctx: ClipsCtx; clip: Clip; src: SrcView | null }) {
     createEffect(() => {
       void [ctx.ready(), ctx.peaks(), ctx.viewW(), p.src ? p.src.scrollX() : ctx.scrollX()] // (redrawn when it scrolls, the zoom, the clip or the peaks change)
       const m = meta()
-      const pk = !ctx.ready() || !canPlay() || !m ? undefined : status() ? storedPeaks(m, rate()) : peaksFor(ctx.projectId, (c as AudioClip).sourceHash, rate())
+      const pk = !ctx.ready() || !canPlay() || !m ? undefined : status() ? storedPeaks(m, rate()) : livePeaks() ?? storedPeaks(m, rate())
       if (pk) drawVisibleWave(c as AudioClip, w, pk, width(), p.src ? { pps: cpps(), scroller: p.src.view, off: 0 } : { pps: cpps(), scroller: ctx.scroller, off: ctx.header }, rate())
       else w.cv.style.display = 'none'
     })
@@ -149,7 +156,7 @@ function ClipEl(p: { ctx: ClipsCtx; clip: Clip; src: SrcView | null }) {
     <div class="clip" ref={el}
       classList={{
         forever: forever(), looping: isLooping(c), loopable: !p.src && !store.locks().has(c.trackId), midi: !audio,
-        editing: open(), sel: sel.clips.includes(c.id), unplayable: !canPlay(), incoming: status() === 'incoming', missing: status() === 'missing',
+        editing: open(), sel: sel.clips.includes(c.id), unplayable: !canPlay(), incoming: status() === 'incoming', loading: loading(), missing: status() === 'missing',
       }}
       style={{ left: `${(c.start / rate()) * cpps()}px`, width: `${width()}px`, outline: ctx.store.outlines().has(c.id) ? `2px solid ${ctx.store.outlines().get(c.id)}` : '' }}
       on:pointerdown={(ev) => clipDown(ctx, ev, c.id)}

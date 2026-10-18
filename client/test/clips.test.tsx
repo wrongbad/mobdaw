@@ -194,7 +194,9 @@ describe('clips', () => {
     for (const [i, hash] of ['ok', 'big', 'inc', 'gone', 'unknown'].entries()) addAudioClip(t.doc, { trackId: a, sourceHash: hash, start: i * RATE, length: RATE })
     const [ok, big, inc, gone, unknown] = clips(lane(t, a, 'audio'))
     const label = (e: HTMLElement) => e.querySelector('.label')!.textContent
-    expect(label(ok)).toBe('ok')
+    expect(label(ok)).toBe('ok · loading…') // (the engine isn't ready, so no peaks yet: the placeholder shows)
+    expect(ok.classList.contains('loading')).toBe(true)
+    expect(inc.classList.contains('loading')).toBe(false)
     expect(ok.classList.contains('unplayable')).toBe(false)
     expect(label(big)).toContain('too long to play yet')
     expect(big.classList.contains('unplayable')).toBe(true)
@@ -205,7 +207,7 @@ describe('clips', () => {
     expect(label(unknown)).toBe('…')
     // the sample arriving later patches the label in place
     meta('unknown', { name: 'late' })
-    expect(label(unknown)).toBe('late')
+    expect(label(unknown)).toBe('late · loading…')
   })
 })
 

@@ -441,11 +441,11 @@ button.danger:hover { color: var(--danger); }
 .ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: var(--ok); transition: width 60ms linear; }
 .ctl .meter.clipping::before { background: var(--danger); }
 .ctl .meter[hidden] { display: none; }
-.clip.incoming { background: var(--clip); animation: incoming 1.6s ease-in-out infinite; }
+.clip.incoming, .clip.loading { background: var(--clip); animation: incoming 1.6s ease-in-out infinite; }
 .clip.missing { opacity: 0.55; background: repeating-linear-gradient(135deg, var(--clip) 0 6px, var(--raise) 6px 12px); }
 @keyframes incoming { 50% { opacity: 0.55; } }
 @media (prefers-reduced-motion: reduce) {
-  .clip.incoming { animation: none; box-shadow: none; outline: 1px dashed var(--dim); outline-offset: -2px; }
+  .clip.incoming, .clip.loading { animation: none; box-shadow: none; outline: 1px dashed var(--dim); outline-offset: -2px; }
 }
 /* a track someone else is recording on is read-only */
 .lane.locked .clip, .lane.locked .fx, .lane.locked .x { pointer-events: none; }
