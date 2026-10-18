@@ -16,21 +16,15 @@ The server needs Node 24 (the box installs it). `/www/sites/mobdaw/.env` and `/w
 only on the box, outside the checkout.
 
 ## Server env
-`/www/sites/mobdaw/.env` (owned by `www-mobdaw`, mode 600):
-```
-PORT=8787
-PUBLIC_URL=https://wrongbad.com/mobdaw
-SESSION_SECRET=<openssl rand -hex 32>
-DB_PATH=/www/sites/mobdaw/data/mobdaw.db
-STORAGE_DRIVER=s3
-S3_BUCKET=your-bucket
-S3_REGION=us-east-1
-```
+Plain config is in the box repo, `env/mobdaw.env` (`PUBLIC_URL`, `DB_PATH`, S3 bucket and region); the box
+sets `PORT` and `DATA_DIR`. The only secret, `SESSION_SECRET`, goes in `/www/sites/mobdaw/.env` (owned by
+`www-mobdaw`, mode 600): `SESSION_SECRET=<openssl rand -hex 32>`.
+
 First admin and invites, on the server:
 ```
 cd /www/sites/mobdaw/current/server
-sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-user you --admin   # prompts for a password
-sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-invite --days 7   # prints a /#/register/<code> link
+sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/box/env/mobdaw.env --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-user you --admin   # prompts for a password
+sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/box/env/mobdaw.env --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-invite --days 7   # prints a /#/register/<code> link
 ```
 Admins can also make invites from the app (invites page). Friends register with username and
 password (no email); `passwd <username>` resets a password. Logins are rate-limited per username.
