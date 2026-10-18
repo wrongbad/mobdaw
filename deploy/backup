@@ -1,0 +1,3 @@
+#!/bin/sh
+# Run nightly by the box (www-backup@mobdaw) as www-mobdaw, with the site's env: snapshot the DB (to S3 in prod).
+cd server && exec node --disable-warning=ExperimentalWarning --import tsx scripts/backup.ts

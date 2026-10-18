@@ -41,6 +41,7 @@ Attach an IAM role to the instance with:
   "Version": "2012-10-17",
   "Statement": [
     {"Effect":"Allow","Action":["s3:PutObject","s3:GetObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::mobdaw-360949415650-us-east-1-an/samples/*"]},
+    {"Effect":"Allow","Action":"s3:PutObject","Resource":"arn:aws:s3:::mobdaw-360949415650-us-east-1-an/backups/*"},
     {"Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::your-bucket"}
   ]
 }
@@ -56,17 +57,13 @@ bodies that don't match.
 Billing, Budgets, Create budget, "Cost budget", monthly, e.g. $10, with email alerts at 80% actual and 100% forecasted.
 
 ## Nightly SQLite backup
-`/etc/cron.daily/mobdaw-backup` (executable):
-```sh
-#!/bin/sh
-set -e
-f=/tmp/mobdaw-$(date +%F).db
-sqlite3 /www/sites/mobdaw/data/mobdaw.db ".backup '$f'"   # or: VACUUM INTO '$f'
-aws s3 cp "$f" s3://your-bucket/backups/$(basename "$f")
-rm -f "$f"
-```
-Backups go under `backups/`, outside the `samples/*` prefix. Add an S3 lifecycle rule to expire them
-after ~30 days. The instance role needs `s3:PutObject` on `backups/*` too.
+`deploy/backup` (`server/scripts/backup.ts` → `src/backup.ts`) snapshots the DB with `VACUUM INTO` and
+uploads it to `s3://<S3_BUCKET>/backups/mobdaw-YYYY-MM-DD.db` (with `STORAGE_DRIVER=local` it keeps the
+newest 7 in `backups/` next to the DB). The box runs it nightly as `www-backup@mobdaw`; run one now with
+`sudo systemctl start www-backup@mobdaw`, log in `journalctl -u www-backup@mobdaw`.
+The instance role needs `s3:PutObject` on `backups/*` (see the policy above), and an S3 lifecycle rule on
+the `backups/` prefix should expire them after ~30 days. Restore: stop `www@mobdaw`, copy the file to
+`DB_PATH` (owned by `www-mobdaw`), start it.
 
 ## Notes
 - Removing a member (or deleting a project) closes their open WebSocket immediately. Signed
