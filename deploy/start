@@ -1,0 +1,3 @@
+#!/bin/sh
+# The box runs this as www@mobdaw, with PORT and DATA_DIR set and /www/sites/mobdaw/.env loaded.
+exec node --disable-warning=ExperimentalWarning server/dist/main.mjs

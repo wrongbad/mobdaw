@@ -5,30 +5,31 @@ it serves `client/dist` and proxies `/mobdaw/api/*` and `/mobdaw/collab*` to `lo
 the `/mobdaw` prefix (so the server itself still routes `/api` and `/collab`). `PUBLIC_URL` carries the
 prefix; the server derives cookie paths and local-storage URLs from it.
 
-Deploy from the parent folder with `./upload.sh mobdaw` (builds the wasm engine, client and server bundle
-(`server/dist/main.mjs`, so boot doesn't transpile with tsx) locally, rsyncs, runs `npm ci --omit=dev` on the server, then restarts the `www-mobdaw` unit). First time, or after
-changing `systemd/` or `setup.sh`, run `./upload.sh install` (it also runs `setup.sh` on the server). Every site is a systemd unit (`../../systemd/`, installed by `setup.sh`) that starts on boot and
-restarts on failure. Logs are in the persistent journal: `journalctl -u www-mobdaw -f`, or all sites with
-`journalctl -u 'www-*'`. Status: `systemctl status 'www-*'`.
-The server needs Node 24, and Caddy at `/www/proxy/caddy`. `/www/mobdaw/.env` and `/www/mobdaw/data`
-exist only on the server (excluded from rsync).
+The box is set up from [wrongbad/kyle.fi](https://github.com/wrongbad/kyle.fi) (`sites.conf` + `Caddyfile` +
+`install.sh`). It deploys this repo's `main` on every push: a GitHub webhook makes it fetch the branch into
+`/www/sites/mobdaw/src` and run `deploy/build` (wasm engine, client, and the server bundle
+`server/dist/main.mjs`, so boot doesn't transpile with tsx), then restart `www@mobdaw`, which runs
+`deploy/start`. Caddy serves `src/client/dist` directly. Deploy log: `journalctl -u www-deploy@mobdaw -f`;
+server log: `journalctl -u www@mobdaw -f`; live commit: `/www/sites/mobdaw/deployed`.
+The server needs Node 24 (the box installs it). `/www/sites/mobdaw/.env` and `/www/sites/mobdaw/data` exist
+only on the box, outside the checkout.
 
 ## Server env
-`/www/mobdaw/.env`:
+`/www/sites/mobdaw/.env` (owned by `www-mobdaw`, mode 600):
 ```
 PORT=8787
 PUBLIC_URL=https://wrongbad.com/mobdaw
 SESSION_SECRET=<openssl rand -hex 32>
-DB_PATH=./data/mobdaw.db
+DB_PATH=/www/sites/mobdaw/data/mobdaw.db
 STORAGE_DRIVER=s3
 S3_BUCKET=your-bucket
 S3_REGION=us-east-1
 ```
 First admin and invites, on the server:
 ```
-cd /www/mobdaw/server
-node --env-file=/www/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-user you --admin   # prompts for a password
-node --env-file=/www/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-invite --days 7   # prints a /#/register/<code> link
+cd /www/sites/mobdaw/src/server
+sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-user you --admin   # prompts for a password
+sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-invite --days 7   # prints a /#/register/<code> link
 ```
 Admins can also make invites from the app (invites page). Friends register with username and
 password (no email); `passwd <username>` resets a password. Logins are rate-limited per username.
@@ -66,7 +67,7 @@ Billing, Budgets, Create budget, "Cost budget", monthly, e.g. $10, with email al
 #!/bin/sh
 set -e
 f=/tmp/mobdaw-$(date +%F).db
-sqlite3 /www/mobdaw/data/mobdaw.db ".backup '$f'"   # or: VACUUM INTO '$f'
+sqlite3 /www/sites/mobdaw/data/mobdaw.db ".backup '$f'"   # or: VACUUM INTO '$f'
 aws s3 cp "$f" s3://your-bucket/backups/$(basename "$f")
 rm -f "$f"
 ```

@@ -43,7 +43,7 @@ The API and the `/collab` WebSocket share one port (8787); Vite proxies both in 
 
 ## Layout
 `shared/` Yjs schema helpers + API types (consumed as TS source) · `server/` Hono API +
-Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Rust workspace (`dsp` lib, `engine` wasm) · `deploy/` Caddy, systemd, AWS notes.
+Hocuspocus + SQLite (`node:sqlite`) · `client/` Vite vanilla TS · `engine/` Rust workspace (`dsp` lib, `engine` wasm) · `deploy/` the box's build/start hooks and AWS notes.
 
 ## Notes
 - `node:sqlite` is built into Node 24; it may print an ExperimentalWarning.
