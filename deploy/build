@@ -1,0 +1,11 @@
+#!/bin/sh
+# Run by the box on every push to the deployed branch (see wrongbad/kyle.fi), in the checkout.
+set -eu
+# npm ci wipes node_modules, so only pay for it when the lockfile changed.
+lock=$(sha256sum package-lock.json)
+if [ "$lock" != "$(cat node_modules/.lock-sha 2>/dev/null)" ]; then
+	npm ci
+	echo "$lock" > node_modules/.lock-sha
+fi
+npm run build                    # wasm engine, then client/dist
+npm run build -w @mobdaw/server  # server/dist/main.mjs
