@@ -7,10 +7,11 @@ prefix; the server derives cookie paths and local-storage URLs from it.
 
 The box is set up from [wrongbad/kyle.fi](https://github.com/wrongbad/kyle.fi) (`sites.conf` + `Caddyfile` +
 `install.sh`). It deploys this repo's `main` on every push: a GitHub webhook makes it fetch the branch into
-`/www/sites/mobdaw/src` and run `deploy/build` (wasm engine, client, and the server bundle
-`server/dist/main.mjs`, so boot doesn't transpile with tsx), then restart `www@mobdaw`, which runs
-`deploy/start`. Caddy serves `src/client/dist` directly. Deploy log: `journalctl -u www-deploy@mobdaw -f`;
-server log: `journalctl -u www@mobdaw -f`; live commit: `/www/sites/mobdaw/deployed`.
+whichever of `/www/sites/mobdaw/a` and `b` is not live and run `deploy/build` there (wasm engine, client, and
+the server bundle `server/dist/main.mjs`, so boot doesn't transpile with tsx). Only a successful build swaps
+the `/www/sites/mobdaw/current` symlink to it; then `www@mobdaw` restarts and runs `deploy/start`. Caddy
+serves `current/client/dist` directly. Deploy log: `journalctl -u www-deploy@mobdaw -f`; server log:
+`journalctl -u www@mobdaw -f`; last built commit: `/www/sites/mobdaw/deployed`.
 The server needs Node 24 (the box installs it). `/www/sites/mobdaw/.env` and `/www/sites/mobdaw/data` exist
 only on the box, outside the checkout.
 
@@ -27,7 +28,7 @@ S3_REGION=us-east-1
 ```
 First admin and invites, on the server:
 ```
-cd /www/sites/mobdaw/src/server
+cd /www/sites/mobdaw/current/server
 sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-user you --admin   # prompts for a password
 sudo -u www-mobdaw /opt/node/bin/node --env-file=/www/sites/mobdaw/.env --disable-warning=ExperimentalWarning --import tsx scripts/admin.ts create-invite --days 7   # prints a /#/register/<code> link
 ```
