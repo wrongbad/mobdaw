@@ -1,4 +1,5 @@
-export const MIN_PPS = 10
+/** Far enough out to show over a minute (~100 s) across a portrait phone (~300 css px of timeline). */
+export const MIN_PPS = 3
 export const MAX_PPS = 800
 /** The span a short or empty project is shown at: 8 bars of 4/4 at 120 bpm. */
 export const MIN_FIT_SEC = 16
