@@ -21,6 +21,11 @@ private window and register a second user. Share a cloud project and edit togeth
 
 The API and the `/collab` WebSocket share one port (8787); Vite proxies both in dev.
 
+## Branches
+`main` is where work lands. `prod` is what wrongbad.com/mobdaw runs: pushing it deploys (see
+[`deploy/README.md`](../deploy/README.md)). It only moves by fast-forward from `main`
+(`git push origin main:prod`), and only when a person explicitly asks for a deploy.
+
 ## Scripts
 - `npm run dev` runs the server (watch mode) and the client dev server.
 - `npm test` (Rust `dsp` tests, then server tests) / `npm run typecheck`
