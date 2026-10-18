@@ -6,7 +6,8 @@ the `/mobdaw` prefix (so the server itself still routes `/api` and `/collab`). `
 prefix; the server derives cookie paths and local-storage URLs from it.
 
 The box is set up from [wrongbad/kyle.fi](https://github.com/wrongbad/kyle.fi) (`sites.conf` + `Caddyfile` +
-`install.sh`). It deploys this repo's `main` on every push: a GitHub webhook makes it fetch the branch into
+`install.sh`). It deploys this repo's `prod` branch on every push to it (ship with `git push origin main:prod`;
+`main` is not deployed): a GitHub webhook makes it fetch the branch into
 whichever of `/www/sites/mobdaw/a` and `b` is not live and run `deploy/build` there (wasm engine, client, and
 the server bundle `server/dist/main.mjs`, so boot doesn't transpile with tsx). Only a successful build swaps
 the `/www/sites/mobdaw/current` symlink to it; then `www@mobdaw` restarts and runs `deploy/start`. Caddy
