@@ -50,7 +50,8 @@ import { mountRemoteHeads } from './remoteHeads'
 import { follow, peakToFill } from './meter'
 import { addImportedClip, automateParam, commitParam, commitParams, deleteClips, loopForever, reorderDevice, unloopClip } from '../project/actions'
 import { INSTRUMENT_PRESETS, addInstrument } from '../content/presets'
-import { importSmf, isMidiFile, parseSmf } from '../content/midifile'
+import { exportProjectMidi, importSmf, isMidiFile, parseSmf } from '../content/midifile'
+import { applyRegionEdits, tempoFromLoop } from '../audio/loopPedal'
 import { createRecorder } from '../project/recorder'
 import { createProjectStore } from '../project/store'
 import { createAutoValues, createDrawers, createMixDrive, createSelection, createTabAvailability, type TabName } from '../project/viewState'
@@ -188,7 +189,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
   const exportProject = () => {
     if (!pb) return // (the project has not synced yet)
-    exportDialog({ name: projectName, render: (o) => renderProject(doc, s.projectId, rate(), s.userId, o) })
+    exportDialog({ name: projectName, render: (o) => renderProject(doc, s.projectId, rate(), s.userId, o), midi: () => exportProjectMidi(doc, projectName) })
   }
   /** The metronome button: add a click track, then mute / unmute it. */
   function clickTrack() {
@@ -902,6 +903,9 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       const looping = isLooping(clip)
       items.unshift([isForever(clip) ? 'loop to end' : 'loop forever', () => loopForever(doc, clip, clip.kind === 'audio' ? sourceFrames(store, rate(), clip) : 0)])
       if (looping) items.unshift(['no loop', () => unloopClip(doc, clip)]) // the extent back to the first pass
+      // a free loop can found the grid: its pass becomes N bars of a metered region from where it starts
+      const plan = clip.kind === 'audio' && clip.loopLength ? tempoFromLoop(tmap(), { start: clip.start, length: clip.loopLength }) : null
+      if (plan) items.push([`tempo from loop (${plan.bars} bar${plan.bars > 1 ? 's' : ''} at ${Math.round(plan.bpm * 10) / 10} bpm)`, () => applyRegionEdits(doc, plan.edits)])
     }
     const hash = String(clipsMap(doc).get(clipId)?.get('sourceHash'))
     const meta = getSamples(doc)[hash]

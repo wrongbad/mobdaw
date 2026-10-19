@@ -2,7 +2,7 @@
 // region a looper is armed to draw. They write the doc live (one undo step per drag) and know the layout only through `Geo`.
 import {
   clipLength, clipStart, getPads, isForever, isLooping, loopersMap, padsMap, passLength, clipsMap, tracksMap, updateClip, updateLooper, updatePad,
-  type Clip, type Looper, type MidiClip, type TimeMap,
+  type AudioClip, type Clip, type Looper, type MidiClip, type TimeMap,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import type { Accessor } from 'solid-js'
@@ -205,12 +205,12 @@ export function clipDown(g: GestureCtx, ev: PointerEvent, id: string) {
       if (mode === 'loop') {
         const r = snapEdges(m, [s0 + drawn], dSmp)
         if (midi) return loopMidi(doc, map, midi, s0 + drawn + r.d, pps, !m.altKey && !r.hit)
-        return loopClip(doc, rate, clip, drawn + r.d, srcFrames)
+        return loopClip(doc, rate, clip as AudioClip, drawn + r.d, srcFrames)
       }
       if (mode === 'pass') {
         const r = snapEdges(m, [seam0], dSmp)
         if (midi) return passMidi(doc, map, midi, seam0 + r.d, pps, !m.altKey && !r.hit)
-        return passClip(doc, rate, clip, pass0 + r.d, srcFrames)
+        return passClip(doc, rate, clip as AudioClip, pass0 + r.d, srcFrames)
       }
       if (mode !== 'move') {
         const edge = mode === 'l' ? s0 : s0 + length
@@ -227,7 +227,7 @@ export function clipDown(g: GestureCtx, ev: PointerEvent, id: string) {
           if (g) (d += g.shift), (at = g.at)
         }
         geo.snapLine(at)
-        return trimClip(doc, rate, clip, mode, d, srcFrames, notes0)
+        return trimClip(doc, rate, clip as AudioClip, mode, d, srcFrames)
       }
       // Absolute position under the pointer, in the target lane's own scale (source lanes differ).
       const hit = targetAt(g, m.clientY, clip.kind)

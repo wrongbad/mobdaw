@@ -118,13 +118,11 @@ describe('regions and markers', () => {
     const a = getClips(d).length
     expect(a).toBe(1)
   })
-  it('addMidiClip and the click track use the project ppq', () => {
+  it('the click track stores no clip (its beats come from the map)', () => {
     const d = fresh()
     const t = addClickTrack(d)
-    const clip = getClips(d).find((c) => c.trackId === t)!
-    expect(clip).toMatchObject({ kind: 'midi', startTick: 0, lengthTicks: 16 * 960, loopTicks: 4 * 960, forever: true })
-    expect('bpm' in clip || 'start' in clip || 'ppq' in clip).toBe(false)
-    expect(getNotes(d)).toHaveLength(5)
+    expect(getClips(d).filter((c) => c.trackId === t)).toEqual([])
+    expect(getNotes(d)).toHaveLength(0)
   })
 })
 
@@ -205,8 +203,11 @@ describe('migrateToV4', () => {
     // the click's first bar sits on bar 2
     expect(map.barStartSample(2)).toBe(24000)
     const notes = getNotes(d)
-    expect(notes.length).toBe(clips.reduce((a, c) => a + notesOf(c).length, 0))
-    for (const c of clips) {
+    // the click's stored pattern is gone (its beats are generated from the map); every other note stays put
+    expect(getClips(d).find((x) => x.id === 'click')).toBeUndefined()
+    const kept = clips.filter((c) => c.id !== 'click')
+    expect(notes.length).toBe(kept.reduce((a, c) => a + notesOf(c).length, 0))
+    for (const c of kept) {
       const clip = getClips(d).find((x) => x.id === c.id)!
       if (clip.kind !== 'midi') throw new Error()
       expect('start' in clip || 'bpm' in clip || 'ppq' in clip).toBe(false)

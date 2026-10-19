@@ -630,8 +630,7 @@ export const foreverTicks = (map: TimeMap, startTick: number) => map.sampleToTic
 
 /**
  * The metronome: a MIDI track named "click" (`role: 'click'`, first in the list) with two lofi drums, "accent" (the higher,
- * brighter one) and "tick", and a drum-grid clip at tick 0 (it follows the timeline's tempo): one 4/4 bar looped across four, with the tick on all four
- * beats and the accent doubled onto beat 1 (so muting the accent synth leaves a plain click). The clip loops `forever`. One transaction,
+ * brighter one) and "tick". It has no clip: the host generates its beats from the time map (client/src/audio/click.ts). One transaction,
  * so one undo step. Returns the track id.
  */
 export function addClickTrack(doc: Y.Doc): string {
@@ -641,10 +640,7 @@ export function addClickTrack(doc: Y.Doc): string {
     const accent = 37, tick = 36
     addDrum(doc, id, { key: accent, name: 'accent', params: { 0: 3500, 1: 0.8, 2: 40, 3: 0.8 } })
     addDrum(doc, id, { key: tick, name: 'tick', params: { 0: 1500, 1: 0.65, 2: 35, 3: 0.6 } })
-    const ppq = getPpq(doc)
-    const clip = addMidiClip(doc, { trackId: id, startTick: 0, lengthTicks: 16 * ppq, loopTicks: 4 * ppq, forever: true, view: 'drums' })
-    for (let beat = 0; beat < 4; beat++) addNote(doc, { clipId: clip, tick: beat * ppq, durTicks: ppq / 4, pitch: tick, velocity: 1 })
-    addNote(doc, { clipId: clip, tick: 0, durTicks: ppq / 4, pitch: accent, velocity: 1 })
+    // no clip: what it plays is generated from the time map (client/src/audio/click.ts)
   })
   return id
 }
@@ -923,7 +919,12 @@ export function migrateToV4(doc: Y.Doc) {
       }
       if (Math.abs(c.bpm - sp.bpm0) > 1e-9 && sp.region.kind === 'metered') off.push(`'${trackName.get(c.trackId) ?? 'midi'}' at bar ${map.position(startTick).bar}`)
     }
-    if (legacy.length && v < 4) {
+    // the click's stored pattern only chose the map above: the click is generated from the map now, so its clips go
+    const clickTracks = new Set(getTracks(doc).filter((t) => t.role === 'click').map((t) => t.id))
+    const clickClips = new Set(legacy.filter((c) => clickTracks.has(c.trackId)).map((c) => c.id))
+    for (const n of notes) if (clickClips.has(n.clipId)) notesMap(doc).delete(n.id)
+    for (const id of clickClips) clipsMap(doc).delete(id)
+    if (legacy.some((c) => !clickClips.has(c.id)) && v < 4) {
       const first = map.regions[0]
       const m = map.regions.find((r) => r.kind === 'metered') as Extract<Region, { kind: 'metered' }> | undefined
       let text = `migrated to a shared timeline at ${+(m?.bpm ?? 120).toFixed(2)} bpm ${m?.num ?? 4}/${m?.den ?? 4}`

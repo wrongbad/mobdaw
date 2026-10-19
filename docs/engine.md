@@ -507,7 +507,7 @@ client diverged, so we don't.
   window, so it runs forever and follows tempo, meter and ramp edits): the tick drum on every beat of a metered region at velocity 1;
   the accent drum on each bar's first beat at velocity 1 (so muting the accent synth leaves a plain click) and, softer, at velocity
   0.5, on the first beat of every later beat group (beats 3 and 5 of a 2+2+3 bar, beat 4 of 6/8); nothing in a free region. The
-  bridge ignores any MIDI clips on a click-role track (the stored 4/4 clip that `addClickTrack` still writes is vestigial). There
+  track has no clip (`migrateToV4` removes the old stored 4/4 pattern), and the bridge ignores any MIDI clip put on a click-role track. There
   is no count-in feature: start the song at bar 2, mute the click, and the export trims the lead-in (export covers only audible clips).
 ### Loop commands (as built)
 

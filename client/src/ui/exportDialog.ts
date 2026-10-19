@@ -6,9 +6,11 @@ import { h } from '../dom'
 const FORMATS: [label: string, depth: WavDepth][] = [['WAV · 16-bit', 16], ['WAV · 24-bit', 24], ['WAV · 32-bit float', 32]]
 
 /** A modal for rendering the project to a file: pick a name and format, watch the progress, and the download starts when it is done. */
-export function exportDialog(opts: { name: string; render(o: RenderOptions): Promise<Rendered> }) {
+/** `midi`, when given, adds a MIDI file format: the project's notes and its tempo/meter map, no audio. */
+export function exportDialog(opts: { name: string; render(o: RenderOptions): Promise<Rendered>; midi?: () => Uint8Array }) {
   const file = h('input', { value: safeName(opts.name), spellcheck: false })
-  const format = h('select', {}, ...FORMATS.map(([label, depth], i) => h('option', { value: String(depth), selected: i === 0 }, label)))
+  const format = h('select', {}, ...FORMATS.map(([label, depth], i) => h('option', { value: String(depth), selected: i === 0 }, label)),
+    ...(opts.midi ? [h('option', { value: 'mid' }, 'MIDI · notes and tempo map')] : []))
   const tail = h('input', { type: 'number', min: 0, max: 60, step: 1, value: '2', title: 'silence added after the last clip, for reverb and delay tails' })
   const bar = h('progress', { max: 1, value: 0, hidden: true })
   const msg = h('p', { className: 'dim' })
@@ -23,7 +25,11 @@ export function exportDialog(opts: { name: string; render(o: RenderOptions): Pro
   let abort: AbortController | null = null
 
   async function start() {
-    const name = safeName(file.value.trim().replace(/\.wav$/i, ''), 'untitled')
+    const name = safeName(file.value.trim().replace(/\.(wav|mid)$/i, ''), 'untitled')
+    if (format.value === 'mid' && opts.midi) {
+      saveBlob(new Blob([opts.midi() as BlobPart], { type: 'audio/midi' }), `${name}.mid`)
+      return dlg.close()
+    }
     const depth = Number(format.value) as WavDepth
     const ctl = (abort = new AbortController())
     for (const el of [file, format, tail, go]) el.disabled = true

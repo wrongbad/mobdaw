@@ -562,12 +562,7 @@ describe('metronome, looping clips and note ranges', () => {
     expect(tracks[0]).toMatchObject({ name: 'click', kind: 'midi', role: 'click', muted: false })
     const devs = getDevices(doc).filter((x) => x.trackId === id && x.type !== MIX)
     expect(devs.map((x) => [x.name, x.type, x.keyLo, x.keyHi])).toEqual([['accent', 7, 37, 37], ['tick', 7, 36, 36]])
-    const [clip] = getClips(doc).filter((x) => x.trackId === id)
-    expect(clip).toMatchObject({ kind: 'midi', startTick: 0, view: 'drums', loopTicks: 3840, lengthTicks: 15360, forever: true })
-    if (clip.kind !== 'midi') throw new Error()
-    expect(isLooping(clip)).toBe(true)
-    expect(patternTicks(clip)).toBe(3840)
-    expect(getNotes(doc).map((n) => [n.tick, n.pitch]).sort((a, b) => a[0] - b[0] || a[1] - b[1])).toEqual([[0, 36], [0, 37], [960, 36], [1920, 36], [2880, 36]]) // the tick on every beat, the accent doubled on beat 1
+    expect(getClips(doc).filter((x) => x.trackId === id)).toEqual([]) // no stored pattern: the click is generated from the map
     undo.undo()
     expect(getTracks(doc).map((x) => x.name)).toEqual(['existing'])
     expect(getDevices(doc).map((d) => d.trackId)).toEqual([getTracks(doc)[0].id]) // only the existing track's mix device

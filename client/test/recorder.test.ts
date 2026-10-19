@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addAudioClip, addTrack, getClips, getTracks, tracksMap, undoScope, type AudioClip } from '@mobdaw/shared'
+import { addAudioClip, addRegion, addTrack, getClips, getTracks, tracksMap, undoScope, type AudioClip } from '@mobdaw/shared'
 import { createRecorder } from '../src/project/recorder'
 import type { Playback } from '../src/audio/playback'
 
 /** A recorder over a real doc, with a fake engine / microphone / journal that log what they were asked to do. */
 function rig(opts: { micFails?: boolean } = {}) {
   const doc = new Y.Doc()
+  addRegion(doc, { bar: 1, kind: 'free', length: 1e9 }) // one big free region: loops follow the cycle, not bar lines
   const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
   const log: string[] = []
   const said: string[] = []

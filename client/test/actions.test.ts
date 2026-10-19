@@ -43,13 +43,6 @@ describe('clip loops', () => {
     loopClip(doc, RATE, c(), 1, 10000)
     expect(c().length).toBe(50)
   })
-  it('midi extents snap to sixteenths and start the pass at the old length', () => {
-    const { doc } = setup()
-    const c = midi(doc)
-    // the project's default map: 120 bpm at 48 kHz, so a tick is 60*48000/(120*960) = 25 samples
-    loopClip(doc, RATE, c(), (3840 * 2 + 10) * 25, 0)
-    expect(c()).toMatchObject({ lengthTicks: 7680, loopTicks: 3840 })
-  })
   it('startPass folds a stale pass phase into the source offset', () => {
     const { doc } = setup()
     const c = audio(doc, { sourceOffset: 100, loopLength: 500, loopPhase: 40, length: 2000 })
@@ -94,41 +87,22 @@ describe('trimClip', () => {
   it('trims an audio clip from the left, moving the source offset with it, and back out restores', () => {
     const { doc } = setup()
     const c = audio(doc, { start: 1000, length: 2000, sourceOffset: 0 })
-    trimClip(doc, RATE, c(), 'l', 300, 10000, [])
+    trimClip(doc, RATE, c(), 'l', 300, 10000)
     expect(c()).toMatchObject({ start: 1300, length: 1700, sourceOffset: 300 })
   })
   it('trims the right edge but not past the source', () => {
     const { doc } = setup()
     const c = audio(doc, { length: 2000 })
-    trimClip(doc, RATE, c(), 'r', 500, 2200, [])
+    trimClip(doc, RATE, c(), 'r', 500, 2200)
     expect(c().length).toBe(2200)
-    trimClip(doc, RATE, c(), 'r', -5000, 2200, [])
+    trimClip(doc, RATE, c(), 'r', -5000, 2200)
     expect(c().length).toBe(50)
   })
   it('a stale pass goes when trimming a non-looping clip', () => {
     const { doc } = setup()
     const c = audio(doc, { length: 800, loopLength: 1000, loopPhase: 100 })
-    trimClip(doc, RATE, c(), 'r', 100, 10000, [])
+    trimClip(doc, RATE, c(), 'r', 100, 10000)
     expect(c()).toMatchObject({ loopLength: 0, loopPhase: 0, sourceOffset: 100 })
-  })
-  it('a midi left trim moves the start and shifts every note back by the same ticks', () => {
-    const { doc } = setup()
-    const c = midi(doc, { startTick: 5 * PPQ })
-    const n = addNote(doc, { clipId: c().id, tick: 960, pitch: 60, durTicks: 480, velocity: 0.8 })
-    trimClip(doc, RATE, c(), 'l', 480 * 25, 0, getNotes(doc)) // half a beat later (snaps to 1/16 steps of 240)
-    const after = getNotes(doc).find((x) => x.id === n)!
-    expect(c().startTick).toBe(5 * PPQ + 480)
-    expect(c().lengthTicks).toBe(3840 - 480)
-    expect(after.tick).toBe(960 - 480) // still sounds at the same global tick
-    expect(c().startTick + after.tick).toBe(5 * PPQ + 960)
-    trimClip(doc, RATE, c(), 'l', -1e9, 0, [])
-    expect(c().startTick).toBe(0) // the start can't pass 0
-  })
-  it('a midi right trim snaps to sixteenths and clears a stale pass', () => {
-    const { doc } = setup()
-    const c = midi(doc, { loopTicks: 99999 })
-    trimClip(doc, RATE, c(), 'r', (960 + 50) * 25, 0, [])
-    expect(c()).toMatchObject({ lengthTicks: 3840 + 960, loopTicks: 0 })
   })
 })
 
