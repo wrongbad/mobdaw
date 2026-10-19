@@ -1,58 +1,80 @@
 // Drum grid for one MIDI clip: the same notes as the piano roll, a row per drum (an instrument on a single note) and
-// a column per step (4 to a beat). Click a cell to toggle a hit. Notes on pitches with no drum row are kept, just not shown.
-import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, isDrum, isLooping, patternTicks, setMidiView, updateClip, updateNote, type Device, type MidiClip, type Note } from '@mobdaw/shared'
+// a column per step. A step is a 1/16 note (ppq / 4 ticks) counted from each bar line, so a 4/4 bar has 16 and a 7/8 bar 14
+// (2+2+3 eighths, each eighth two steps); a bar that does not divide evenly ends with a short step. The columns follow the
+// project's time map at the clip's place on the timeline, so a clip crossing a meter change is re-gridded bar by bar, and a free
+// region has no columns (it cannot be clicked, existing hits there are still drawn). Click a cell to toggle a hit. Notes on
+// pitches with no drum row are kept, just not shown.
+import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, getPpq, getTimeMap, isDrum, isLooping, patternTicks, setMidiView, updateClip, updateNote, type Device, type MidiClip, type Note, type TimeMap } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'
 import { drumColor } from './drumColor'
 import { segmented } from './segmented'
-import { clampVelocity, gmDrum, hitOpacity, nextVelocity } from './noteOps'
+import { barsToTicks, clampVelocity, gmDrum, hitOpacity, nextVelocity, ticksToBars } from './noteOps'
+import { clipGeom, gridLayout, gridSvg, type ClipGeom } from './gridLines'
 import { HEADER } from './layout'
 
-const STEPS = 4 // steps per beat (a 1/16 note)
+const STEPS = 4 // steps per quarter note (a 1/16 note)
+
+/**
+ * The step cell holding the clip-local tick `t` of a clip at `startTick`: its start and length in clip ticks, or null in a free region
+ * (no grid). Steps are `ppq / STEPS` long from the bar line; the last step of a bar is cut at the bar line.
+ */
+export function stepCell(map: TimeMap, startTick: number, t: number): { tick: number; len: number } | null {
+  const g = startTick + t
+  const p = map.position(g)
+  if (p.free) return null
+  const barTicks = map.meterAt(p.bar).barTicks
+  const step = map.ppq / STEPS
+  const at = Math.min(Math.floor(p.tickInBar / step + 1e-9) * step, barTicks)
+  return { tick: g - p.tickInBar + at - startTick, len: Math.min(step, barTicks - at) }
+}
 
 export type DrumGridDeps = { doc: Y.Doc; undo: Y.UndoManager }
 
 export function drumGrid({ doc, undo }: DrumGridDeps) {
   let clip: MidiClip | null = null
   let notes: Note[] = []
-  let pxBeat = 48 // follows the timeline zoom
+  let map: TimeMap = getTimeMap(doc)
+  let ppq = getPpq(doc)
+  let geom: ClipGeom = clipGeom(map, 0, 48) // the clip's ticks on the x axis; follows the timeline zoom
   let extent = 0 // ticks drawn: the clip's length, or out to the end of the timeline for a `forever` clip
 
-  const bpm = h('input', { type: 'number', min: 20, max: 400, step: 1, title: 'clip bpm' })
-  const beats = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in beats (3 for 3/4)' })
+  const bars = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in bars of the project meter' })
   const view = segmented([{ value: 'piano', label: 'piano roll' }, { value: 'drums', label: 'drums' }], 'drums',
     (v) => clip && setMidiView(doc, clip.id, v === 'drums' ? 'drums' : 'piano'), 'show this clip as a piano roll or a drum grid')
   const field = (label: string, ...kids: (Node | string)[]) => h('label', { className: 'ne-field' }, h('span', { className: 'ne-lbl' }, label), ...kids)
-  bpm.onchange = () => clip && Number(bpm.value) > 0 && updateClip(doc, clip.id, { bpm: Number(bpm.value) })
   // The pattern is the loop when the clip loops, else the whole clip.
-  beats.onchange = () => {
-    const n = Math.round(Number(beats.value))
+  bars.onchange = () => {
+    const n = Math.round(Number(bars.value))
     if (!clip || !(n >= 1)) return
-    updateClip(doc, clip.id, isLooping(clip) ? { loopTicks: n * clip.ppq } : { lengthTicks: n * clip.ppq })
+    const ticks = barsToTicks(map, clip.startTick, n)
+    updateClip(doc, clip.id, isLooping(clip) ? { loopTicks: ticks } : { lengthTicks: ticks })
   }
-  const head = h('div', { className: 'ne-head' }, view.el, h('span', { className: 'ne-sep' }), field('bpm', bpm), field('beats', beats))
+  const head = h('div', { className: 'ne-head' }, view.el, h('span', { className: 'ne-sep' }), field('bars', bars))
   // inputs must not start a clip drag / zoom-out click on the clip underneath
   head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button, .seg') && e.stopPropagation()
   const grid = h('div', { className: 'dg' })
+  grid.style.background = 'var(--bg)'
   const scroll = h('div', { className: 'ne-scroll' }, grid)
   scroll.onpointerdown = (e) => e.stopPropagation() // scrollbar drags must not reach the clip
   const el = h('div', { className: 'ne' }, head, scroll)
 
-  const step = () => clip!.ppq / STEPS
-  const px = (ticks: number) => (ticks / clip!.ppq) * pxBeat
+  const px = (ticks: number) => geom.x(ticks)
 
   /** Toggle the hit at the cell under the pointer: a repeat's cell is its pattern's. */
   function toggle(e: PointerEvent, row: HTMLElement, pitch: number) {
     e.stopPropagation() // the clip underneath would otherwise start dragging
     if (e.button !== 0 || !clip) return
     const pattern = patternTicks(clip)
-    const at = Math.floor((((e.clientX - row.getBoundingClientRect().left) / pxBeat) * clip.ppq) / step()) * step()
-    const tick = at % pattern
-    if (tick + step() > pattern + 1e-6 || at >= extent) return
-    const here = notes.filter((n) => n.pitch === pitch && n.tick >= tick && n.tick < tick + step())
+    const at = geom.tick(e.clientX - row.getBoundingClientRect().left)
+    if (at < 0 || at >= extent) return
+    const cell = stepCell(map, clip.startTick, at % pattern) // (a repeat's cell is the pattern's)
+    if (!cell || cell.tick + cell.len > pattern + 1e-6) return
+    const { tick, len } = cell
+    const here = notes.filter((n) => n.pitch === pitch && n.tick >= tick - 1e-6 && n.tick < tick + len - 1e-6)
     undo.stopCapturing()
     if (!here.length) {
-      addNote(doc, { clipId: clip.id, tick, durTicks: step(), pitch, velocity: 1 })
+      addNote(doc, { clipId: clip.id, tick, durTicks: len, pitch, velocity: 1 })
       undo.stopCapturing()
       return
     }
@@ -85,12 +107,12 @@ export function drumGrid({ doc, undo }: DrumGridDeps) {
     clip = c
     extent = ticks
     notes = list
-    pxBeat = (pps * 60) / c.bpm
-    grid.style.setProperty('--beat', `${pxBeat}px`)
+    map = getTimeMap(doc)
+    ppq = getPpq(doc)
+    geom = clipGeom(map, c.startTick, pps)
     const pattern = patternTicks(c)
     const looping = isLooping(c)
-    if (document.activeElement !== bpm) bpm.value = String(c.bpm)
-    if (document.activeElement !== beats) beats.value = String(pattern / c.ppq)
+    if (document.activeElement !== bars) bars.value = String(Math.round(ticksToBars(map, c.startTick, pattern) * 100) / 100)
 
     // a row per drum, in the synths lane's order (a wide-range instrument has none)
     const drums = instruments.filter(isDrum)
@@ -98,6 +120,8 @@ export function drumGrid({ doc, undo }: DrumGridDeps) {
       const key = d.keyLo ?? KEY_MIN
       const row = h('div', { className: 'dg-row' })
       row.style.width = `${px(extent)}px`
+      row.style.backgroundImage = 'none' // (the columns are one SVG behind the rows)
+      row.style.backgroundColor = 'transparent'
       row.onpointerdown = (e) => toggle(e, row, key)
       const color = drumColor(key) // shared with the synth drawer's drum cards
       row.style.setProperty('--rc', color)
@@ -111,7 +135,7 @@ export function drumGrid({ doc, undo }: DrumGridDeps) {
           const hit = h('i', { className: k ? 'dg-hit rep' : 'dg-hit' })
           hit.style.left = `${px(tick)}px`
           hit.style.opacity = String(hitOpacity(n.velocity) * (k ? 0.35 : 1))
-          hit.style.width = `${Math.max(2, px(Math.min(n.durTicks, step())) - 1)}px`
+          hit.style.width = `${Math.max(2, px(tick + Math.min(n.durTicks, ppq / STEPS)) - px(tick) - 1)}px`
           row.append(hit)
         }
       }
@@ -124,7 +148,7 @@ export function drumGrid({ doc, undo }: DrumGridDeps) {
     })
     const add = h('button', { className: 'dg-add', title: 'add a lofi drum on the next free note', onclick: () => addDrum(doc, c.trackId) }, '+ add drum')
     add.onpointerdown = (e) => e.stopPropagation()
-    grid.replaceChildren(...rows, add)
+    grid.replaceChildren(gridSvg(gridLayout(map, c.startTick, extent, pps, ppq / STEPS, 3), px(extent)), ...rows, add)
     grid.style.width = `${px(extent)}px`
     stick()
   }

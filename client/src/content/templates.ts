@@ -1,17 +1,16 @@
 // New-project templates, offered on the home page. Each builds into an empty doc.
 import type * as Y from 'yjs'
-import { DELAY, MASTER_TRACK, addClickTrack, addDevice, getClips, updateClip, updateTrack } from '@mobdaw/shared'
+import { DELAY, MASTER_TRACK, addClickTrack, addDevice, updateTrack } from '@mobdaw/shared'
 import { clip, initProject, track, type Song } from './compose'
 import { buildDemo } from './demo'
 import { GM, addDrumKit, addEffectPreset, addInstrument, drumKit, effectPreset, instrumentPreset } from './presets'
 
 export type Template = { id: string; name: string; blurb: string; build(doc: Y.Doc): void }
 
-/** The metronome track, following the project tempo (addClickTrack writes a 120 bpm clip). */
+/** The metronome track; it follows the project's timeline (initProject set the bar-1 tempo). */
 function click(s: Song, o: { color: number; muted?: boolean }): string {
   const id = addClickTrack(s.doc)
   updateTrack(s.doc, id, { color: o.color, ...(o.muted ? { muted: true } : {}) })
-  for (const c of getClips(s.doc)) if (c.trackId === id) updateClip(s.doc, c.id, { bpm: s.bpm })
   return id
 }
 

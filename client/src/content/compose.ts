@@ -2,27 +2,32 @@
 // bar and written in beats. Shared by the templates and the demo song.
 import type * as Y from 'yjs'
 import {
-  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, SCHEMA_VERSION,
-  addLane, addMidiClip, addNote, addPoint, addTrack, ensureMixDevice, metaMap, paramToPos, setMixParam, updateTrack,
+  DEFAULT_PPQ, DEFAULT_REGION_ID, DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, SCHEMA_VERSION,
+  addLane, addMidiClip, addNote, addPoint, addTrack, ensureMixDevice, ensureTimeline, getTimeMap, metaMap, paramToPos, setMixParam, setRegion, updateTrack,
   type ParamKind, type TrackKind, type TrackRole,
 } from '@mobdaw/shared'
 
 export type Song = { doc: Y.Doc; bpm: number; beatsPerBar: number; rate: number; ppq: number }
 
-/** Set the meta every new project carries, and return the context the other helpers take. */
+/**
+ * Set the meta every new project carries (schema v4: the timeline basics, and the bar-1 region at `bpm`, `beatsPerBar`/4), and
+ * return the context the other helpers take. Content is written in ticks and bars: tempo changes later move it with the map.
+ */
 export function initProject(doc: Y.Doc, bpm: number, beatsPerBar = 4): Song {
   const rate = DEFAULT_SAMPLE_RATE
   doc.transact(() => {
     const meta = metaMap(doc)
     meta.set('schemaVersion', SCHEMA_VERSION)
     meta.set('sampleRate', rate)
+    ensureTimeline(doc)
+    setRegion(doc, DEFAULT_REGION_ID, { bpm, num: beatsPerBar, den: 4 })
     ensureMixDevice(doc, MASTER_TRACK)
   })
   return { doc, bpm, beatsPerBar, rate, ppq: DEFAULT_PPQ }
 }
 
-/** Timeline sample of the start of `bar` (counted from 0). */
-export const barPos = (s: Song, bar: number) => Math.round((bar * s.beatsPerBar * 60 * s.rate) / s.bpm)
+/** Timeline sample of the start of `bar` (counted from 0), through the project's time map. */
+export const barPos = (s: Song, bar: number) => getTimeMap(s.doc).barStartSample(bar + 1)
 
 export type TrackOpts = { color: number; gain?: number; pan?: number; muted?: boolean; role?: TrackRole }
 export function track(s: Song, name: string, kind: TrackKind, o: TrackOpts): string {
@@ -45,7 +50,7 @@ export function clip(s: Song, trackId: string, o: ClipOpts): ClipWriter {
   const lengthTicks = o.bars * barTicks
   const loopTicks = o.loopBars && o.loopBars < o.bars ? o.loopBars * barTicks : undefined
   const id = addMidiClip(s.doc, {
-    trackId, start: barPos(s, o.bar), bpm: s.bpm, ppq: s.ppq, lengthTicks,
+    trackId, startTick: o.bar * barTicks, lengthTicks,
     ...(loopTicks ? { loopTicks } : {}), ...(o.forever && loopTicks ? { forever: true } : {}), ...(o.drums ? { view: 'drums' as const } : {}),
   })
   const end = loopTicks ?? lengthTicks

@@ -1,7 +1,8 @@
-// Piano-roll panel for one MIDI clip, inline in the track view: pitch x tick at the clip's own bpm/ppq, a 3px key hint down the
-// left edge, bar/beat/sub-beat lines with snap, box select, group edits, a velocity lane and key shortcuts (the pure
-// edits are in noteOps.ts). A bar is 4 beats of the clip's ppq: there is no project tempo or meter.
-import { addNote, isLooping, patternTicks, setMidiView, updateClip, updateNote, type MidiClip, type Note } from '@mobdaw/shared'
+// Piano-roll panel for one MIDI clip, inline in the track view: pitch x time, a 3px key hint down the left edge, bar / beat /
+// beat-group / sub-beat lines with snap, box select, group edits, a velocity lane and key shortcuts (the pure edits are in
+// noteOps.ts). Time is the project's: the x axis follows the timeline's scale through the time map (so bar lines match the ruler,
+// 7/8 shows its 2+2+3 groups, a free region has no lines), and notes snap to the map's grid at the clip's place on the timeline.
+import { addNote, getPpq, getTimeMap, isLooping, patternTicks, setMidiView, updateClip, updateNote, type MidiClip, type Note, type TimeMap } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'
 import { clamp, dragPointer } from './blocks'
@@ -10,9 +11,10 @@ import { segmented } from './segmented'
 import { deleteMenu } from './popover'
 import { HEADER } from './layout'
 import { noteName } from './noteName'
+import { clipGeom, gridLayout, gridSvg, type ClipGeom } from './gridLines'
 import {
-  DEFAULT_GRID, GRIDS, PITCH_MAX as PMAX, PITCH_MIN as PMIN, applyPatches, cancelNoteDrag, centrePitch, clampVelocity, gridTicks, inMarquee, moveGroup,
-  nudgeVelocity, quantize, removeNotes, resizeGroup, shift, snapTick, subPx, transpose, velocityAt, type Grid,
+  DEFAULT_GRID, GRIDS, PITCH_MAX as PMAX, PITCH_MIN as PMIN, applyPatches, barsToTicks, cancelNoteDrag, centrePitch, clampVelocity, gridTicks, inMarquee, localSnap,
+  moveGroup, nudgeVelocity, quantize, removeNotes, resizeGroup, shift, ticksToBars, transpose, velocityAt, type Grid,
 } from './noteOps'
 
 const ROW_MIN = 6, ROW_MAX = 40
@@ -36,17 +38,18 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
   let gridSel: Grid = DEFAULT_GRID
   let sel = new Set<string>() // the selected notes; the timeline is told the first (its delete key and its own state)
   let reported: string | null = null
-  let pxBeat = 48 // follows the timeline zoom
+  let map: TimeMap = getTimeMap(doc)
+  let ppq = getPpq(doc)
+  let geom: ClipGeom = clipGeom(map, 0, 48) // the clip's ticks on the x axis; follows the timeline zoom
+  let linesKey = ''
   let row = 14 // px per pitch: pinch (ctrl/cmd + wheel) zooms it
   const els = new Map<string, HTMLElement>()
   const bars = new Map<string, HTMLElement>()
 
-  const bpm = h('input', { type: 'number', min: 20, max: 400, step: 1, title: 'clip bpm' })
-  const barsIn = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in bars (4/4)' })
-  bpm.onchange = () => clip && Number(bpm.value) > 0 && updateClip(doc, clip.id, { bpm: Number(bpm.value) })
+  const barsIn = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in bars of the project meter' })
   barsIn.onchange = () => {
     if (!clip || !(Number(barsIn.value) >= 1)) return
-    const ticks = Math.round(Number(barsIn.value)) * 4 * clip.ppq // the pattern: the loop's pass when the clip loops, else the whole clip
+    const ticks = barsToTicks(map, clip.startTick, Math.round(Number(barsIn.value))) // the pattern: the loop's pass when the clip loops, else the whole clip
     if (!isLooping(clip)) updateClip(doc, clip.id, { lengthTicks: ticks })
     else if (ticks < clip.lengthTicks) updateClip(doc, clip.id, { loopTicks: ticks })
     else if (clip.forever) updateClip(doc, clip.id, { loopTicks: ticks, lengthTicks: ticks * 2 }) // (keeps looping)
@@ -55,13 +58,15 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
   const view = segmented([{ value: 'piano', label: 'piano roll' }, { value: 'drums', label: 'drums' }], 'piano',
     (v) => clip && setMidiView(doc, clip.id, v === 'drums' ? 'drums' : 'piano'), 'show this clip as a piano roll or a drum grid')
   const gridPick = segmented(GRIDS.map(([g, label]) => ({ value: String(g), label })), String(gridSel),
-    (v) => { gridSel = v === 'bar' ? 'bar' : Number(v); layoutLines() }, 'grid and snap (hold alt or ctrl while dragging to place freely)')
+    (v) => { gridSel = v === 'bar' ? 'bar' : Number(v); linesKey = ''; layoutLines() }, 'grid and snap (hold alt or ctrl while dragging to place freely)')
   const field = (label: string, ...kids: (Node | string)[]) => h('label', { className: 'ne-field' }, h('span', { className: 'ne-lbl' }, label), ...kids)
   const head = h('div', { className: 'ne-head' },
-    view.el, h('span', { className: 'ne-sep' }), field('bpm', bpm), field('bars', barsIn), h('span', { className: 'ne-sep' }), field('grid', gridPick.el))
+    view.el, h('span', { className: 'ne-sep' }), field('bars', barsIn), h('span', { className: 'ne-sep' }), field('grid', gridPick.el))
   // inputs must not start a clip drag / zoom-out click on the clip underneath
   head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button, select, .seg') && e.stopPropagation()
   const grid = h('div', { className: 'ne-grid' })
+  // the vertical lines are an SVG from the time map (layoutLines); the stylesheet's beat-wide gradients are replaced by the pitch rows alone
+  grid.style.backgroundImage = 'linear-gradient(to bottom, var(--grid-beat) 1px, transparent 1px)'
   // the keyboard as a 3px edge: black and white keys, one octave of rows repeated down from the top row (PMAX is a C), with a faint
   // octave label on each C row; both hug the left edge of what is visible
   const keys = h('div', { className: 'ne-keys' })
@@ -125,19 +130,36 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
     scroll.scrollTop = at * row - y
   }, { passive: false })
   const vel = h('div', { className: 'ne-vel', title: 'velocity: drag a bar (with several notes selected the change is relative)' })
+  vel.style.backgroundImage = 'none' // (its bar lines are the same SVG as the grid's)
   const el = h('div', { className: 'ne' }, head, scroll, vel)
 
-  const px = (ticks: number) => (ticks / clip!.ppq) * pxBeat
+  const px = (ticks: number) => geom.x(ticks)
+  /** The ticks of one 'bar' grid step at the clip's start (the meter there). */
+  const barTicksHere = () => map.meterAt(map.position(clip!.startTick).bar).barTicks
   /** The snap step in ticks (0: off); a note is never shorter than one 1/16 when the grid is off or coarser. */
-  const step = () => gridTicks(gridSel, clip!.ppq)
-  const minDur = () => Math.max(1, Math.min(step() || clip!.ppq / 4, clip!.ppq / 4))
+  const step = () => gridTicks(gridSel, ppq, gridSel === 'bar' ? barTicksHere() : undefined)
+  const minDur = () => Math.max(1, Math.min(step() || ppq / 4, ppq / 4))
   const snapOff = (e: { ctrlKey: boolean; altKey: boolean }) => e.ctrlKey || e.altKey
+  /** Snap a clip-local tick to the project grid (a whole tick when snapping is off or the clip is in a free region). */
+  const snapper = (off: boolean, mode: 'round' | 'floor' = 'round') => (off || !step() ? (t: number) => (mode === 'floor' ? Math.floor(t) : Math.round(t)) : localSnap(map, clip!.startTick, gridSel, mode))
+  /** The lines of bars, beats, groups and the grid's own steps, drawn from the map into the grid and the velocity lane. */
   function layoutLines() {
-    if (!clip) return
-    grid.style.setProperty('--beat', `${pxBeat}px`)
-    const sub = subPx(step(), clip.ppq, pxBeat)
-    grid.style.setProperty('--sub', sub ? `${sub}px` : '100000px')
+    if (!clip || !lastExtent) return
+    const sub = typeof gridSel === 'number' && gridSel > 0 ? step() : 0
+    const key = [lastExtent, sub, clip.startTick, lastPps, ppq, lastMapId(map)].join()
+    if (key === linesKey) return
+    linesKey = key
+    const lay = gridLayout(map, clip.startTick, lastExtent, lastPps, sub)
+    const width = px(lastExtent)
+    grid.querySelector('.ne-lines')?.remove()
+    vel.querySelector('.ne-lines')?.remove()
+    grid.prepend(gridSvg(lay, width))
+    vel.prepend(gridSvg(lay, width, { sub: false }))
   }
+  let lastExtent = 0, lastPps = 48
+  const mapIds = new WeakMap<TimeMap, number>()
+  let mapCount = 0
+  const lastMapId = (m: TimeMap) => mapIds.get(m) ?? (mapIds.set(m, ++mapCount), mapCount)
 
   // --- selection
   function paint() {
@@ -216,14 +238,14 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
           setSel(ids)
         }
       }
-      const st = snapOff(copying ? { ctrlKey: m.ctrlKey, altKey: false } : m) ? 0 : step()
-      const raw = ((m.clientX - x0) / pxBeat) * c.ppq
+      const snap = snapper(snapOff(copying ? { ctrlKey: m.ctrlKey, altKey: false } : m))
+      const dx = m.clientX - x0
       if (resize) {
         const end0 = lead.tick + lead.durTicks
-        const d = snapTick(end0 + raw, st) - end0
+        const d = snap(geom.tick(geom.x(end0) + dx)) - end0
         patch(resizeGroup(group, d, minDur()))
       } else {
-        const d = snapTick(lead.tick + raw, st) - lead.tick
+        const d = snap(geom.tick(geom.x(lead.tick) + dx)) - lead.tick
         const dp = -Math.round((m.clientY - y0) / row)
         const moves = moveGroup(group, d, dp)
         patch(moves)
@@ -270,7 +292,7 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
   function emptyDown(e: PointerEvent, c: MidiClip, r: DOMRect, toggle: boolean) {
     const x0 = e.clientX, y0 = e.clientY
     const base = toggle ? new Set(sel) : new Set<string>()
-    const at = (ev: PointerEvent) => [Math.max(0, ((ev.clientX - r.left) / pxBeat) * c.ppq), PMAX - Math.floor((ev.clientY - r.top) / row)] as const
+    const at = (ev: PointerEvent) => [Math.max(0, geom.tick(ev.clientX - r.left)), PMAX - Math.floor((ev.clientY - r.top) / row)] as const
     const [t0, p0] = at(e)
     let boxed = false
     const move = (m: PointerEvent) => {
@@ -298,10 +320,10 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
       stop()
       if (boxed) return report()
       const st = snapOff(e) ? 0 : step()
-      const tick = Math.max(0, st > 0 ? Math.floor(t0 / st) * st : Math.round(t0))
+      const tick = Math.max(0, snapper(snapOff(e), 'floor')(t0))
       const pitch = Math.min(PMAX, Math.max(PMIN, p0))
       undo.stopCapturing()
-      const id = addNote(doc, { clipId: c.id, tick, durTicks: st >= c.ppq / 4 && st <= c.ppq * 4 ? st : c.ppq, pitch, velocity: 0.8 })
+      const id = addNote(doc, { clipId: c.id, tick, durTicks: st >= ppq / 4 && st <= ppq * 4 ? st : ppq, pitch, velocity: 0.8 })
       undo.stopCapturing()
       setSel([id])
       const off = audition(pitch, 0.8)
@@ -347,11 +369,11 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
     const loop0 = patternTicks(c)
     e.preventDefault()
     undo.stopCapturing()
-    const st = () => step() || c.ppq / 4
+    const st = () => step() || ppq / 4
     dragPointer(e, {
       onDrag: (m) => {
-        const dTicks = ((m.clientX - e.clientX) / pxBeat) * c.ppq
-        updateClip(doc, c.id, { loopTicks: clamp(Math.round((loop0 + dTicks) / st()) * st(), st(), c.lengthTicks) })
+        const to = snapper(snapOff(m))(geom.tick(geom.x(loop0) + (m.clientX - e.clientX)))
+        updateClip(doc, c.id, { loopTicks: clamp(to, st(), c.lengthTicks) })
       },
       onEnd: () => undo.stopCapturing(),
     })
@@ -365,7 +387,7 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
     const mod = e.metaKey || e.ctrlKey
     const k = e.key.toLowerCase()
     const mine = selected()
-    const st = step() || clip.ppq / 4
+    const st = step() || ppq / 4
     const done = () => { e.preventDefault(); e.stopImmediatePropagation() }
     if (mod && k === 'a') { done(); setSel(notes.keys()) }
     else if (mod && k === 'd' && mine.length) {
@@ -382,7 +404,7 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
       done()
       removeNotes(doc, undo, mine.map((n) => n.id))
       setSel([])
-    } else if (k === 'q') { done(); applyPatches(doc, undo, quantize(mine.length ? mine : [...notes.values()], st, 1, false)) }
+    } else if (k === 'q') { done(); applyPatches(doc, undo, quantize(mine.length ? mine : [...notes.values()], localSnap(map, clip.startTick, step() ? gridSel : 0.25), 1, false, st)) }
     else if (mine.length && (k === 'arrowup' || k === 'arrowdown')) {
       done()
       const p = transpose(mine, (k === 'arrowup' ? 1 : -1) * (e.shiftKey ? 12 : 1))
@@ -398,7 +420,11 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
   function update(c: MidiClip, list: Note[], selectedId: string | null, pps: number, extent = c.lengthTicks) {
     if (clip && clip.id !== c.id) sel = new Set()
     clip = c
-    pxBeat = (pps * 60) / c.bpm
+    map = getTimeMap(doc)
+    ppq = getPpq(doc)
+    geom = clipGeom(map, c.startTick, pps)
+    lastExtent = extent
+    lastPps = pps
     notes = new Map(list.map((n) => [n.id, n]))
     if (selectedId !== reported) { // changed from outside (cleared on another click, a note deleted)
       sel = new Set(selectedId ? [selectedId] : [])
@@ -408,8 +434,7 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
     layoutLines()
     grid.style.width = `${px(extent)}px`
     vel.style.width = `${px(extent)}px`
-    if (document.activeElement !== bpm) bpm.value = String(c.bpm)
-    if (document.activeElement !== barsIn) barsIn.value = String(patternTicks(c) / (4 * c.ppq))
+    if (document.activeElement !== barsIn) barsIn.value = String(Math.round(ticksToBars(map, c.startTick, patternTicks(c)) * 100) / 100)
     gridPick.set(String(gridSel))
     const looping = isLooping(c)
     loopEnd.hidden = !looping

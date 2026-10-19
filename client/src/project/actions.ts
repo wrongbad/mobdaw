@@ -1,12 +1,23 @@
 // Doc writes behind the timeline's gestures and menus: no DOM, no playback, so they can be tested on a bare doc.
 import type * as Y from 'yjs'
 import {
-  DEVICES, addAudioClip, addLane, addPoint, addTrack, deleteClip, getDevices, getPoints, isLooping, nextTrackColor, getTracks, orderBetween, paramToPos, resolveTarget,
+  DEVICES, addAudioClip, addLane, addPoint, addTrack, deleteClip, getDevices, getPoints, getPpq, getTimeMap, isLooping, nextTrackColor, getTracks, orderBetween, paramToPos, resolveTarget,
   setLaneState, setParam, updateClip, updateDevice, updateNote, type Clip, type Note, type ParamTarget,
 } from '@mobdaw/shared'
-import { clamp, rotatePhase, rotateTick, trimBlock, trimMidiLeft } from '../ui/blocks'
+import { clamp, rotatePhase, rotateTick, trimBlock } from '../ui/blocks'
 
 export const MIN_SEC = 0.05 // the shortest a clip, loop window or pass can be made
+
+/**
+ * MIDI clip lengths live in project ticks and snap to 1/16 notes (ppq / 4). Sample distances from the clip start go through the
+ * project's time map, so a drag over a tempo change or a ramp lands where the pointer is. (`rate` is the audio branch's; MIDI uses the map's.)
+ */
+const midiStep = (doc: Y.Doc) => getPpq(doc) / 4
+/** Ticks from a MIDI clip's start to `extent` samples after it. */
+function ticksAfter(doc: Y.Doc, clip: { startTick: number }, extent: number) {
+  const map = getTimeMap(doc)
+  return map.sampleToTick(map.tickToSampleExact(clip.startTick) + extent) - clip.startTick
+}
 
 /** One undo step each: a knob's final value, or several params at once (a preset, a filter drag). */
 export function commitParam(doc: Y.Doc, undo: Y.UndoManager, device: string, param: number, value: number) {
@@ -63,8 +74,8 @@ export function loopClip(doc: Y.Doc, rate: number, clip: Clip, extent: number, s
     updateClip(doc, clip.id, { length: Math.max(Math.round(MIN_SEC * rate), Math.round(extent)), ...(looping ? {} : startPass(clip, srcFrames)), ...forever })
     return
   }
-  const step = clip.ppq / 4
-  const lengthTicks = Math.max(step, Math.round((extent * clip.bpm * clip.ppq) / (60 * rate) / step) * step)
+  const step = midiStep(doc)
+  const lengthTicks = Math.max(step, Math.round(ticksAfter(doc, clip, extent) / step) * step)
   updateClip(doc, clip.id, { lengthTicks, ...(looping ? {} : { loopTicks: clip.lengthTicks }), ...forever })
 }
 
@@ -75,8 +86,8 @@ export function passClip(doc: Y.Doc, rate: number, clip: Clip, pass: number, src
     updateClip(doc, clip.id, { loopLength: Math.round(clamp(pass, lo, Math.max(lo, Math.min(clip.length, srcFrames - clip.sourceOffset)))) })
     return
   }
-  const step = clip.ppq / 4
-  updateClip(doc, clip.id, { loopTicks: clamp(Math.round((pass * clip.bpm * clip.ppq) / (60 * rate) / step) * step, step, clip.lengthTicks) })
+  const step = midiStep(doc)
+  updateClip(doc, clip.id, { loopTicks: clamp(Math.round(ticksAfter(doc, clip, pass) / step) * step, step, clip.lengthTicks) })
 }
 
 /**
@@ -99,20 +110,23 @@ export function trimClip(doc: Y.Doc, rate: number, clip: Clip, mode: 'l' | 'r', 
     return
   }
   // MIDI: lengths are in ticks, snapped to 1/16 notes
-  const k = (clip.bpm * clip.ppq) / (60 * rate) // ticks per sample
-  const step = clip.ppq / 4
-  const dTicks = dSmp * k
+  const step = midiStep(doc)
+  const map = getTimeMap(doc)
+  const s0 = map.tickToSampleExact(clip.startTick)
   if (mode === 'r') {
-    updateClip(doc, clip.id, { lengthTicks: Math.max(step, Math.round((clip.lengthTicks + dTicks) / step) * step), loopTicks: 0 }) // (clears a stale pass)
+    const end = map.sampleToTick(map.tickToSampleExact(clip.startTick + clip.lengthTicks) + dSmp) - clip.startTick
+    updateClip(doc, clip.id, { lengthTicks: Math.max(step, Math.round(end / step) * step), loopTicks: 0 }) // (clears a stale pass)
     return
   }
   // Left edge: the start moves and every note moves back by the same ticks, so the music stays put on the
   // timeline. Notes pushed before the new start go silent but are kept, and return if the edge is dragged out.
   // A looping clip's pattern turns instead: the notes rotate within the loop, so every repeat stays where it was.
-  const t = trimMidiLeft(clip, dSmp, rate)
+  const dRaw = map.sampleToTick(s0 + dSmp) - clip.startTick
+  const d = clamp(Math.round(dRaw / step) * step, Math.ceil(-clip.startTick / step) * step, clip.lengthTicks - step) // (ticks, positive = shorter; the start can't pass 0)
+  const t = { startTick: clip.startTick + d, lengthTicks: clip.lengthTicks - d, d }
   const loop = isLooping(clip) ? clip.loopTicks! : 0
   doc.transact(() => {
-    updateClip(doc, clip.id, { start: t.start, lengthTicks: t.lengthTicks })
+    updateClip(doc, clip.id, { startTick: t.startTick, lengthTicks: t.lengthTicks })
     for (const n of notes0) updateNote(doc, n.id, { tick: loop && n.tick < loop ? rotateTick(n.tick, t.d, loop) : n.tick - t.d })
   })
 }

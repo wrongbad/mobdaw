@@ -1,6 +1,6 @@
 // "Start something": the new-project templates and the demo song, each drawn as the arrangement it builds.
 import * as Y from 'yjs'
-import { getClips } from '@mobdaw/shared'
+import { getClips, getRegions } from '@mobdaw/shared'
 import { h } from '../dom'
 import { describeError } from '../errors'
 import { createLocal, removeLocal } from '../local/projects'
@@ -29,7 +29,7 @@ export async function createFromTemplate(t: Template, name = silliName()) {
 /** Names as the home page shows them (the template ids stay). */
 const SHOWN: Record<string, string> = { empty: 'Blank' }
 
-/** `bpm` is the first MIDI clip's tempo (tempo lives on MIDI clips; a project has none of its own). */
+/** `bpm` is the project's opening tempo (the bar-1 region), shown only for templates with MIDI. */
 type Built = { rows: PictureRow[]; bpm: number | null; tracks: number }
 
 /** Build a template into a scratch doc just to draw it (and read its tempo, if it has MIDI). */
@@ -38,8 +38,9 @@ function sketch(t: Template): Built {
   try {
     t.build(doc)
     const rows = docPicture(doc)
-    const midi = getClips(doc).find((c) => c.kind === 'midi')
-    return { rows, bpm: midi && midi.kind === 'midi' ? Math.round(midi.bpm) : null, tracks: rows.length }
+    const first = getRegions(doc)[0]
+    const bpm = getClips(doc).some((c) => c.kind === 'midi') && first.kind === 'metered' ? Math.round(first.bpm) : null
+    return { rows, bpm, tracks: rows.length }
   } catch {
     return { rows: [], bpm: null, tracks: 0 }
   } finally {

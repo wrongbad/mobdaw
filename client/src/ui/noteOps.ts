@@ -1,12 +1,15 @@
-// Pure note edits and grid maths for the piano roll and drum grid (ported from the fork's dock/noteOps, with the grid in
-// beats of the clip's own ppq: there is no project tempo or meter, a bar is 4 beats). Nothing here touches the DOM.
-import { updateNote, addNote, deleteNote, notesMap, type Note } from '@mobdaw/shared'
+// Pure note edits and grid maths for the piano roll and drum grid (ported from the fork's dock/noteOps). Notes are clip-local
+// ticks at the project's ppq; the grid they snap to is the project's time map (bars and beats follow the meter, docs/engine.md §2),
+// found at the clip's place on the timeline. In a free (unmetered) region there is no grid: positions only round to whole ticks.
+// Nothing here touches the DOM.
+import { updateNote, addNote, deleteNote, notesMap, type Note, type TimeMap } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 
 export type NotePatch = { id: string; tick?: number; durTicks?: number; pitch?: number; velocity?: number }
 export const PITCH_MIN = 12 // c0
 export const PITCH_MAX = 108 // c8
 export const VEL_MIN = 0.05
+/** A bar of 4 quarter notes: the 'bar' grid's length when there is no map to ask. */
 export const BEATS_PER_BAR = 4
 
 /** Grid choices: a fraction of a beat, 'bar', or 0 (off). */
@@ -14,11 +17,56 @@ export type Grid = number | 'bar'
 export const GRIDS: [Grid, string][] = [['bar', 'bar'], [1, '1/4'], [0.5, '1/8'], [0.25, '1/16'], [0.125, '1/32'], [1 / 3, '1/8t'], [1 / 6, '1/16t'], [0, 'off']]
 export const DEFAULT_GRID: Grid = 0.25
 
-/** A grid as ticks (0: off). */
-export function gridTicks(g: Grid, ppq: number): number {
+/** A grid as ticks (0: off). 'bar' is `barTicks` long (a 4/4 bar unless the caller knows the meter). */
+export function gridTicks(g: Grid, ppq: number, barTicks = ppq * BEATS_PER_BAR): number {
   if (g === 0) return 0
-  if (g === 'bar') return ppq * BEATS_PER_BAR
+  if (g === 'bar') return barTicks
   return Math.max(1, Math.round(ppq * g))
+}
+
+/**
+ * Snap a global tick (ticks from bar 1) to the map's grid: 'bar' lines, or steps of `g` quarter notes counted from the start of the
+ * bar it is in (the last step of a bar that does not divide evenly is short; the next bar line is always a candidate). 'round' goes
+ * to the nearest line, 'floor' to the one at or before. Returns null in a free region (no grid) and when `g` is 0 (off).
+ */
+export function snapGlobal(map: TimeMap, tick: number, g: Grid, mode: 'round' | 'floor' = 'round'): number | null {
+  if (g === 0) return null
+  const ppq = map.ppq
+  const p = map.position(tick)
+  if (p.free) return null
+  const barTicks = map.meterAt(p.bar).barTicks
+  const barStart = tick - p.tickInBar
+  const step = g === 'bar' ? barTicks : Math.min(barTicks, gridTicks(g, ppq))
+  const k = p.tickInBar / step
+  const lo = Math.floor(k + 1e-9) * step
+  if (mode === 'floor') return barStart + lo
+  const hi = Math.min(lo + step, barTicks)
+  return barStart + (p.tickInBar - lo <= hi - p.tickInBar ? lo : hi)
+}
+
+/**
+ * A clip-local snapper: takes a note tick (from the clip's start at `startTick`), returns the tick on the map's grid; whole ticks
+ * where the grid is off or the clip sits in a free region.
+ */
+export function localSnap(map: TimeMap, startTick: number, g: Grid, mode: 'round' | 'floor' = 'round'): (tick: number) => number {
+  return (t) => {
+    const s = snapGlobal(map, startTick + t, g, mode)
+    return s == null ? (mode === 'floor' ? Math.floor(t) : Math.round(t)) : s - startTick
+  }
+}
+
+/** The pattern length of `ticks` in bars from a clip at `startTick` (fractional when it ends inside a bar), and the inverse. */
+export function ticksToBars(map: TimeMap, startTick: number, ticks: number): number {
+  const at = (t: number) => {
+    const p = map.position(t)
+    return p.bar + p.tickInBar / map.meterAt(p.bar).barTicks
+  }
+  return at(startTick + ticks) - at(startTick)
+}
+export function barsToTicks(map: TimeMap, startTick: number, bars: number): number {
+  const p = map.position(startTick)
+  const b0 = p.bar + p.tickInBar / map.meterAt(p.bar).barTicks
+  return map.barStart(b0 + bars) - startTick
 }
 
 /** Round a tick to the grid (`step` 0: only to a whole tick). */
@@ -36,13 +84,15 @@ export const subPx = (step: number, ppq: number, pxBeat: number, minPx = 6) => (
  * Quantize notes to the grid: each start moves `strength` (0..1) of the way to its nearest line. With `lengths`, a length
  * under a step becomes a step and the rest round to the grid. Notes already on the grid give no patch.
  */
-export function quantize(notes: Note[], step: number, strength = 1, lengths = false): NotePatch[] {
-  if (!(step > 0)) return []
+export function quantize(notes: Note[], step: number | ((tick: number) => number), strength = 1, lengths = false, minDur?: number): NotePatch[] {
+  const snap = typeof step === 'function' ? step : (t: number) => snapTick(t, step)
+  const unit = typeof step === 'function' ? minDur ?? 1 : step
+  if (!(unit > 0)) return []
   const out: NotePatch[] = []
   for (const n of notes) {
-    const target = Math.max(0, snapTick(n.tick, step))
+    const target = Math.max(0, snap(n.tick))
     const tick = Math.round(n.tick + (target - n.tick) * Math.min(1, Math.max(0, strength)))
-    const dur = lengths ? Math.max(step, snapTick(n.durTicks, step)) : n.durTicks
+    const dur = !lengths ? n.durTicks : typeof step === 'function' ? Math.max(unit, snap(n.tick + n.durTicks) - target) : Math.max(unit, snapTick(n.durTicks, unit))
     if (tick !== n.tick || dur !== n.durTicks) out.push({ id: n.id, ...(tick !== n.tick ? { tick } : {}), ...(dur !== n.durTicks ? { durTicks: dur } : {}) })
   }
   return out
