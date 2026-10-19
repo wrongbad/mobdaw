@@ -4,8 +4,8 @@
 // is a step in the track's volume automation. Pure of the browser: positions come in as numbers and the recorder and engine are
 // behind `LoopIO`, so the whole thing is tested with a fake clock (client/test/loopPedal.test.ts).
 import {
-  addAudioClip, clipsMap, addLane, addPoint, addTrack, deleteClip, ensureMixDevice, evalPoints, getClips, getLanes, getMixDevice, getPoints, getTracks, MIX_GAIN, nextTrackColor, paramToPos, resolveTarget,
-  updateClip, updatePoint, updateTrack, type AudioClip, type ParamTarget,
+  addAudioClip, addRegion, clipsMap, addLane, addPoint, addTrack, deleteClip, ensureMixDevice, evalPoints, getClips, getLanes, getMixDevice, getPoints, getTimeMap, getTracks, MIX_GAIN, nextTrackColor, paramToPos, resolveTarget,
+  setRegion, updateClip, updatePoint, updateTrack, type AudioClip, type ParamTarget, type TimeMap,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 
@@ -27,12 +27,36 @@ export function nextBoundary(t: number, g: Grid): number {
   return g.origin + Math.ceil((t - g.origin) / g.period) * g.period
 }
 
+// --- the bar grid (metered regions)
+/** The bar (1-based) whose line is nearest `sample`, or null in a free region. */
+function nearestBar(map: TimeMap, sample: number): number | null {
+  const t = map.snapTick(map.sampleToTick(sample), 'bar')
+  return t == null ? null : map.position(t + 1e-6).bar
+}
+/** The first bar line at or after `sample` (the performer cannot have played before the press, so a start never rounds back). Null in a free region. */
+export function barAtOrAfter(map: TimeMap, sample: number): number | null {
+  const s = map.snapSample(sample, 'bar')
+  const b = nearestBar(map, sample)
+  if (s == null || b == null) return null
+  return s >= sample ? b : b + 1
+}
+/** The first bar line strictly after `sample`, as a sample (a free stretch has none: its end). */
+export function nextBarSample(map: TimeMap, sample: number): number {
+  const sp = map.spanAtSample(sample)
+  if (sp.region.kind === 'free') return Math.round(sp.endSample)
+  const b = map.position(map.sampleToTick(sample)).bar
+  return map.barStartSample(b + 1)
+}
+
 /** Audio clips that loop (a pass shorter than the extent, or a forever clip that was ended). */
 const loopClips = (doc: Y.Doc) => getClips(doc).filter((c): c is AudioClip => c.kind === 'audio' && !!c.loopLength && c.loopLength > 0)
 
-/** The cycle: the earliest loop's start on the timeline and its pass. Null while the project has no audio loop (the next one is free length). */
-export function cycleGrid(doc: Y.Doc): Grid | null {
-  const first = loopClips(doc).sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : 1))[0]
+/**
+ * The cycle: the earliest loop's start on the timeline and its pass. Null while the project has no audio loop (the next one is free length).
+ * With `map`, only loops that start in a free region count (a loop recorded on the bar grid is not a cycle).
+ */
+export function cycleGrid(doc: Y.Doc, map?: TimeMap): Grid | null {
+  const first = loopClips(doc).filter((c) => !map || map.regionAtSample(c.start).kind === 'free').sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : 1))[0]
   return first ? { origin: first.start, period: first.loopLength! } : null
 }
 
@@ -161,14 +185,17 @@ export interface LoopIO {
   say(msg: string): void
 }
 
-type Rec = { trackId: string; start: number; grid: Grid | null; recstart?: number; end?: number; pass?: number; undoDepth: number | null; was: LoopRestore[] }
+type Rec = { trackId: string; start: number; grid: Grid | null; /** bar-quantized (the press was in a metered region) */ bars: boolean; recstart?: number; end?: number; pass?: number; undoDepth: number | null; was: LoopRestore[] }
 
 export class LoopPedal {
   /** The current track: where record and mute act, which prev/next move. */
   current: string | null = null
   private rec: Rec | null = null
 
-  constructor(private d: { doc: Y.Doc; rate: number; io: LoopIO; undo?: Y.UndoManager; latency(): number }) {}
+  /** `map`: the timeline's tempo map (default: the doc's cached `getTimeMap`; tests pass a fixed one). */
+  constructor(private d: { doc: Y.Doc; rate: number; io: LoopIO; undo?: Y.UndoManager; latency(): number; map?: () => TimeMap }) {}
+
+  private map(): TimeMap { return this.d.map ? this.d.map() : getTimeMap(this.d.doc) }
 
   get recording() { return !!this.rec }
   /** The take's timeline start, once the recorder reports it. */
@@ -180,6 +207,7 @@ export class LoopPedal {
     if (!r) return null
     if (r.end != null) return { stopping: true, samples: Math.max(0, r.end - pos), free: false }
     if (pos < r.start) return { stopping: false, samples: r.start - pos, free: false }
+    if (r.bars) return { stopping: false, samples: nextBarSample(this.map(), pos) - pos, free: false }
     return r.grid ? { stopping: false, samples: nextBoundary(pos, r.grid) - pos, free: false } : { stopping: false, samples: pos - r.start, free: true }
   }
 
@@ -227,15 +255,18 @@ export class LoopPedal {
       this.stopGroup()
     }
     const trackId = this.current!
-    const grid = cycleGrid(doc)
-    const start = grid ? nextBoundary(pos, grid) : Math.round(pos)
+    const map = this.map()
+    const bar = barAtOrAfter(map, Math.round(pos)) // metered region: the loop starts on a bar line
+    const bars = bar != null
+    const grid = bars ? null : cycleGrid(doc, map)
+    const start = bars ? map.barStartSample(bar) : grid ? nextBoundary(pos, grid) : Math.round(pos)
     if (!io.beginTake(trackId)) return
     if (!io.playing()) io.play()
     // overwrite only: the loop already playing here ends exactly where this one starts
     this.stopGroup()
     const was = endLoopsAt(doc, trackId, start)
     const changed = was.length > 0
-    this.rec = { trackId, start, grid, undoDepth: changed && undo ? undo.undoStack.length : null, was }
+    this.rec = { trackId, start, grid, bars, undoDepth: changed && undo ? undo.undoStack.length : null, was }
     if (changed) this.stopGroup()
   }
 
@@ -243,7 +274,16 @@ export class LoopPedal {
     const { io, rate } = this.d
     if (pos < r.start) return this.cancel(r) // stopped before it began
     let end: number
-    if (r.grid) {
+    if (r.bars) {
+      // The bar line nearest the (heard) stop press, at least one bar after the start. Nearest, not next: the performer who plays
+      // N bars and presses stop on the downbeat hears the press a hair late; rounding up would add a bar for every late press.
+      // The take keeps recording, so an end a little after the press is covered (tick() waits for it) and one before it already is.
+      const map = this.map()
+      const near = map.snapSample(Math.round(pos), 'bar')
+      const min = nextBarSample(map, r.start)
+      end = near == null ? Math.round(pos) : near
+      if (end < min) end = min
+    } else if (r.grid) {
       end = nextBoundary(pos, r.grid)
       if (end <= r.start) end = r.start + r.grid.period
     } else {
@@ -284,4 +324,55 @@ export class LoopPedal {
 export function joinUndo(undo: Y.UndoManager, depth: number | null) {
   if (depth != null && undo.undoStack.length === depth) undo.lastChange = Date.now()
   else undo.stopCapturing()
+}
+
+// --- tempo from loop
+/** Tempos the suggestion prefers (quarter notes/min) and the bar counts it tries. */
+export const SENSIBLE_BPM = { lo: 70, hi: 160, pref: 110 }
+export const LOOP_BARS = [1, 2, 4, 8] as const
+
+/** One change to the regions, in the vocabulary of `addRegion` / `setRegion`. */
+export type RegionEdit =
+  | { op: 'set'; id: string; patch: Parameters<typeof setRegion>[2] }
+  | { op: 'add'; region: Parameters<typeof addRegion>[1] }
+export type TempoFromLoop = { bars: number; bpm: number; edits: RegionEdit[]; alternatives: { bars: number; bpm: number }[] }
+
+/**
+ * Turn a loop pass recorded in a free region into the grid: the pass becomes `bars` bars of 4/4 at `bpm = 240 * bars * rate / length`
+ * (exact, so the bar lines land on the pass edges; display rounds). `bars` is 1, 2, 4 or 8, the one whose tempo is nearest the
+ * sensible range 70-160 bpm (ties to the one nearest 110 on a log scale). The grid is anchored so the pass starts on a bar line:
+ * the free region keeps the lead-in (shortened to end at `start`, or made metered when the pass starts at its first sample) and a
+ * metered 4/4 region follows it at the next bar. Returns null when the pass does not start in a free region.
+ */
+export function tempoFromLoop(map: TimeMap, pass: { start: number; length: number }): TempoFromLoop | null {
+  const sp = map.spanAtSample(pass.start)
+  if (sp.region.kind !== 'free' || !(pass.length > 0)) return null
+  const rate = map.sampleRate
+  const bpmFor = (bars: number) => (240 * bars * rate) / pass.length
+  const miss = (b: number) => (b < SENSIBLE_BPM.lo ? Math.log(SENSIBLE_BPM.lo / b) : b > SENSIBLE_BPM.hi ? Math.log(b / SENSIBLE_BPM.hi) : 0)
+  const ranked = LOOP_BARS.map((bars) => ({ bars, bpm: bpmFor(bars) })).sort((a, b) => miss(a.bpm) - miss(b.bpm) || Math.abs(Math.log(a.bpm / SENSIBLE_BPM.pref)) - Math.abs(Math.log(b.bpm / SENSIBLE_BPM.pref)))
+  const best = ranked[0]
+  const lead = Math.round(pass.start - sp.startSample)
+  const edits: RegionEdit[] = []
+  const metered = { kind: 'metered' as const, bpm: best.bpm, num: 4, den: 4 }
+  // (a stored region on the next bar is the filler `addRegion` leaves after a free bar: it must carry the new tempo too)
+  const follow = map.regions.some((x) => x.bar === sp.startBar + 1)
+  if (lead >= 1) {
+    edits.push({ op: 'set', id: sp.region.id, patch: { length: lead } })
+    edits.push({ op: 'add', region: { bar: sp.startBar + 1, ...metered } })
+  } else {
+    edits.push({ op: 'set', id: sp.region.id, patch: metered })
+    if (follow) edits.push({ op: 'add', region: { bar: sp.startBar + 1, ...metered } })
+  }
+  return { ...best, edits, alternatives: ranked.slice(1).filter((a) => miss(a.bpm) === 0) }
+}
+
+/** Apply `tempoFromLoop`'s edits in one transaction (one undo step with the doc's undo manager). */
+export function applyRegionEdits(doc: Y.Doc, edits: RegionEdit[]) {
+  doc.transact(() => {
+    for (const e of edits) {
+      if (e.op === 'set') setRegion(doc, e.id, e.patch)
+      else addRegion(doc, e.region)
+    }
+  })
 }

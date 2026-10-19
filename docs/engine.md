@@ -503,10 +503,23 @@ wires it to the recorder and the engine.
   live source, and starts the transport if it is stopped (the microphone is armed on the first press; it stays armed). The
   next press stops it. The clip is `start` = where recording began on the timeline, `loopLength` = the pass, `length` = two passes,
   `forever`, `sourceOffset = (start - recstart) + latency`.
-  - **Cycle.** The first loop of a project (no audio clip with a `loopLength`) is free length, press to press, and its start and pass
-    are the cycle (`cycleGrid`: origin = that clip's start, period = its pass; nothing is stored). Every later loop starts at the first
+  - **Bar grid (metered region).** When the press is in a metered region of the timeline (`TimeMap.regionAtSample`), the loop
+    snaps to the shared bar grid and the cycle is not used. The start is the first bar line at or after the press (never
+    earlier: the take holds no audio from before the press). The stop is the bar line *nearest* the heard stop press, at least one
+    bar after the start. Nearest rather than next because the press is heard late: a performer who plays N bars and hits stop on
+    the downbeat would otherwise get N+1. The take keeps recording, so an end shortly after the press is covered (`tick` waits for
+    it) and one before it already is. Quantizing only picks the pass boundaries; `start`, `loopLength` and `sourceOffset` read the
+    audio as before. Lines come from the map (any meter, any ramp; bars may differ in length, the pass is their sample distance).
+  - **Free region (cycle).** A press in a free region keeps the cycle behaviour. The first loop (no audio clip with a `loopLength`
+    that starts in a free region) is free length, press to press, and its start and pass are the cycle (`cycleGrid`: origin = that
+    clip's start, period = its pass; nothing is stored). Every later loop starts at the first
     boundary at or after the press and stops at the first boundary after the stop press (at least one cycle), so lengths are whole
-    cycles and loops stay in phase with the first. No global tempo.
+    cycles and loops stay in phase with the first.
+  - **Tempo from loop.** `tempoFromLoop(map, {start, length})` takes a loop pass that starts in a free region and returns the regions
+    that make it N bars of 4/4 (`bars` 1, 2, 4 or 8, whichever gives a tempo in 70-160 bpm, else nearest that range, ties to
+    110 bpm on a log scale) at the exact tempo `240 * bars * rate / length`. The free region keeps the lead-in (shortened to end at the pass start,
+    or made metered when the pass starts at its first sample) and a 4/4 region follows on the next bar. `applyRegionEdits(doc, plan.edits)`
+    writes it in one transaction. Null for a pass in a metered region.
   - **Overwrite only.** A loop already playing on the track at the new start is not deleted: it is ended exactly there (`forever` off,
     `length` cut), written when recording begins so replaying from 0 stops it at the same place. A loop starting exactly there is replaced.
   - **Seamless.** At the stop press an engine-only clip (`Playback.liveClip`) on the take's live source is made with the same track,
