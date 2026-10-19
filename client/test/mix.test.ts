@@ -24,7 +24,7 @@ describe('mix device', () => {
     fx.set('params', new Y.Map())
     devicesMap(old).set('fx', fx)
     migrateToV3(old)
-    expect(metaMap(old).get('schemaVersion')).toBe(SCHEMA_VERSION)
+    expect(metaMap(old).get('schemaVersion')).toBe(3) // (migrateToV4 takes it to SCHEMA_VERSION)
     expect(getMix(old, 'a')).toEqual({ gain: 0.4, pan: -0.3 })
     expect(getMix(old, 'b')).toEqual({ gain: 1, pan: 0 })
     expect(getMix(old, MASTER_TRACK)).toEqual({ gain: 1, pan: 0 })

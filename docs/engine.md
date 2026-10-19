@@ -68,7 +68,7 @@ what we chose, why, and what we gave up.
 - Deferred: **warp markers**, which would map clip time to sample positions so MIDI can
   follow a drifting live take. They fit this model later.
 
-## 3. Shared document schema (v2)
+## 3. Shared document schema (v4)
 Every map is **flat and keyed by id**. Children reference their parent by id, and ordering
 uses fractional `order` numbers. As a result:
 - concurrent inserts and edits merge cleanly
@@ -77,9 +77,11 @@ uses fractional `order` numbers. As a result:
 
 | map | key → value (Y.Map unless noted) |
 |---|---|
-| `meta` | `schemaVersion: 3`, `sampleRate` |
+| `meta` | `schemaVersion: 4`, `sampleRate`, `ppq` (project tick resolution, 960), `key?` (display only, "D minor") |
+| `regions` | The project's tempo/meter map: `{ id, bar (1-based), kind: 'metered', bpm, num, den, groups?, rampTo? }` or `{ id, bar, kind: 'free', length (samples) }`. A region runs from its `bar` to the next region's. Always one at bar 1 and none sharing a bar; `normalizeRegions` (`shared/src/timemap.ts`) applies that as a view (same-bar duplicates keep the smallest id, a default 120 bpm 4/4 region `default` is synthesized at bar 1) and `repairRegions` writes it back. `bpm` is quarter notes per minute for any denominator; `groups` (beats per group, summing to `num`, e.g. `[2,2,3]`) default to threes in compound meters; `rampTo` moves the tempo linearly in ticks to the next region (ignored in the last). A free region is one bar of unmetered time; its ticks are nominal (its length at the previous region's tempo, 120 if first). |
+| `markers` | `{ id, bar, label, text? }`: a section mark at a bar (beat 1). |
 | `tracks` | `{ id, name, kind: 'audio'\|'midi'\|'soundscape', order, muted, soloed, role?: 'click' }`. A track's fader and pan are its mix device. |
-| `clips` | Audio clips: `{ id, trackId, kind:'audio', start, length, sourceHash, sourceOffset, gain, fadeIn, fadeOut, fadeShape, loopLength?, loopPhase?, forever? }`. MIDI clips: `{ id, trackId, kind:'midi', start, bpm, ppq, lengthTicks, loopTicks?, forever?, view?: 'drums' }` |
+| `clips` | Audio clips: `{ id, trackId, kind:'audio', start, length, sourceHash, sourceOffset, gain, fadeIn, fadeOut, fadeShape, loopLength?, loopPhase?, forever? }`. MIDI clips: `{ id, trackId, kind:'midi', startTick, lengthTicks, loopTicks?, forever?, view?: 'drums' }` (`startTick` is ticks from bar 1 beat 1 at `meta.ppq`; notes stay clip-local; samples come from the time map) |
 | `notes` | `{ id, clipId, tick, durTicks, pitch, velocity }` |
 | `devices` | `{ id, trackId, type, order, bypass, params: Y.Map<paramId, number>, keyLo?, keyHi? }`. `keyLo`/`keyHi` (MIDI 0..127, default 0 and 127) are an instrument's note range; they are not params. Every track, and `'master'`, has exactly one **mix device** (type 9, id `mix:<trackId>`; params 0 gain, linear 0..2, unity 1, and 1 pan, -1..1) pinned last in its chain: the shared helpers keep it last, refuse to delete it on its own (deleting the track deletes it) and `applyPreset` keeps it. The fx drawers do not show it. |
 | `lanes` | Automation lanes, one per automated param: `{ id, enabled, order, scope, kind: 'synth'\|'effect'\|'looper', owner, param }`. `scope` is a track id, or `'master'` for the global fx chain; `owner` is the device or looper id; `param` is the device's param id (as a string) or the looper's field name (`gain`, `speed`, `sat`, `cutoff`, `warble`). The registry (`shared/src/params.ts`) resolves it to a range and scale. While `enabled` the lane *replaces* the param's value; the doc keeps the static value, and it comes back when the lane is disabled or deleted. |
@@ -105,6 +107,23 @@ uses fractional `order` numbers. As a result:
 - **v1 → v2 migration** (seconds → samples) happens in the bridge at load time:
   - It applies once, when `meta.schemaVersion` is absent.
   - It sets `sampleRate = 48000`, rounds the positions, and gives tracks `kind: 'audio'`.
+- **Time map (`shared/src/timemap.ts`)**: `timeMap(regions, rate, ppq)` is the one place ticks, bars/beats and samples are converted
+  (`tickToSample`, `sampleToTick`, `barStart`, `position`, `bars(from, to)`, `snapSample`, ...). `getTimeMap(doc)` caches it per doc and
+  rebuilds when `regions` or `meta` change. Constant tempo is linear; ramps use the closed-form log integral and its exp inverse;
+  every event is converted from its absolute tick and rounded once. `chat` messages may carry `system: true` (app notices; `username`
+  `SYSTEM_USER`).
+- **Schema guard**: `isFutureDoc(doc)` is true when `meta.schemaVersion > SCHEMA_VERSION`. This client then makes no writes
+  (the migrations and `sweepOrphans` skip it) and the UI must open the project read-only. Clients from before v4 have no such guard
+  (docs/todo.md).
+- **v3 → v4 migration** (`migrateToV4`, after V2/V3 on open; idempotent; origin `'migrate'`, so not undoable):
+  - The map comes from the click track's clip (bpm, `loopTicks/ppq` quarters per bar as `n/4`; a start other than 0 becomes a leading free
+    region of that many samples, then the metered region from bar 2), else the bpm carrying the most MIDI time (120 if none), in 4/4.
+  - Each MIDI clip gets `startTick = sampleToTick(start)`; its notes' `tick`/`durTicks` and its `lengthTicks`/`loopTicks` are scaled by
+    `(mapBpm/clipBpm)*(ppq/clipPpq)`, so every note starts and ends on the same sample (+-1). `start`, `bpm`, `ppq` are removed. Clips at
+    another tempo are off the grid but correct.
+  - Audio clips, pads, loopers and automation points are untouched.
+  - One system chat message (id `migrate-v4`) records the map and the clips now off the grid.
+  - A clip still in the v3 shape in a v4 doc (an old client wrote it) is converted on the next open.
 - **v2 → v3 migration** (`migrateToV3`, run on every load, idempotent):
   - Each track gets a mix device seeded from its `gain` and `pan`, which are then removed; the master bus gets one at unity and centre.
   - It doubles as the repair: a missing mix device is made, extras are dropped, and it is moved back to the end of its chain.

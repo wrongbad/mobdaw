@@ -358,9 +358,9 @@ export function getTimeMap(doc: Y.Doc): TimeMap {
     const cache: MapCache = { map: null }
     c = cache
     mapCaches.set(doc, cache)
-    const regions = regionsMap(doc), meta = metaMap(doc)
+    const regions: unknown = regionsMap(doc), meta: unknown = metaMap(doc)
     doc.on('beforeObserverCalls', (tr) => {
-      if (tr.changedParentTypes.has(regions as Y.AbstractType<any>) || tr.changedParentTypes.has(meta as Y.AbstractType<any>)) cache.map = null
+      for (const t of tr.changed.keys()) if (t === regions || t === meta || t.parent === regions) return void (cache.map = null)
     })
   }
   if (c.map && !(doc as unknown as { _transaction: unknown })._transaction) return c.map
