@@ -263,22 +263,30 @@ engine_clip_midi_upsert(e, h, track: u32, start: f64, bpm: f64, ppq: u32, length
 engine_note_upsert(e, h, clip: u32, tick: f64, dur_ticks: f64, pitch: u32, velocity: f32 /*0..1*/)
 engine_note_remove(e, h)
 ```
+- **The host sends baked clips** (docs/engine.md §2). The engine has no tempo map: each clip keeps its own tick clock, and the
+  bridge (`client/src/audio/bake.ts`) sends every MIDI clip with `bpm = 60 · sr`, `ppq = 1` (one tick per sample), `loop_ticks = 0`,
+  `start` the clip's start sample and `length_ticks` its length in samples, and every note with `tick`/`dur_ticks` in samples from the
+  clip's start, converted from the absolute tick through the project's time map (`map.tickToSample`, rounded once). The engine's
+  tick-to-sample map is then the identity, exactly (tested in `tests/engine.rs`), so tempo ramps, meter changes and loops are
+  entirely the host's. The click track's engine clip is the same shape, starting at sample 0, with its notes generated from the map.
+  A host that wants a plain tick clock (the Rust tests do) may still send any `bpm`/`ppq`/`loop_ticks`, as described below.
 - **Note timing:**
   - A tick maps to a sample as `start + round(tick · 60 · sr / (bpm · ppq))`, computed in
     f64.
   - Note-on and note-off are **sample-accurate**: sub-blocks split at event offsets.
   - Notes at or after `length_ticks` don't play. A note longer than the clip is cut off at
     the clip end.
-- **Looping:** `loop_ticks > 0` (and shorter than `length_ticks`) makes the clip a repeating pattern.
+- **Looping (engine feature, unused by the bridge):** `loop_ticks > 0` (and shorter than `length_ticks`) makes the clip a repeating pattern.
   The notes in `[0, loop_ticks)` repeat every `loop_ticks` until `length_ticks`; notes at or after
   `loop_ticks` are ignored. Pass `k`'s note at `tick` plays at `tick_to_sample(k·loop_ticks + tick)`,
   so every repeat is sample-accurate and rounded once like any other event. A note longer than what
   is left of its pass is cut at the end of the pass (and still at the clip end). `loop_ticks` of 0,
-  or at least `length_ticks`, is a plain clip.
-- **Forever:** the engine has no separate flag. The host's `forever` clips (a looping clip that keeps
-  repeating past its finite end) are sent with a `length_ticks` of 24 hours' worth of ticks at the
-  clip's bpm. Passes are computed on the fly, so that costs nothing, and nothing in the engine stops
-  at the end of the content, so a click keeps going under a take recorded past everything else.
+  or at least `length_ticks`, is a plain clip. The bridge unrolls loops itself because under a changing tempo a pass is not a
+  fixed number of samples.
+- **Forever:** the engine has no separate flag. The host's `forever` clips are baked only over a window of the timeline around the
+  playhead (`Bridge.setWindow`; about 120 s ahead, moved by `play`, `seek` and position reports), so the engine clip is 24 hours long
+  but holds only the notes of that window; the click track works the same way. The window is the host's concern: the engine plays
+  whatever notes it has.
 - **Seek and stop** release every sounding voice. Starting playback in the middle of a note
   doesn't retrigger it (simple rule for now).
 - MIDI events go to **every** sounding (not bypassed) instrument on the track whose note range (see

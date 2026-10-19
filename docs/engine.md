@@ -15,7 +15,7 @@ what we chose, why, and what we gave up.
     commands.
   - Everyone renders the same doc, so everyone hears the same thing.
 - **The root clock is integer samples at a fixed project sample rate.** Every global position
-  is an integer sample index. There is no global tempo.
+  is an integer sample index. Musical time (the project's tempo/meter map, §2) is converted to samples by the host.
 - **Rendering is deterministic.** The same doc and the same sources produce bit-identical
   output on any client. Wasm float arithmetic is deterministic as long as we avoid relaxed
   SIMD and never depend on NaN payloads. As a result, an offline bounce on any machine
@@ -41,14 +41,38 @@ what we chose, why, and what we gave up.
   - automation point positions
   - Yjs stores them as JS numbers (exact up to 2^53 samples, which is about 5,900 years at
     48 kHz). Rust uses `i64`.
-- **MIDI clips carry their own clock**: `bpm` (f64) and `ppq` (default 960).
-  - Notes and clip length are in clip-local **ticks**.
-  - At render time, a tick maps to a global sample as
-    `clip.start + round(tick * 60 * sampleRate / (bpm * ppq))`. The mapping is computed in
-    f64 and rounded once per event, so it's deterministic.
-  - Changing `bpm` keeps the start fixed and moves the end. Polytempo comes for free.
-  - A clip may **loop** (`loopTicks`): its first `loopTicks` repeat until `lengthTicks`. The extent stays
-    in ticks, so changing `bpm` rescales it like any other MIDI clip.
+- **One shared timeline (musical time).** The project has a single tempo/meter map (`regions` in the doc, §3) that every track
+  agrees on: bars, beats, ticks and samples are converted by `timeMap` in `shared/src/timemap.ts` and nowhere else.
+  - A MIDI clip sits at `startTick` (ticks from bar 1 beat 1 at `meta.ppq`); its notes stay clip-local ticks, so a note's global
+    tick is `startTick + note.tick`. A tempo edit therefore moves MIDI and leaves audio (positions in samples) where it is.
+  - A tick maps to a sample as `round(map.tickToSample(tick))`: constant tempo is
+    `tick * 60 * rate / (bpm * ppq)`; a ramp is the closed-form log integral of 60/(ppq*bpm(t)). The value is computed in f64
+    from the *absolute* tick of each event and rounded once, so nothing accumulates and the same doc gives the same sample on
+    every client and in the export.
+  - A clip may **loop** (`loopTicks`): its first `loopTicks` repeat until `lengthTicks`. The extent stays in ticks, so it stretches
+    with the tempo. Pass `k` of a loop starts at tick `startTick + k * loopTicks`, so under a ramp or across a region boundary
+    each pass has its own length in samples and each note its own sample.
+- **The engine does not know the map: the host bakes (option (a)).** `client/src/audio/bake.ts` turns every MIDI clip into engine
+  notes in absolute samples (unrolling looping and `forever` clips pass by pass) and the bridge sends them as ordinary engine
+  clips whose own tick clock is one tick per sample (`bpm = 60 * rate`, `ppq = 1`, where the engine's conversion is the exact
+  identity, tested in `engine/crates/engine/tests/engine.rs`). Why not (b), the map in Rust:
+  - The Rust change would be a second implementation of ramps and meters plus a shared test-vector file to keep it equal to the
+    TypeScript one; (a) has one implementation, so the UI, the export and the engine cannot disagree.
+  - It costs no real-time safety: the audio thread keeps doing what it does (a binary search over sorted notes per block); all the
+    conversion happens on the main thread when the doc changes.
+  - Forever loops are the awkward part of (a) and are handled by a **window**: only `[playhead - 1 s, playhead + 120 s)` is baked
+    (a forever clip's 24-hour engine length holds just those notes). `play`, `seek`, position reports and a transport cycle
+    (`setCycle`) move the window, refreshing it 30 s before its end; an offline render sets it to the whole export
+    (`Bridge.setWindow`). A re-bake sends only the engine notes whose values changed and removes the ones that left the window.
+  - A tempo or meter edit (any change to `regions`/`meta`) re-bakes every clip at once, so MIDI lands on the new grid from the next
+    block, while audio is untouched (glitch-free: voices already sounding keep their own release time). Dragging a tempo handle
+    re-bakes per change; see docs/todo.md.
+  - A note ends at the earliest of its own end, the end of its pass (when looping) and the clip's end, each converted from its own
+    absolute tick, and notes at or after the clip end never play, as before.
+- **Determinism.** Everything above is a pure function of the doc: `bakeClip(map, clip, notes, window)` and
+  `clickEvents(map, from, to)`. Moving the window changes which notes are *present*, never the sample of any note.
+- **The click track is generated from the map** (§10), not stored: its engine clip starts at sample 0 and holds the events
+  `clickEvents` returns for the window.
 - **Pass, extent and forever are shared by audio and MIDI clips.** The *extent* is the clip's finite length on the
   timeline (`length` / `lengthTicks`), the *pass* is the pattern that repeats (`loopLength` in samples / `loopTicks`),
   and a clip loops when its extent exceeds its pass. `forever` (only while looping) repeats the pass past the extent
@@ -60,11 +84,10 @@ what we chose, why, and what we gave up.
     `loopPhase = (loopPhase + cut) mod loopLength`.
   - Audio playback stays **stateless**: the output is a pure function of the timeline position, the clip and the
     source. The seam between passes is part of that function (see `docs/engine-api.md`, "Audio clips").
-- **No global grid.** The UI snaps to:
-  - clip edges
-  - the selected MIDI clip's grid
-  - an optional UI-only "guide BPM"
-- **Tempo-synced effects** start in milliseconds only. Syncing to a clip's BPM is deferred.
+- **Grid and snapping.** The UI snaps to the map's bars, beats and subdivisions in metered regions (`map.snapSample`); in free
+  regions (unmetered) it keeps snapping to clip edges. Audio clips keep their sample positions: the grid is only something to
+  snap to and count by. There is no UI-only "guide BPM" any more.
+- **Tempo-synced effects** start in milliseconds only. Syncing to the map's tempo is deferred.
 - Deferred: **warp markers**, which would map clip time to sample positions so MIDI can
   follow a drifting live take. They fit this model later.
 
@@ -478,11 +501,14 @@ client diverged, so we don't.
   A cell toggles a one-step, velocity-1 note. Notes at pitches without a single-note instrument are hidden but kept.
 - **Several instruments per track**: a note goes to every non-bypassed instrument whose range contains its pitch;
   their outputs are summed before the track's effect chain.
-- **Metronome button** (top bar): creates a MIDI track with `role: 'click'` (accent + tick lofi drums and a looping
-  drum clip at 120 bpm, 4/4) in one undo step; afterwards it toggles that track's mute. Click tracks ignore solo
-  (their own mute still counts). There is no count-in feature: start the song at bar 2, mute the click, and the
-  export trims the lead-in (export covers only audible clips).
-
+- **Metronome button** (top bar): creates a MIDI track with `role: 'click'` (the "accent" and "tick" lofi drums, on keys 37 and 36)
+  in one undo step; afterwards it toggles that track's mute. Click tracks ignore solo (their own mute still counts). What it plays is
+  **generated from the time map**, not from a stored clip (`client/src/audio/click.ts`, baked like other MIDI over the transport
+  window, so it runs forever and follows tempo, meter and ramp edits): the tick drum on every beat of a metered region at velocity 1;
+  the accent drum on each bar's first beat at velocity 1 (so muting the accent synth leaves a plain click) and, softer, at velocity
+  0.5, on the first beat of every later beat group (beats 3 and 5 of a 2+2+3 bar, beat 4 of 6/8); nothing in a free region. The
+  bridge ignores any MIDI clips on a click-role track (the stored 4/4 clip that `addClickTrack` still writes is vestigial). There
+  is no count-in feature: start the song at bar 2, mute the click, and the export trims the lead-in (export covers only audible clips).
 ### Loop commands (as built)
 
 **The timeline is the performance record.** The transport keeps rolling and everything the performer does is written into the

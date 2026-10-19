@@ -56,6 +56,7 @@ export async function renderProject(doc: Y.Doc, projectId: string, rate: number,
     )
     await Promise.all(loads)
     check()
+    bridge.setWindow(from, from + frames) // bake the MIDI (and the click) for the whole export
     host.call('engine_play', [from])
     await host.sync() // everything above has reached the engine before the first block is rendered
 

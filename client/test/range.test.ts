@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addAudioClip, addMidiClip, addPad, addTrack, updateClip, updateTrack } from '@mobdaw/shared'
+import { addAudioClip, addMidiClip, addPad, addTrack, ensureTimeline, setRegion, updateClip, updateTrack } from '@mobdaw/shared'
 import { contentEnd, contentStart } from '../src/audio/range'
 
 const SR = 48000
-const BAR = 4 * 960 // ticks; at 120 bpm 2 s
+const BAR = 4 * 960 // ticks; at the default 120 bpm 4/4 map, 2 s
 
 describe('export range', () => {
   const setup = () => {
@@ -13,7 +13,7 @@ describe('export range', () => {
     const song = addTrack(doc, 'song')
     const other = addTrack(doc, 'other')
     // a one-bar count-in on the click track, the song from bar 2 to bar 4, something else from bar 1 to bar 6
-    addMidiClip(doc, { trackId: click, start: 0, lengthTicks: BAR, bpm: 120 })
+    addMidiClip(doc, { trackId: click, startTick: 0, lengthTicks: BAR })
     addAudioClip(doc, { trackId: song, sourceHash: 'h', start: 2 * SR, length: 4 * SR })
     addAudioClip(doc, { trackId: other, sourceHash: 'h', start: 0, length: 10 * SR })
     return { doc, click, song, other }
@@ -41,7 +41,7 @@ describe('export range', () => {
 
   it('a looping MIDI clip counts at its full extent, and pads follow their track', () => {
     const { doc, click, other } = setup()
-    const loop = addMidiClip(doc, { trackId: click, start: 20 * SR, lengthTicks: 4 * BAR, loopTicks: BAR, bpm: 120 })
+    const loop = addMidiClip(doc, { trackId: click, startTick: 10 * BAR, lengthTicks: 4 * BAR, loopTicks: BAR })
     expect(contentEnd(doc, SR)).toBe(28 * SR) // 4 bars of 2 s
     updateClip(doc, loop, { loopTicks: 0 })
     expect(contentEnd(doc, SR)).toBe(28 * SR)
@@ -51,6 +51,17 @@ describe('export range', () => {
     updateTrack(doc, scape, { muted: true })
     updateTrack(doc, other, { soloed: true })
     expect(contentEnd(doc, SR)).toBe(28 * SR) // (the click's loop still counts; the muted soundscape does not)
+  })
+
+  it('MIDI extents follow the tempo map: a tempo edit moves a clip\'s samples and leaves audio where it is', () => {
+    const { doc, click } = setup()
+    updateTrack(doc, click, { muted: false })
+    const clipId = addMidiClip(doc, { trackId: click, startTick: 20 * BAR, lengthTicks: BAR })
+    expect(contentEnd(doc, SR)).toBe(42 * SR) // bar 21 starts at 40 s, one bar of 2 s
+    ensureTimeline(doc)
+    setRegion(doc, 'default', { bpm: 240 })
+    expect(contentEnd(doc, SR)).toBe(21 * SR) // twice as fast: 20 s + 1 s
+    expect(clipId).toBeTruthy()
   })
 
   it('is empty when nothing is audible', () => {

@@ -1818,3 +1818,15 @@ fn looping_render_matches_the_straight_render_of_each_pass() {
         assert!(err < 1e-3, "pass {k}: max error {err}");
     }
 }
+
+/// The host bakes MIDI into samples (docs/engine.md section 2) and sends clips with `bpm * ppq = 60 * rate`, i.e. one tick per
+/// sample. The engine's own tick-to-sample map must then be the identity for any rate and any integer tick, exactly.
+#[test]
+fn baked_clip_clock_is_one_tick_per_sample() {
+    for rate in [44_100.0f64, 48_000.0, 88_200.0, 96_000.0] {
+        let c = engine::clip::MidiClip { track: 1, start: 12_345, bpm: 60.0 * rate, ppq: 1, length_ticks: 5e9, loop_ticks: 0.0 };
+        for tick in [0.0, 1.0, 7.0, 4_799.0, 96_000.0, 1_234_567.0, 4_147_199_999.0] {
+            assert_eq!(c.tick_to_sample(tick, rate), 12_345 + tick as i64, "rate {rate} tick {tick}");
+        }
+    }
+}

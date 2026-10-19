@@ -7,7 +7,7 @@ import {
   orderBetween, getDevices, updateDevice, updateClip, updateLooper, updateNote, updateTrack, type SampleMeta, setSampleStatus, discardSample, getSamples, undoScope,
 } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
-import { addClickTrack, addDrum, getNotes, isLooping, nextDrumKey, patternTicks } from '@mobdaw/shared'
+import { addRegion, ensureTimeline, getTimeMap, setRegion, addClickTrack, addDrum, getNotes, isLooping, nextDrumKey, patternTicks } from '@mobdaw/shared'
 
 const meta = (hash: string): SampleMeta => ({ hash, name: hash, duration: 1, size: 10, mime: 'audio/wav' })
 const setup = (init?: (doc: Y.Doc) => void) => {
@@ -30,7 +30,7 @@ describe('bridge', () => {
     const { calls } = setup((doc) => {
       const t = addTrack(doc, 'a')
       const m = addTrack(doc, 'm', 'midi')
-      const c = addMidiClip(doc, { trackId: m, start: 100 })
+      const c = addMidiClip(doc, { trackId: m, startTick: 4 }) // 100 samples at 120 bpm, ppq 960
       addNote(doc, { clipId: c, tick: 0, durTicks: 960, pitch: 60, velocity: 0.8 })
       addDevice(doc, m, 2)
       addAudioClip(doc, { trackId: t, sourceHash: 'h', start: 0, length: 10 })
@@ -45,7 +45,8 @@ describe('bridge', () => {
     expect(n.filter((x) => x === 'engine_device_upsert')).toHaveLength(3) // the synth and the two tracks' mix devices
     expect(n.filter((x) => x === 'engine_param_set')).toHaveLength(11) // 7 + gain and pan twice
     const midi = calls.find((c) => c[0] === 'engine_clip_midi_upsert')!
-    expect(midi.slice(3)).toEqual([100, 120, 960, 15360, 0]) // start, bpm, ppq, lengthTicks, loopTicks (0: none)
+    expect(midi.slice(3)).toEqual([100, 60 * 48000, 1, 384000, 0]) // start, then the baked clock (1 tick = 1 sample): bpm, ppq, length in samples, loop (0: unrolled by the host)
+    expect(calls.find((c) => c[0] === 'engine_note_upsert')!.slice(3)).toEqual([0, 24000, 60, 0.8]) // tick, dur (a quarter note = 24000 samples), pitch, velocity
   })
 
   it('upserts, updates and removes through cascades with stable, never-reused handles', () => {
@@ -73,11 +74,11 @@ describe('bridge', () => {
   it('removes notes with their clip; edits notes', () => {
     const { doc, take } = setup()
     const t = addTrack(doc, 'm', 'midi')
-    const c = addMidiClip(doc, { trackId: t, start: 0 })
+    const c = addMidiClip(doc, { trackId: t, startTick: 0 })
     const n = addNote(doc, { clipId: c, tick: 0, durTicks: 10, pitch: 60, velocity: 1 })
     take()
     updateNote(doc, n, { pitch: 62 })
-    expect(take()).toEqual([['engine_note_upsert', 4, 3, 0, 10, 62, 1]])
+    expect(take()).toEqual([['engine_note_upsert', 4, 3, 0, 250, 62, 1]]) // 10 ticks = 250 samples
     deleteClip(doc, c)
     expect(take().map((x) => x[0]).sort()).toEqual(['engine_clip_remove', 'engine_note_remove'])
   })
@@ -85,7 +86,7 @@ describe('bridge', () => {
   it('a concurrent orphan note appears in the doc but is ignored; sweeping cleans it', () => {
     const { doc, take } = setup()
     const t = addTrack(doc, 'm', 'midi')
-    const c = addMidiClip(doc, { trackId: t, start: 0 })
+    const c = addMidiClip(doc, { trackId: t, startTick: 0 })
     take()
     doc.transact(() => {
       clipsMap(doc).delete(c) // B deletes the clip...
@@ -290,7 +291,7 @@ describe('schema v2', () => {
   it('cascades deletes in one transaction', () => {
     const doc = new Y.Doc()
     const t = addTrack(doc, 'm', 'midi')
-    const c = addMidiClip(doc, { trackId: t, start: 0 })
+    const c = addMidiClip(doc, { trackId: t, startTick: 0 })
     addNote(doc, { clipId: c, tick: 0, durTicks: 1, pitch: 60, velocity: 1 })
     addDevice(doc, t, 2)
     let txs = 0
@@ -513,12 +514,15 @@ describe('metronome, looping clips and note ranges', () => {
   it('sends a clip\'s loop length, a device\'s note range (default 0..127) and a click track\'s solo-safety', () => {
     const { doc, take } = setup()
     const t = addTrack(doc, 'm', 'midi')
-    const c = addMidiClip(doc, { trackId: t, start: 0 })
+    const c = addMidiClip(doc, { trackId: t, startTick: 0 })
     const d = addDevice(doc, t, 2)
     take()
     expect(take()).toEqual([])
+    addNote(doc, { clipId: c, tick: 0, durTicks: 480, pitch: 60, velocity: 1 })
+    expect(take().map((x) => x[0])).toEqual(['engine_note_upsert'])
     updateClip(doc, c, { loopTicks: 3840 })
-    expect(take()[0].slice(3)).toEqual([0, 120, 960, 15360, 3840])
+    // the host unrolls the loop: the one note plays at each of the clip's four passes (3840 ticks = 96000 samples)
+    expect(take().map((x) => [x[0], x[3], x[4]])).toEqual([['engine_note_upsert', 96000, 12000], ['engine_note_upsert', 192000, 12000], ['engine_note_upsert', 288000, 12000]])
     updateDevice(doc, d, { keyLo: 36, keyHi: 40 })
     const keys = take().filter((x) => x[0] === 'engine_device_keys')
     expect(keys).toHaveLength(1)
@@ -536,16 +540,16 @@ describe('metronome, looping clips and note ranges', () => {
   it('a forever clip is sent with a far-out length, and only while it loops', () => {
     const { doc, take } = setup()
     const t = addTrack(doc, 'm', 'midi')
-    const c = addMidiClip(doc, { trackId: t, start: 0 })
+    const c = addMidiClip(doc, { trackId: t, startTick: 0 })
     take()
     updateClip(doc, c, { forever: true }) // not looping: the flag is inert
-    expect(take()[0].slice(3)).toEqual([0, 120, 960, 15360, 0])
+    expect(take()).toEqual([])
     updateClip(doc, c, { loopTicks: 3840 })
-    const [, , , , , , length, loop] = take()[0]
-    expect(loop).toBe(3840)
-    expect(length).toBe((24 * 3600 * 120 * 960) / 60) // 24 hours of ticks at the clip's bpm
+    const [, , , , , , length, loop] = take().find((x) => x[0] === 'engine_clip_midi_upsert')!
+    expect(loop).toBe(0)
+    expect(length).toBe(24 * 3600 * 48000) // 24 hours of samples
     updateClip(doc, c, { forever: false })
-    expect(take()[0].slice(3)).toEqual([0, 120, 960, 15360, 3840])
+    expect(take().find((x) => x[0] === 'engine_clip_midi_upsert')![6]).toBe(384000)
   })
 
   it('addClickTrack makes the whole metronome in one undo step', () => {
@@ -559,7 +563,7 @@ describe('metronome, looping clips and note ranges', () => {
     const devs = getDevices(doc).filter((x) => x.trackId === id && x.type !== MIX)
     expect(devs.map((x) => [x.name, x.type, x.keyLo, x.keyHi])).toEqual([['accent', 7, 37, 37], ['tick', 7, 36, 36]])
     const [clip] = getClips(doc).filter((x) => x.trackId === id)
-    expect(clip).toMatchObject({ kind: 'midi', start: 0, bpm: 120, view: 'drums', loopTicks: 3840, lengthTicks: 15360, forever: true })
+    expect(clip).toMatchObject({ kind: 'midi', startTick: 0, view: 'drums', loopTicks: 3840, lengthTicks: 15360, forever: true })
     if (clip.kind !== 'midi') throw new Error()
     expect(isLooping(clip)).toBe(true)
     expect(patternTicks(clip)).toBe(3840)
@@ -716,5 +720,87 @@ describe('bridge: transport cycle and meters', () => {
     expect([...m.tracks]).toEqual([[a, [0.1, 0.2]], [b, [0.3, 0.4]]])
     deleteTrack(doc, a)
     expect([...bridge.meters({ master: [0, 0], tracks: [h.get(a)!, 1, 1, h.get(b)!, 0, 0] }).tracks]).toEqual([[b, [0, 0]]])
+  })
+})
+
+describe('MIDI baked from the time map', () => {
+  /** Absolute sample of every engine note upsert (the engine clip's start + the note's tick), by engine note handle. */
+  const absolute = (calls: [string, ...number[]][]) => {
+    const start = new Map<number, number>()
+    const out = new Map<number, number>()
+    for (const c of calls) {
+      if (c[0] === 'engine_clip_midi_upsert') start.set(c[1], c[3])
+      if (c[0] === 'engine_note_upsert') out.set(c[1], start.get(c[2])! + c[3])
+    }
+    return out
+  }
+
+  it('unrolls a looping clip across a ramp and a region boundary, each note at map.tickToSample of its absolute tick', () => {
+    const { doc, take } = setup()
+    ensureTimeline(doc)
+    addRegion(doc, { bar: 1, bpm: 90, num: 4, den: 4, rampTo: 150 })
+    addRegion(doc, { bar: 3, bpm: 150, num: 7, den: 8 })
+    const t = addTrack(doc, 'm', 'midi')
+    const c = addMidiClip(doc, { trackId: t, startTick: 960, lengthTicks: 4 * 3840, loopTicks: 3840 })
+    addNote(doc, { clipId: c, tick: 100.5, durTicks: 480, pitch: 60, velocity: 1 })
+    addNote(doc, { clipId: c, tick: 1920, durTicks: 5000, pitch: 62, velocity: 1 }) // longer than the pass: cut at its end
+    const calls = take()
+    const map = getTimeMap(doc)
+    const got = [...absolute(calls).values()].sort((a, b) => a - b)
+    const want = [0, 1, 2, 3].flatMap((k) => [100.5, 1920].map((n) => map.tickToSample(960 + k * 3840 + n))).sort((a, b) => a - b)
+    expect(got).toEqual(want)
+    const up = calls.filter((x) => x[0] === 'engine_note_upsert' && x[5] === 62)
+    // the cut at the pass end: pass 0 spans ticks 960..4800
+    expect(calls.filter((x) => x[0] === 'engine_note_upsert' && x[5] === 62).map((x) => x[4])[0]).toBe(map.tickToSample(4800) - map.tickToSample(960 + 1920))
+    expect(up).toHaveLength(4)
+  })
+
+  it('a tempo edit re-sends only the notes that moved, and the clip when its end moved', () => {
+    const { doc, take } = setup()
+    ensureTimeline(doc)
+    const second = addRegion(doc, { bar: 3, bpm: 120, num: 4, den: 4 })
+    const t = addTrack(doc, 'm', 'midi')
+    const c = addMidiClip(doc, { trackId: t, startTick: 0, lengthTicks: 6 * 3840 })
+    for (const bar of [0, 1, 2, 3, 4, 5]) addNote(doc, { clipId: c, tick: bar * 3840, durTicks: 100, pitch: 60, velocity: 1 })
+    take()
+    setRegion(doc, second, { bpm: 240 })
+    const calls = take()
+    expect(calls.filter((x) => x[0] === 'engine_clip_midi_upsert')).toHaveLength(1) // it ends sooner
+    // bars 3..6 now last 1 s each, from 4 s: only those notes are re-sent (the engine clip's start is 0)
+    expect(calls.filter((x) => x[0] === 'engine_note_upsert').map((x) => x[3])).toEqual([192000, 240000, 288000, 336000])
+    expect(calls.filter((x) => x[0] === 'engine_note_remove')).toHaveLength(0)
+  })
+
+  it('the click track plays what the time map says, not its stored clip', () => {
+    const { doc, take } = setup()
+    ensureTimeline(doc)
+    addRegion(doc, { bar: 1, bpm: 120, num: 6, den: 8 })
+    addClickTrack(doc)
+    const calls = take()
+    const clips = calls.filter((x) => x[0] === 'engine_clip_midi_upsert')
+    expect(clips).toHaveLength(1) // the generated clip only: the stored 4/4 pattern is not sent
+    expect(clips[0][3]).toBe(0)
+    const hits = calls.filter((x) => x[0] === 'engine_note_upsert')
+    const map = getTimeMap(doc)
+    const beats = map.bars(0, 120 * 48000).lines.length
+    expect(hits.length).toBe(beats + map.bars(0, 120 * 48000).lines.filter((l) => l.isGroup).length) // a tick per beat, an accent per group start
+    expect(hits.filter((x) => x[5] === 37 && x[6] === 0.5).map((x) => x[3]).slice(0, 2)).toEqual([36000, 108000]) // beat 4 of each 6/8 bar, softer
+  })
+
+  it('the baked window follows the playhead: seeking far ahead drops the old notes and bakes the new ones', () => {
+    const { doc, bridge, take } = setup()
+    addClickTrack(doc)
+    const first = take().filter((x) => x[0] === 'engine_note_upsert').length
+    expect(first).toBeGreaterThan(100)
+    bridge.play(3600 * 48000) // an hour in
+    const calls = take()
+    expect(calls.filter((x) => x[0] === 'engine_note_remove')).toHaveLength(first)
+    const starts = [...absolute(calls).values()]
+    expect(Math.min(...starts)).toBeGreaterThanOrEqual(3599 * 48000)
+    expect(Math.max(...starts)).toBeLessThan(3720 * 48000 + 1)
+    expect(names(calls).at(-1)).toBe('engine_play') // notes first, then play
+    // near the end of the window, a position report moves it on
+    bridge.onPos({ pos: 3700 * 48000, playing: true })
+    expect(Math.max(...absolute(take()).values())).toBeGreaterThan(3720 * 48000)
   })
 })

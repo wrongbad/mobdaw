@@ -4,7 +4,7 @@ import { toggleMute } from '../src/audio/loopPedal'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addAudioClip, addClickTrack, addDevice, addDrum, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, getClips, setLaneState, setMixParam, setParam, updateClip, updateDevice, updateLaneLfo, updateTrack, type SampleMeta } from '@mobdaw/shared'
+import { addAudioClip, addClickTrack, addRegion, ensureTimeline, getRegions, getTimeMap, setRegion, addDevice, addDrum, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, getClips, setLaneState, setMixParam, setParam, updateClip, updateDevice, updateLaneLfo, updateTrack, type SampleMeta } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 import { CallQueue } from '../src/audio/schedule'
 import { readMeters } from '../src/audio/meters'
@@ -47,6 +47,19 @@ function host() {
   return { sink, render, samples, x, e }
 }
 
+/** Sample offsets (from the start of `x`) where sound begins after at least `quiet` silent samples. */
+function onsets(x: Float32Array, quiet: number): number[] {
+  const out: number[] = []
+  let silent = quiet
+  for (let i = 0; i < x.length; i++) {
+    if (Math.abs(x[i]) > 1e-6) {
+      if (silent >= quiet) out.push(i)
+      silent = 0
+    } else silent++
+  }
+  return out
+}
+
 const tick = () => new Promise((r) => setTimeout(r, 0))
 
 describe('bridge + real engine.wasm', () => {
@@ -80,7 +93,7 @@ describe('bridge + real engine.wasm', () => {
     const doc = new Y.Doc()
     const m = addTrack(doc, 'midi', 'midi')
     addDevice(doc, m, 2)
-    const c = addMidiClip(doc, { trackId: m, start: 0 })
+    const c = addMidiClip(doc, { trackId: m, startTick: 0 })
     addNote(doc, { clipId: c, tick: 0, durTicks: 960, pitch: 60, velocity: 1 })
 
     const { sink, render } = host()
@@ -117,29 +130,79 @@ describe('bridge + real engine.wasm', () => {
     bridge.destroy()
   }, 20_000)
 
-  it('a forever click keeps looping past the end of its clip', async () => {
+  it.runIf(process.env.SLOW)('the click follows the time map: it ignores the stored clip, ticks at the new tempo from the next block, and stays quiet in a free region', async () => {
     const doc = new Y.Doc()
     addClickTrack(doc)
-    const clip = getClips(doc)[0] // four bars at 120 bpm: 8 s
-    const { sink, render } = host()
+    const clip = getClips(doc)[0] // the stored 4/4 pattern at tick 0 is not what plays
+    ensureTimeline(doc)
+    const { sink, render, samples } = host()
     const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
     await tick()
-    updateClip(doc, clip.id, { forever: false }) // (a click track starts forever)
-    bridge.play(10 * SR) // bar 5: beyond the clip
-    expect(render(1024)).toBeLessThan(1e-4)
+    updateClip(doc, clip.id, { forever: false })
+    bridge.play(10 * SR) // far beyond the stored clip's end: the generated click still sounds (bar 6 at 120 bpm 4/4)
+    expect(render(1024)).toBeGreaterThan(0.01)
     bridge.stop()
-    updateClip(doc, clip.id, { forever: true })
-    bridge.play(10 * SR)
-    expect(render(1024)).toBeGreaterThan(0.01) // the accent of bar 5
+    // 60 bpm from the start: beats a second apart, so there is silence at 0.5 s and a click at 1 s
+    setRegion(doc, 'default', { bpm: 60 })
+    bridge.seek(0)
+    bridge.play(0)
+    render(4096)
+    expect(onsets(samples(SR * 2.2), 2000).slice(0, 3).map((o) => Math.round((o + 4096) / (SR / 10)))).toEqual([10, 20]) // 1 s and 2 s (in tenths)
+    // a free bar of 3 s at the start: nothing sounds in it, the click starts at bar 2
+    bridge.stop()
+    addRegion(doc, { bar: 1, kind: 'free', length: 3 * SR })
+    bridge.seek(0)
+    bridge.play(0)
+    expect(render(2.9 * SR)).toBeLessThan(1e-4)
+    expect(render(0.2 * SR)).toBeGreaterThan(0.01)
     bridge.destroy()
-  }, 20_000)
+  }, 30_000)
+
+  it.runIf(process.env.SLOW)('scheduled MIDI plays at map.tickToSample, across a tempo ramp and a meter change, in a looping clip, and follows a tempo edit', async () => {
+    const doc = new Y.Doc()
+    const m = addTrack(doc, 'drums', 'midi')
+    addDrum(doc, m, { key: 40, params: { 0: 3500, 1: 0.8, 2: 40, 3: 0.8 } })
+    ensureTimeline(doc)
+    addRegion(doc, { bar: 1, bpm: 180, num: 4, den: 4, rampTo: 300 }) // bars 1-2 speed up ...
+    addRegion(doc, { bar: 3, bpm: 300, num: 7, den: 8 }) // ... then 7/8
+    const c = addMidiClip(doc, { trackId: m, startTick: 960, lengthTicks: 4 * 3840, loopTicks: 3840 }) // starts on beat 2; a pass is a 4/4 bar's worth of ticks
+    addNote(doc, { clipId: c, tick: 0, durTicks: 240, pitch: 40, velocity: 1 })
+    addNote(doc, { clipId: c, tick: 1920, durTicks: 240, pitch: 40, velocity: 1 })
+    const { sink, samples } = host()
+    const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
+    await tick()
+    const expected = () => {
+      const map = getTimeMap(doc)
+      return [0, 1, 2, 3].flatMap((k) => [0, 1920].map((t) => map.tickToSample(960 + k * 3840 + t)))
+    }
+    const want = expected()
+    expect(want[3]).toBeLessThan(getTimeMap(doc).barStartSample(3)) // pass 1 straddles the ramp / 7/8 boundary: its second note is in the ramp ...
+    expect(want[4]).toBeGreaterThan(getTimeMap(doc).barStartSample(3)) // ... and pass 2 is in 7/8
+    bridge.play(0)
+    const got = onsets(samples(want.at(-1)! + SR / 2), 4000)
+    expect(got).toHaveLength(8)
+    const lag = got[0] - want[0] // the drum's own attack, the same for every hit
+    expect(lag).toBeLessThan(64)
+    got.forEach((g, i) => expect(g - want[i]).toBe(lag))
+    // a tempo edit while playing: the notes still ahead land on the new grid
+    bridge.stop()
+    setRegion(doc, getRegions(doc)[1].id, { bpm: 400 })
+    bridge.seek(0)
+    bridge.play(0)
+    const want2 = expected()
+    expect(want2[4]).not.toBe(want[4])
+    const got2 = onsets(samples(want2.at(-1)! + SR / 2), 4000)
+    expect(got2).toHaveLength(8)
+    got2.forEach((g, i) => expect(g - want2[i]).toBe(lag))
+    bridge.destroy()
+  }, 30_000)
 
   it('instruments take the notes in their range: a split keyboard, with layering where the ranges overlap', async () => {
     const doc = new Y.Doc()
     const m = addTrack(doc, 'midi', 'midi')
     const synth = addDevice(doc, m, 2, { keyLo: 60, keyHi: 127 })
     const drum = addDrum(doc, m, { key: 40, params: { 3: 1 } })
-    const c = addMidiClip(doc, { trackId: m, start: 0, loopTicks: 960, lengthTicks: 3840 })
+    const c = addMidiClip(doc, { trackId: m, startTick: 0, loopTicks: 960, lengthTicks: 3840 })
     addNote(doc, { clipId: c, tick: 0, durTicks: 480, pitch: 40, velocity: 1 })
     const { sink, render } = host()
     const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)

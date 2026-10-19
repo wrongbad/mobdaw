@@ -3,10 +3,11 @@
 // by id: present and parented -> upsert, otherwise -> remove. Command order never matters.
 import * as Y from 'yjs'
 import {
-  KEY_MAX, KEY_MIN, LFO_DEFAULTS, foreverSamples, foreverTicks, isForever, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
-  looperParamDef, loopersMap, metaMap, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, tracksMap,
+  KEY_MAX, KEY_MIN, LFO_DEFAULTS, foreverSamples, isForever, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
+  looperParamDef, loopersMap, metaMap, notesMap, padsMap, paramToPos, pointsMap, regionsMap, resolveTarget, samplesMap, tracksMap, getTimeMap,
   type AudioClip, type Clip, type Device, type Lane, type Looper, type MidiClip, type Pad, type Note, type ParamTarget, type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
+import { ENGINE_PPQ, bakeClick, bakeClip, engineBpm, type BakedClip, type BakedNote, type Window } from './bake'
 import type { MetersMessage } from './meters'
 
 export interface EngineSink {
@@ -110,6 +111,9 @@ export type PreviewTransport = {
 
 /** The engine's handle for the master bus (`MASTER_TRACK` in engine.rs). */
 const MASTER_HANDLE = 0xffffffff
+/** How much timeline MIDI is baked ahead of the playhead, and how close to the end of that the playhead may get before the window moves (seconds). */
+export const BAKE_AHEAD_S = 120
+export const BAKE_MARGIN_S = 30
 type Kind = 'track' | 'clip' | 'note' | 'device' | 'looper' | 'pad' | 'lane' | 'point'
 const key = (d: string, p: number) => `${d}:${p}`
 type Dirty = { all: boolean; fields: boolean; params: Set<string> }
@@ -142,6 +146,15 @@ export class Bridge {
   private recording = false
   /** The `engine_set_loop` arguments last sent, to send only changes. */
   private sentLoop = '0,0,0'
+  /** The slice of the timeline whose MIDI is baked into the engine (see bake.ts); it follows the playhead. */
+  private win: Window
+  /** Doc notes by clip then id, decoded once, so a re-bake (a tempo edit, a moved window) never walks the Yjs maps. */
+  private noteCache = new Map<string, Map<string, Note>>()
+  private noteClip = new Map<string, string>()
+  /** What the engine holds for each baked MIDI clip (by engine clip handle): its clip fields and its notes (engine handle, last values). */
+  private sent = new Map<number, { sig: string; notes: Map<string, { h: number; v: string }> }>()
+  /** Click-role track ids (their MIDI clips are not sent; the click is generated from the time map). */
+  private clicks = new Set<string>()
 
   constructor(
     private doc: Y.Doc,
@@ -166,6 +179,10 @@ export class Bridge {
     watch(lanesMap(doc), dirtyIds('lane'))
     watch(pointsMap(doc), dirtyIds('point'))
     watch(samplesMap(doc), () => [...this.wanted].forEach((h) => this.wantSource(h)))
+    const rebake = () => this.rebakeAll()
+    watch(regionsMap(doc), rebake)
+    watch(metaMap(doc), rebake)
+    this.win = { lo: 0, hi: BAKE_AHEAD_S * rate }
     this.clock = new Clock(rate, now)
     this.syncAll()
   }
@@ -179,6 +196,7 @@ export class Bridge {
   setCycle(start: number, end: number, on: boolean) {
     this.loopRegion = { start, end, on }
     this.syncLoop()
+    this.fitWindow(this.clock.position())
   }
 
   private syncLoop() {
@@ -209,7 +227,9 @@ export class Bridge {
 
   // --- transport
   play(from?: number) {
-    this.sink.call('engine_play', this.clock.play(from))
+    const p = this.clock.play(from)
+    this.fitWindow(p)
+    this.sink.call('engine_play', p)
   }
   stop() {
     this.clock.stop()
@@ -217,11 +237,41 @@ export class Bridge {
   }
   seek(pos: number) {
     this.clock.seek(pos)
+    this.fitWindow(pos)
     this.sink.call('engine_seek', pos)
   }
   /** Engine -> main: {type:'pos'} message. */
   onPos(m: { pos: number; playing: boolean }) {
     this.clock.report(m)
+    if (m.playing) this.fitWindow(m.pos)
+  }
+
+  // --- baked MIDI window (docs/engine.md §2)
+  /**
+   * Bake the timeline's MIDI for `[lo, hi)` samples (see bake.ts). The bridge keeps this window around the playhead by itself (play, seek, position
+   * reports, the cycle); an offline render sets it to the whole export before playing.
+   */
+  setWindow(lo: number, hi: number) {
+    this.win = { lo: Math.max(0, lo), hi }
+    this.rebakeAll()
+  }
+
+  /** Move the window when `pos` is outside it or within `BAKE_MARGIN_S` of its end (a cycle in use must fit whole). */
+  private fitWindow(pos: number) {
+    const { win, rate } = this
+    const cyc = this.loopRegion?.on ? this.loopRegion : null
+    const cycFits = !cyc || (cyc.start >= win.lo && cyc.end <= win.hi)
+    const ahead = pos + BAKE_MARGIN_S * rate <= win.hi || (!!cyc && pos <= cyc.end && win.hi >= cyc.end)
+    if (pos >= win.lo && ahead && cycFits) return
+    let lo = pos - rate, hi = pos + BAKE_AHEAD_S * rate
+    if (cyc) (lo = Math.min(lo, cyc.start)), (hi = Math.max(hi, cyc.end))
+    this.setWindow(lo, hi)
+  }
+
+  /** Re-bake every MIDI clip and the click (a window move, or a change of the time map). Only changed engine notes are sent. */
+  private rebakeAll() {
+    for (const c of getClips(this.doc)) if (c.kind === 'midi' && this.handles.clip.has(c.id)) this.upsertById('clip', c.id)
+    for (const id of this.clicks) this.bakeClickTrack(id)
   }
   get isPlaying() {
     return this.clock.isPlaying
@@ -310,9 +360,9 @@ export class Bridge {
 
   // --- reconcile
   private syncAll() {
+    for (const n of getNotes(this.doc)) this.cacheNote(n)
     for (const t of tracksMap(this.doc).values()) this.upsertTrack(t.toJSON() as Track)
     for (const c of getClips(this.doc)) this.upsertClip(c)
-    for (const n of getNotes(this.doc)) this.upsertNote(n)
     for (const d of getDevices(this.doc)) this.upsertDevice(d, ALL)
     for (const l of getLoopers(this.doc)) this.upsertLooper(l)
     for (const p of getPads(this.doc)) this.upsertPad(p)
@@ -320,7 +370,35 @@ export class Bridge {
     for (const p of getPoints(this.doc)) this.upsertPoint(p)
   }
 
+  private cacheNote(n: Note) {
+    let m = this.noteCache.get(n.clipId)
+    if (!m) this.noteCache.set(n.clipId, (m = new Map()))
+    m.set(n.id, n)
+    this.noteClip.set(n.id, n.clipId)
+  }
+
+  /** Notes changed: refresh the cache and re-bake the clips they belong to (once each). */
+  private reconcileNotes(evs: Y.YEvent<any>[]) {
+    const root = notesMap(this.doc)
+    const clips = new Set<string>()
+    for (const ev of evs) {
+      const ids = ev.target === root ? [...ev.keys.keys()] : [String(ev.path[0])]
+      for (const id of ids) {
+        const prev = this.noteClip.get(id)
+        if (prev) {
+          this.noteCache.get(prev)?.delete(id)
+          this.noteClip.delete(id)
+          clips.add(prev)
+        }
+        const n = root.get(id)?.toJSON() as Note | undefined
+        if (n) (this.cacheNote(n), clips.add(n.clipId))
+      }
+    }
+    for (const id of clips) if (this.handles.clip.has(id)) this.upsertById('clip', id)
+  }
+
   private reconcile(kind: Kind, evs: Y.YEvent<any>[]) {
+    if (kind === 'note') return this.reconcileNotes(evs)
     const dirty = new Map<string, Dirty>()
     const root = this.map(kind)
     const of = (id: string) => dirty.get(id) ?? (dirty.set(id, { all: false, fields: false, params: new Set() }), dirty.get(id)!)
@@ -346,7 +424,6 @@ export class Bridge {
     if (v) {
       if (kind === 'track') ok = this.upsertTrack(v as Track)
       else if (kind === 'clip') ok = this.upsertClip(v as Clip)
-      else if (kind === 'note') ok = this.upsertNote(v as Note)
       else if (kind === 'looper') ok = this.upsertLooper(v as Looper)
       else if (kind === 'pad') ok = this.upsertPad(v as Pad)
       else if (kind === 'lane') ok = this.upsertLane(v as Lane)
@@ -363,8 +440,6 @@ export class Bridge {
       for (const d of getDevices(this.doc)) if (d.trackId === id) this.upsertById('device', d.id)
       for (const l of getLoopers(this.doc)) if (l.trackId === id) this.upsertById('looper', l.id)
       for (const p of getPads(this.doc)) if (p.trackId === id) this.upsertById('pad', p.id)
-    } else if (kind === 'clip') {
-      for (const n of getNotes(this.doc)) if (n.clipId === id) this.upsertById('note', n.id)
     } else if (kind === 'lane') {
       for (const p of getPoints(this.doc)) if (p.laneId === id) this.upsertById('point', p.id)
     }
@@ -383,7 +458,8 @@ export class Bridge {
     const h = this.handles[kind].get(id)
     if (h == null) return
     this.handles[kind].delete(id)
-    if (kind === 'track') this.dropPreviews(id), this.trackIds.delete(h)
+    if (kind === 'track') this.dropPreviews(id), this.trackIds.delete(h), this.dropClick(id)
+    if (kind === 'clip') this.dropBaked(h)
     const fn = {
       track: 'engine_track_remove', clip: 'engine_clip_remove', note: 'engine_note_remove', device: 'engine_device_remove', looper: 'engine_looper_remove',
       pad: 'engine_pad_remove', lane: 'engine_lane_remove', point: 'engine_point_remove',
@@ -459,6 +535,14 @@ export class Bridge {
     const code = { audio: 0, midi: 1, soundscape: 2 }[t.kind]
     if (code == null) return false
     this.sink.call('engine_track_upsert', this.handle('track', t.id), code, +t.muted, +t.soloed, +(t.role === 'click'))
+    const click = t.role === 'click' && t.kind === 'midi'
+    if (click !== this.clicks.has(t.id)) {
+      // The track became (or stopped being) the metronome: its own clips go (or come back) and the generated click starts (or stops).
+      if (click) this.clicks.add(t.id)
+      else (this.clicks.delete(t.id), this.dropClick(t.id))
+      for (const c of getClips(this.doc)) if (c.kind === 'midi' && c.trackId === t.id && this.handles.clip.has(c.id)) this.upsertById('clip', c.id)
+    }
+    if (click) this.bakeClickTrack(t.id)
     return true
   }
 
@@ -469,7 +553,13 @@ export class Bridge {
     const track = this.handle('track', c.trackId)
     if (c.kind === 'midi') {
       const m = c as MidiClip
-      this.sink.call('engine_clip_midi_upsert', h, track, m.start, m.bpm, m.ppq, isForever(m) ? Math.max(m.lengthTicks, foreverTicks(m)) : m.lengthTicks, m.loopTicks ?? 0)
+      if (this.clicks.has(m.trackId) || !Number.isFinite(m.startTick)) {
+        // (a click track's own clips are not played; a clip without a tick position is an old client's v3 shape, not yet migrated)
+        if (this.sent.has(h)) (this.dropBaked(h), this.sink.call('engine_clip_remove', h))
+        this.handles.clip.delete(c.id)
+        return false
+      }
+      this.sendBaked(h, track, bakeClip(getTimeMap(this.doc), m, this.noteCache.get(m.id)?.values() ?? [], this.win))
     } else if (c.kind === 'audio') {
       const a = c as AudioClip
       this.wantSource(a.sourceHash)
@@ -497,10 +587,57 @@ export class Bridge {
     return true
   }
 
-  private upsertNote(n: Note): boolean {
-    if (!clipsMap(this.doc).has(n.clipId) || !this.handles.clip.has(n.clipId)) return false
-    this.sink.call('engine_note_upsert', this.handle('note', n.id), this.handles.clip.get(n.clipId)!, n.tick, n.durTicks, n.pitch, n.velocity)
-    return true
+  /**
+   * Send a baked MIDI clip: the engine clip (one engine tick per sample, so its own tick clock changes nothing) and the notes that differ
+   * from what was last sent. Notes that dropped out of the window or were deleted are removed.
+   */
+  private sendBaked(h: number, track: number, b: BakedClip) {
+    let st = this.sent.get(h)
+    if (!st) this.sent.set(h, (st = { sig: '', notes: new Map() }))
+    const sig = `${track},${b.start},${b.length}`
+    if (sig !== st.sig) {
+      st.sig = sig
+      this.sink.call('engine_clip_midi_upsert', h, track, b.start, engineBpm(this.rate), ENGINE_PPQ, b.length, 0)
+    }
+    const value = (n: BakedNote) => `${n.tick},${n.dur},${n.pitch},${n.velocity}`
+    for (const [key, n] of b.notes) {
+      const v = value(n)
+      const have = st.notes.get(key)
+      if (have?.v === v) continue
+      const nh = have?.h ?? this.next++
+      st.notes.set(key, { h: nh, v })
+      this.sink.call('engine_note_upsert', nh, h, n.tick, n.dur, n.pitch, n.velocity)
+    }
+    for (const [key, have] of st.notes) {
+      if (b.notes.has(key)) continue
+      st.notes.delete(key)
+      this.sink.call('engine_note_remove', have.h)
+    }
+  }
+
+  /** Forget a baked clip, removing its engine notes (the engine keeps notes by handle, apart from their clip). */
+  private dropBaked(h: number) {
+    const st = this.sent.get(h)
+    if (!st) return
+    this.sent.delete(h)
+    for (const n of st.notes.values()) this.sink.call('engine_note_remove', n.h)
+  }
+
+  /** (Re)generate the metronome's events for the window from the time map (click.ts) on its track's engine clip. */
+  private bakeClickTrack(trackId: string) {
+    const track = this.handles.track.get(trackId)
+    if (track == null) return
+    this.sendBaked(this.handle('clip', `click:${trackId}`), track, bakeClick(getTimeMap(this.doc), this.win))
+  }
+
+  private dropClick(trackId: string) {
+    this.clicks.delete(trackId)
+    const key = `click:${trackId}`
+    const h = this.handles.clip.get(key)
+    if (h == null) return
+    this.handles.clip.delete(key)
+    this.dropBaked(h)
+    this.sink.call('engine_clip_remove', h)
   }
 
   private upsertDevice(d: Device, dirty: Dirty): boolean {
