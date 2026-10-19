@@ -214,7 +214,7 @@ doc.getMap('samples') // hash -> plain object { hash, name, duration, size, mime
     Presence dots appear on the right, one per connected user in their color, with initials.
   - Lanes are full width. Each has a slim left header with the track name (double-click to
     rename), a mute toggle and a gain slider. Put a subtle "+ track" link below the last lane.
-  - A ruler with second ticks. Clicking the ruler seeks.
+  - A ruler with bars and beats (seconds in free regions; see "The shared timeline" at the end). Clicking the ruler seeks.
   - Clips are rounded blocks showing the sample name. A waveform is optional; skip it if it
     adds bulk.
     - Drag a clip to move it in time and across lanes.
@@ -435,3 +435,51 @@ All sample routes are scoped to a project, and the caller must be a member.
 - Copy: the copy has the same doc content and library, and its owner is the caller.
 - Audit: detects a planted leaked object and a planted `bytes_used` drift; `--fix` repairs
   both.
+
+# The shared timeline (user's view)
+
+The whole project counts time the same way: one map of **bars** that every track, the ruler, the grid in the editors, the click
+and snapping agree on. How it is stored is in docs/engine.md §2 and §3; this is what you see and do.
+
+## The ruler
+- In a **metered** region the ruler shows bar numbers and, when there is room, beats (the first beat of each beat group a little
+  taller, so 7/8 counted 2+2+3 looks like it). At a distance only bar numbers remain, and fewer of them.
+- In a **free** region (unmetered time, one bar of a chosen length) there are no bars or beats: the ruler shows hatched time with
+  seconds.
+- Where the tempo or meter changes, a badge sits on the ruler at that bar: `♩=92 7/8`, with `→` and a sloped line to the next
+  region while it ramps (`♩=120→92 4/4`), `free 3.5s` for a free region. The badge at bar 1 also shows the project key, if set.
+- **Markers** (a label, optionally a description as its tooltip) sit in a thin row above the badges, at their bar.
+- Clicking the ruler seeks; clicking a badge or a marker opens its menu.
+
+## Editing the map
+Right-click the ruler (on a phone: press and hold) at a bar, or click a badge or marker, for a menu:
+- **tempo / meter from bar N...** a small dialog with the tempo (quarter notes per minute), the meter (`4/4`, `7/8`...) and, optionally,
+  the beat groups (`2+2+3`). It applies from that bar until the next change. Doing it at a bar that already starts a region edits it.
+- **free region at bar N...** one unmetered bar of a given length in seconds. Whatever follows it carries on in the meter and tempo that
+  were in effect.
+- **ramp to next** / **remove ramp**: the tempo moves gradually to the next region's tempo instead of jumping there.
+- **add marker...**, **edit marker...**, **delete marker**.
+- **delete region** merges the region into the previous one (the previous region simply runs on). The first region (bar 1) cannot be
+  deleted, only changed.
+Each of these is one undo step and is shared live with collaborators. The project **key** ("D minor", display only) is a field in
+the project menu (the project name in the top bar).
+
+## Tempo moves MIDI, not audio
+MIDI clips and their notes are in musical time: edit a tempo and they follow the bars. Audio stays exactly where it was recorded or
+placed. So that this is plain, an edit that moves the bars away from the audio clips that started on a bar or beat line makes those
+clips fade to a ghost (dim, dashed outline) for a moment.
+
+## Snapping
+- There is **no separate guide tempo** any more: the grid is the ruler's. Clips, soundscape regions, MIDI clip edges and loop handles,
+  and automation points snap to the project's bars, beats or subdivisions, picked by zoom (zoomed far out: bars; closer: beats;
+  closer still: half and quarter beats). Other clips' edges still win when you are near one.
+- MIDI clips are always placed on the grid unless you hold **alt**; audio clips snap softly (a few pixels), alt turns it off.
+- In a **free region** nothing snaps to a grid (there is none): clips keep snapping to each other's edges, as before.
+
+## Projects from the future
+A project saved by a newer version of the app opens **read-only** here: you can play it and look around, and the top bar says to
+reload for the latest version. Nothing is migrated or written.
+
+## Chat
+Messages from the app itself (for example "migrated to a shared timeline at 96 bpm 4/4 ...") appear in the chat as a muted notice
+between the conversation, not as someone's bubble.

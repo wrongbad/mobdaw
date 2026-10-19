@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addChatMessage, chatLog } from '@mobdaw/shared'
+import { addChatMessage, addSystemMessage, chatLog } from '@mobdaw/shared'
 import { chatPanel } from '../src/ui/chat'
 
 const cleanup: (() => void)[] = []
@@ -84,5 +84,21 @@ describe('chat panel', () => {
     expect(rows()).toHaveLength(0)
     cleanup.pop() // (already destroyed)
     chat.el.remove()
+  })
+
+  it('shows a system message as a muted notice, not as a bubble, and it breaks the speaker run', () => {
+    const { doc, rows } = setup()
+    addChatMessage(doc, them, 'hi')
+    addSystemMessage(doc, 'migrated to a shared timeline at 96 bpm 4/4')
+    addChatMessage(doc, them, 'ok')
+    expect(rows().map((e) => e.className)).toEqual(['msg-meta them', 'msg them', 'msg-sys', 'msg-meta them', 'msg them'])
+    expect(rows()[2].textContent).toBe('migrated to a shared timeline at 96 bpm 4/4')
+  })
+
+  it('shows a system notice posted twice by clients that migrated at once only once', () => {
+    const { doc, rows } = setup()
+    const note = { id: 'migrate-v4', username: 'mobdaw', color: '', text: 'migrated', ts: 1, system: true }
+    chatLog(doc).push([note, { ...note }])
+    expect(rows().map((e) => e.className)).toEqual(['msg-sys'])
   })
 })

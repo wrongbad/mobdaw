@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Y from 'yjs'
 import { Awareness } from 'y-protocols/awareness'
 import { createSignal } from 'solid-js'
-import { getTimeMap, addAudioClip, addLooper, addMidiClip, addNote, addPad, addTrack, clipsMap, deleteClip, notesMap, padsMap, tracksMap, updateClip, updateLooper, updateNote, updateTrack, type AwarenessState } from '@mobdaw/shared'
+import { timeMap, getTimeMap, addAudioClip, addLooper, addMidiClip, addNote, addPad, addTrack, clipsMap, deleteClip, notesMap, padsMap, tracksMap, updateClip, updateLooper, updateNote, updateTrack, type AwarenessState } from '@mobdaw/shared'
 import { createProjectStore } from '../src/project/store'
 import { createSelection } from '../src/project/viewState'
 import { mountLaneBody, mountSourceBody, type ClipsCtx, type SrcView } from '../src/ui/clips'
@@ -210,6 +210,30 @@ describe('clips', () => {
     // the sample arriving later patches the label in place
     meta('unknown', { name: 'late' })
     expect(label(unknown)).toBe('late · loading…')
+  })
+})
+
+describe('tempo edits', () => {
+  it('audio clips in the ghost set are drawn as ghosts, the others are not', () => {
+    const t = setup()
+    const a = addTrack(t.doc, 'a', 'audio')
+    const c1 = addAudioClip(t.doc, { trackId: a, sourceHash: 'x', start: 0, length: RATE })
+    addAudioClip(t.doc, { trackId: a, sourceHash: 'y', start: RATE, length: RATE })
+    const [ghosts, setGhosts] = createSignal<ReadonlySet<string>>(new Set([c1]))
+    ;(t.ctx as { ghosts: unknown }).ghosts = ghosts
+    const els = clips(lane(t, a, 'audio'))
+    expect(els.map((e) => e.classList.contains('ghost'))).toEqual([true, false])
+    setGhosts(new Set())
+    expect(els.some((e) => e.classList.contains('ghost'))).toBe(false)
+  })
+  it('a MIDI clip sits where its tick is on the map, and moves with a tempo change', () => {
+    const t = setup()
+    const a = addTrack(t.doc, 'a', 'midi')
+    addMidiClip(t.doc, { trackId: a, startTick: 4 * 960, lengthTicks: 4 * 960 }) // bar 2 at 4/4: 2 s at 120 bpm
+    let map = timeMap([{ id: 'r', bar: 1, kind: 'metered', bpm: 120, num: 4, den: 4 }], RATE, 960)
+    ;(t.ctx as { map: unknown }).map = () => map
+    const el = clips(lane(t, a))[0]
+    expect(px(el)).toBeCloseTo(2 * 100) // 100 px/s
   })
 })
 

@@ -10,6 +10,11 @@ const SHOWN = 500
 const GAP_MS = 5 * 60_000 // a new name/time line after this much silence
 /** Messages from the app itself (a migration note, ...): shown as a muted notice, not as a person's bubble. */
 export const isSystem = (m: Pick<ChatMessage, 'username' | 'system'>) => !!m.system || m.username === SYSTEM_USER
+/** The log without a system message whose id an earlier one already used (clients that migrate at once each post the same notice). */
+export const dedupeSystem = (list: ChatMessage[]) => {
+  const seen = new Set<string>()
+  return list.filter((m) => !isSystem(m) || (!seen.has(m.id) && !!seen.add(m.id)))
+}
 const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
 export type ChatDeps = {
@@ -64,7 +69,7 @@ export function chatPanel({ doc, user, onUnread }: ChatDeps) {
 
   function sync() {
     const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40
-    setMsgs(log.toArray().slice(-SHOWN)) // (the entries keep their identity, so <For> only adds and removes rows)
+    setMsgs(dedupeSystem(log.toArray().slice(-SHOWN))) // (the entries keep their identity, so <For> only adds and removes rows)
     if (atEnd) list.scrollTop = list.scrollHeight
     if (open) seen = log.length
     onUnread(open ? 0 : Math.max(0, log.length - seen))
