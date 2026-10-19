@@ -17,7 +17,7 @@ import {
 import { MATCHED_PRESETS } from './presets.matched'
 
 export type InstrumentCategory = 'keys' | 'bass' | 'lead' | 'pad' | 'pluck' | 'winds' | 'strings' | 'fx'
-export type InstrumentPreset = { id: string; name: string; type: number; params: Record<string, number>; category: InstrumentCategory }
+export type InstrumentPreset = { id: string; name: string; type: number; params: Record<string, number>; category: InstrumentCategory; gm?: number[] }
 export type Drum = { name: string; key: number; params: Record<string, number> }
 export type DrumKit = { id: string; name: string; drums: Drum[] }
 export type EffectPreset = { id: string; name: string; devices: { type: number; params: Record<string, number> }[] }
@@ -79,6 +79,17 @@ INSTRUMENT_PRESETS.push(
   bore('fiddle', 'Fiddle', 'strings', { character: 1, stiffness: 0.7, aperture: 0.75, position: 0.08, bore: 1, damping: 0.15, breath: 0.55, vibRate: 5.5, vibDepth: 0.12, attack: 15, release: 90 }),
   bore('glass-harmonica', 'Glass harmonica', 'strings', { character: 0.75, stiffness: 0.5, aperture: 0.25, position: 0.3, bore: 1, decay: 1, breath: 0.45, attack: 300, release: 900 }),
 )
+
+/** General MIDI programs (0-based) each instrument stands in for; a MIDI import picks the first preset listing the program. */
+const GM_PROGRAMS: Record<string, number[]> = {
+  'soft-keys': [0, 1, 2, 3, 7], 'electric-piano': [4, 5, 6], organ: [16, 17, 18, 19, 20, 21, 22, 23], 'finger-bass': [33, 34, 36, 37],
+  'round-bass': [32, 35, 38, 39], 'reed-lead': [64, 65, 66, 67, 68, 69, 70, 80, 81], 'flute-lead': [72, 73, 74, 75, 76, 79],
+  brass: [56, 57, 58, 59, 60, 61, 62, 63], 'warm-pad': [88, 89, 90, 91, 92, 93, 95, 52, 53, 54], strings: [41, 43, 44, 45, 48, 49, 50, 51],
+  'glass-pad': [94, 96, 97, 98, 99, 100, 101, 102, 103], pluck: [24, 25, 26, 27, 28, 29, 30, 31, 104, 105, 106, 107, 46],
+  'music-box': [8, 9, 10, 11, 12], kalimba: [13, 14, 15, 108, 112], drone: [87, 109, 110, 111],
+  clarinet: [71], 'alto-sax': [65], shakuhachi: [77], 'breathy-flute': [73, 78], cello: [42], fiddle: [40],
+}
+for (const p of INSTRUMENT_PRESETS) if (GM_PROGRAMS[p.id]) p.gm = GM_PROGRAMS[p.id]
 
 /** lofi drum params by name. */
 type Ld = { cutoff: number; res: number; decay: number; gain: number }

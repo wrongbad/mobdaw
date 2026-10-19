@@ -2,7 +2,7 @@
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import { createZoom } from './zoom'
 import {
-  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, MIX_GAIN, MIX_PAN, migrateToV3, FINNWAVE, addClickTrack, addDevice, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
+  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, MIX_GAIN, MIX_PAN, migrateToV3, addClickTrack, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getPoints, laneOf, laneState, paramToValue, resolveTarget, setLaneEnabled, 
   deleteDevice, deleteLooper, isDrum, isForever, deleteNote, getDevices, getSampleRate, getSamples, metaMap,
   getLoopers, getTracks, padsMap, migrateToV2, notesMap, splitClip, stashLaneRanges, sweepOrphans, tracksMap, 
@@ -45,6 +45,7 @@ import { mountMasterHead, mountTrackHead, type HeadCtx, type HeadRefs } from './
 import { mountRemoteHeads } from './remoteHeads'
 import { follow, peakToFill } from './meter'
 import { addImportedClip, automateParam, commitParam, commitParams, deleteClips, loopForever, reorderDevice, unloopClip } from '../project/actions'
+import { INSTRUMENT_PRESETS, addInstrument } from '../content/presets'
 import { importSmf, isMidiFile, parseSmf } from '../content/midifile'
 import { createRecorder } from '../project/recorder'
 import { createProjectStore } from '../project/store'
@@ -74,6 +75,9 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   cloud?: { projectId: string; me: string; role: Role; saveCopy?: () => Promise<void>; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean }) {
   const { doc, undo } = s
   applyLayout()
+  const baseTitle = document.title
+  const setTitle = (n: string) => (document.title = n ? `${n} · ${baseTitle}` : baseTitle)
+  setTitle(projectName)
   let pb: Playback | null = null // created once the doc has synced (needs meta.sampleRate)
   const sel = createSelection() // clips, the open MIDI editor, note, pad and armed looper (local UI state)
   const drawers = createDrawers() // which drawers each track (or MASTER_TRACK) has open (local UI state, all shut by default)
@@ -127,7 +131,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       projectMenu(el, {
         name: projectName,
         rename: renameProject,
-        onRenamed: (n) => (el.textContent = projectName = n),
+        onRenamed: (n) => (el.textContent = projectName = n, setTitle(n)),
         cloud: cloud && { ...cloud, onPublic: (v) => (cloud.public = v), onDemo: (v) => (cloud.demo = v) },
         sampleRate: {
           value: rate(),
@@ -216,7 +220,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     popover(addLink, [
       ['audio', () => addTrack(doc, `track ${n}`, 'audio', undefined, undefined, nextTrackColor(getTracks(doc)))],
       ['midi', () => {
-        doc.transact(() => addDevice(doc, addTrack(doc, `midi ${n}`, 'midi', undefined, undefined, nextTrackColor(getTracks(doc))), FINNWAVE))
+        doc.transact(() => addInstrument(doc, addTrack(doc, `midi ${n}`, 'midi', undefined, undefined, nextTrackColor(getTracks(doc))), INSTRUMENT_PRESETS[0]))
       }],
       ['soundscape', () => addTrack(doc, `soundscape ${n}`, 'soundscape', undefined, undefined, nextTrackColor(getTracks(doc)))],
       ['upload midi', () => midiPicker.click()],
@@ -256,6 +260,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   // the top bar, the remote playheads, the headers, the drawers and the blocks on the lanes are Solid components; what is left here
   // is explicit effects (below) and the per-frame loops, which only write signals or styles
   const disposers: (() => void)[] = []
+  disposers.push(() => (document.title = baseTitle))
   const owner = createRoot((dispose) => (disposers.push(dispose), getOwner()!))
   const inRoot = <T,>(f: () => T) => runWithOwner(owner, f)!
   const mainClips = () => {

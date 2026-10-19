@@ -11,11 +11,11 @@
 // has no clips yet); later tempo changes are dropped, which makes a file with tempo changes play at a steady tempo.
 // Time signatures are read as quarter-note beats per bar (6/8 → 3, 12/8 → 6; odd eighths round).
 import {
-  DEFAULT_PPQ, FINNWAVE, nextTrackColor, addDevice, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getSampleRate, getTracks,
+  DEFAULT_PPQ, nextTrackColor, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getSampleRate, getTracks,
   DEFAULT_MIDI_BPM, DEVICES, isDrum, patternTicks, tracksMap, type Device, type MidiClip, type Note,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
-import { DRUM_KITS, GM, addDrumKit, addInstrument, instrumentPreset } from './presets'
+import { DRUM_KITS, GM, INSTRUMENT_PRESETS, addDrumKit, addInstrument, instrumentPreset } from './presets'
 
 const clampBpm = (bpm: number) => Math.min(300, Math.max(20, Math.round(bpm * 100) / 100))
 
@@ -309,8 +309,8 @@ export const beatsPerBarOf = (m: { num: number; den: number }) => clamp(Math.rou
 const DRUM_NAME = /drum|perc|kit\b|beat|kick|snare|hat|cymbal|tom\b/i
 export const isDrumPart = (p: Pick<SmfPart, 'channel' | 'name'>) => p.channel === 9 || DRUM_NAME.test(p.name)
 
-/** An INSTRUMENT_PRESETS id for a part, by its name, else its General MIDI program; null: the plain synth. */
-export function presetFor(name: string, program: number | null): string | null {
+/** An INSTRUMENT_PRESETS id for a part, by its General MIDI program (`gm` on the preset), else its name, else the first preset. */
+export function presetFor(name: string, program: number | null): string {
   const byName: [RegExp, string][] = [
     [/sub\s*bass/i, 'sub-bass'], [/finger|electric bass|e\.?\s*bass/i, 'finger-bass'], [/bass/i, 'round-bass'],
     [/rhodes|wurli|e\.?\s*piano|electric piano|\bep\b/i, 'electric-piano'], [/organ/i, 'organ'], [/piano|keys|clav/i, 'soft-keys'],
@@ -319,16 +319,10 @@ export function presetFor(name: string, program: number | null): string | null {
     [/sax|reed|oboe|clarinet|lead|melody|synth/i, 'reed-lead'], [/music\s*box/i, 'music-box'], [/kalimba|marimba|xylo/i, 'kalimba'],
     [/guitar|pluck|harp|banjo|koto|sitar/i, 'pluck'], [/drone|fx|sfx|noise/i, 'drone'], [/riser|sweep/i, 'buzz-riser'],
   ]
+  const byProgram = program == null ? undefined : INSTRUMENT_PRESETS.find((p) => p.gm?.includes(program))?.id
+  if (byProgram) return byProgram
   for (const [re, id] of byName) if (re.test(name)) return id
-  if (program == null) return null
-  const fam = program >> 3
-  const byFamily = ['soft-keys', 'music-box', 'organ', 'pluck', 'finger-bass', 'strings', 'warm-pad', 'brass', 'reed-lead', 'flute-lead', 'reed-lead', 'warm-pad', 'glass-pad', 'kalimba', 'pluck', 'drone']
-  if (program === 4 || program === 5) return 'electric-piano'
-  if (program === 38 || program === 39) return 'round-bass'
-  if (program === 108) return 'kalimba'
-  if (program >= 48 && program <= 51) return 'strings'
-  if (program === 10) return 'music-box'
-  return byFamily[fam] ?? null
+  return INSTRUMENT_PRESETS[0].id
 }
 
 /** GM drum keys the kits lack, moved to the nearest drum they have (a crash becomes the open hat). */
@@ -408,9 +402,7 @@ export function importSmf(doc: Y.Doc, smf: Smf, o: { at: number; trackId?: strin
       const id = addTrack(doc, name, 'midi', undefined, undefined, nextTrackColor(getTracks(doc)))
       if (p.drums) addDrumKit(doc, id, DRUM_KITS[0])
       else {
-        const pre = p.preset ? instrumentPreset(p.preset) : undefined
-        if (pre) addInstrument(doc, id, pre)
-        else addDevice(doc, id, FINNWAVE)
+        addInstrument(doc, id, (p.preset ? instrumentPreset(p.preset) : undefined) ?? INSTRUMENT_PRESETS[0])
       }
       res.tracks.push(id)
       clip(id, { ...p, name }, p.drums)

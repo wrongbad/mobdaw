@@ -127,7 +127,11 @@ describe('files to clips', () => {
   it('chooses presets and meters', () => {
     expect(presetFor('Bass', null)).toBe('round-bass')
     expect(presetFor('Track 3', 48)).toBe('strings')
-    expect(presetFor('Track 3', null)).toBeNull()
+    expect(presetFor('Track 3', null)).toBe('soft-keys') // no name, no program: the first preset
+    expect(presetFor('Track 3', 71)).toBe('clarinet')
+    expect(presetFor('violin 1', 40)).toBe('fiddle') // the program beats the name
+    expect(presetFor('cello', 42)).toBe('cello')
+    expect(presetFor('Bass', 127)).toBe('round-bass') // a program no preset lists: the name decides
     expect(beatsPerBarOf({ num: 6, den: 8 })).toBe(3)
     expect(beatsPerBarOf({ num: 7, den: 4 })).toBe(7)
   })
