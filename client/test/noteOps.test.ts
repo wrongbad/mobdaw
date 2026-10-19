@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addMidiClip, addNote, getNotes, undoScope, updateNote } from '@mobdaw/shared'
+import { addMidiClip, addNote, getNotes, timeMap, undoScope, updateNote, type Region } from '@mobdaw/shared'
 import {
-  applyPatches, cancelNoteDrag, centrePitch, clampVelocity, gmDrum, gridTicks, hitOpacity, inMarquee, moveGroup, nextVelocity, nudgeVelocity, quantize,
-  resizeGroup, shift, snapStep, snapTick, subPx, transpose, velocityAt,
+  applyPatches, barsToTicks, cancelNoteDrag, centrePitch, clampVelocity, gmDrum, gridTicks, hitOpacity, inMarquee, moveGroup, nextVelocity, nudgeVelocity, quantize,
+  localSnap, resizeGroup, shift, snapGlobal, snapStep, snapTick, subPx, ticksToBars, transpose, velocityAt,
 } from '../src/ui/noteOps'
 
 const n = (id: string, tick: number, pitch = 60, durTicks = 480, velocity = 0.8) => ({ id, clipId: 'c', tick, pitch, durTicks, velocity })
@@ -161,5 +161,47 @@ describe('cancelling a note drag', () => {
     doc.transact(() => updateNote(doc, a, { velocity: 0.5 }))
     cancelNoteDrag(doc, undo, before, [], depth)
     expect(undo.undoStack.length).toBe(depth + 2) // not ours to drop
+  })
+})
+
+describe('the project grid', () => {
+  // bar 1-2: 4/4 at 120; bar 3-4: 7/8 (2+2+3); bar 5: a free bar of 2 s; then 4/4 again
+  const regions: Region[] = [
+    { id: 'a', bar: 1, kind: 'metered', bpm: 120, num: 4, den: 4 },
+    { id: 'b', bar: 3, kind: 'metered', bpm: 120, num: 7, den: 8, groups: [2, 2, 3] },
+    { id: 'c', bar: 5, kind: 'free', length: 96000 },
+  ]
+  const map = timeMap(regions, 48000, PPQ)
+  const bar3 = 2 * 3840
+  it('snaps to the beat grid counted from each bar line, 7/8 bars being 3.5 quarters', () => {
+    expect(snapGlobal(map, bar3 + 3300, 1)).toBe(bar3 + 3360) // beats of the bar: 0, 960, 1920, 2880, then the bar line at 3360
+    expect(snapGlobal(map, bar3 + 3000, 1)).toBe(bar3 + 2880)
+    expect(snapGlobal(map, bar3 + 3000, 'bar')).toBe(bar3 + 3360)
+    expect(snapGlobal(map, bar3 + 3350, 0.25)).toBe(bar3 + 3360)
+    expect(snapGlobal(map, bar3 + 3200, 1, 'floor')).toBe(bar3 + 2880)
+    expect(snapGlobal(map, 100, 0)).toBeNull()
+  })
+  it('has no grid in a free region', () => {
+    const free = bar3 + 3360 * 2 + 1000
+    expect(map.position(free).free).toBe(true)
+    expect(snapGlobal(map, free, 0.25)).toBeNull()
+    expect(localSnap(map, free - 10, 0.25)(3.4)).toBe(3)
+  })
+  it('snaps clip-local ticks through the clip start', () => {
+    const snap = localSnap(map, bar3, 0.25) // a clip starting on bar 3
+    expect(snap(250)).toBe(240)
+    expect(snap(3340)).toBe(3360)
+    expect(localSnap(map, bar3 + 100, 0.25)(250)).toBe(140) // a clip off the grid: notes land on global lines
+  })
+  it('counts patterns in bars of the map', () => {
+    expect(barsToTicks(map, 0, 2)).toBe(7680)
+    expect(barsToTicks(map, 0, 3)).toBe(7680 + 3360)
+    expect(ticksToBars(map, 0, 7680 + 3360)).toBeCloseTo(3, 6)
+    expect(ticksToBars(map, bar3, 3360 * 2)).toBeCloseTo(2, 6)
+  })
+  it('quantizes to a snapper function', () => {
+    const snap = localSnap(map, bar3, 1)
+    expect(quantize([n('a', 2800), n('b', 960)], snap, 1, false, 240)).toEqual([{ id: 'a', tick: 2880 }])
+    expect(quantize([n('a', 0, 60, 1300)], snap, 1, true, 240)).toEqual([{ id: 'a', durTicks: 960 }])
   })
 })

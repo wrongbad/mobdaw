@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
   BORE, DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, MIX, SCHEMA_VERSION, addTrack, clipsMap, devicesMap, getClips, getDevices,
-  getLanes, getNotes, getPoints, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, sweepOrphans, undoScope,
+  getLanes, getNotes, getPoints, getRegions, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, sweepOrphans, undoScope,
   tracksMap, metaMap, type Device,
 } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
@@ -164,8 +164,10 @@ describe('templates', () => {
       }
       for (const d of getDevices(doc)) inRange(d.type, d.params)
       const clips = new Map(getClips(doc).map((c) => [c.id, c]))
-      const bpms = new Set([...clips.values()].flatMap((c) => (c.kind === 'midi' ? [c.bpm] : [])))
-      expect(bpms.size).toBeLessThanOrEqual(1) // every MIDI clip carries the one tempo of the template
+      const regions = getRegions(doc)
+      expect(regions).toHaveLength(1) // one tempo for the whole template, set on the bar-1 region
+      expect(metaMap(doc).get('ppq')).toBe(960)
+      for (const c of clips.values()) if (c.kind === 'midi') expect(Number.isFinite(c.startTick) && c.lengthTicks > 0).toBe(true)
       for (const n of getNotes(doc)) {
         const c = clips.get(n.clipId)
         expect(c?.kind).toBe('midi')
@@ -186,7 +188,7 @@ describe('templates', () => {
     const doc = new Y.Doc()
     buildDemo(doc)
     const bar = (4 * 60 * SR) / DEMO_BPM
-    expect(getClips(doc).every((c) => c.kind !== 'midi' || c.bpm === DEMO_BPM || getTracks(doc).find((t) => t.id === c.trackId)?.role === 'click')).toBe(true)
+    expect(getRegions(doc)).toMatchObject([{ bar: 1, kind: 'metered', bpm: DEMO_BPM, num: 4, den: 4 }])
     expect(Math.round(contentEnd(doc, SR) / bar)).toBe(DEMO_BARS)
     expect(getLanes(doc).length).toBeGreaterThanOrEqual(1)
     expect(getDevices(doc).filter((d) => d.trackId === MASTER_TRACK).length).toBeGreaterThanOrEqual(2)
