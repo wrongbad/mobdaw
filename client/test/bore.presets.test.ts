@@ -18,7 +18,7 @@ async function playNote(presetId: string, pitch: number, frames: number) {
   const doc = new Y.Doc()
   const t = addTrack(doc, 'midi', 'midi')
   addInstrument(doc, t, INSTRUMENT_PRESETS.find((p) => p.id === presetId)!)
-  const c = addMidiClip(doc, { trackId: t, start: 0 })
+  const c = addMidiClip(doc, { trackId: t, startTick: 0 })
   addNote(doc, { clipId: c, tick: 0, durTicks: 1920, pitch, velocity: 0.8 })
   const sink = {
     call: (fn: string, ...args: number[]) => x[fn](e, ...args),

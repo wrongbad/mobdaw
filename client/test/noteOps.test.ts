@@ -97,7 +97,7 @@ describe('a group edit is one undo step', () => {
   it('undoes a multi-note quantize in one go', () => {
     const doc = new Y.Doc()
     const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
-    const clip = addMidiClip(doc, { trackId: 't', start: 0 })
+    const clip = addMidiClip(doc, { trackId: 't', startTick: 0 })
     undo.stopCapturing()
     for (const t of [10, 250, 490]) addNote(doc, { clipId: clip, tick: t, durTicks: 100, pitch: 60, velocity: 1 })
     undo.stopCapturing()
@@ -112,7 +112,7 @@ describe('cancelling a note drag', () => {
   const rig = () => {
     const doc = new Y.Doc()
     const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
-    const clip = addMidiClip(doc, { trackId: 't', start: 0 })
+    const clip = addMidiClip(doc, { trackId: 't', startTick: 0 })
     undo.stopCapturing()
     const a = addNote(doc, { clipId: clip, tick: 0, durTicks: 240, pitch: 60, velocity: 1 })
     undo.stopCapturing()

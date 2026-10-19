@@ -130,16 +130,14 @@ describe('bridge + real engine.wasm', () => {
     bridge.destroy()
   }, 20_000)
 
-  it.runIf(process.env.SLOW)('the click follows the time map: it ignores the stored clip, ticks at the new tempo from the next block, and stays quiet in a free region', async () => {
+  it.runIf(process.env.SLOW)('the click follows the time map: it runs forever, ticks at the new tempo from the next block, and stays quiet in a free region', async () => {
     const doc = new Y.Doc()
     addClickTrack(doc)
-    const clip = getClips(doc)[0] // the stored 4/4 pattern at tick 0 is not what plays
     ensureTimeline(doc)
     const { sink, render, samples } = host()
     const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
     await tick()
-    updateClip(doc, clip.id, { forever: false })
-    bridge.play(10 * SR) // far beyond the stored clip's end: the generated click still sounds (bar 6 at 120 bpm 4/4)
+    bridge.play(10 * SR) // far in: the generated click still sounds (bar 6 at 120 bpm 4/4)
     expect(render(1024)).toBeGreaterThan(0.01)
     bridge.stop()
     // 60 bpm from the start: beats a second apart, so there is silence at 0.5 s and a click at 1 s
