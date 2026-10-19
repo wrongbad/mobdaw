@@ -1,8 +1,11 @@
-// Yjs document schema v3 (docs/engine.md §3). Every map is flat and keyed by id; children
-// reference their parent by id; positions are integer samples at meta.sampleRate.
-//   meta    Y.Map  { schemaVersion, sampleRate }
+// Yjs document schema v4 (docs/engine.md §3). Every map is flat and keyed by id; children
+// reference their parent by id; positions are integer samples at meta.sampleRate, except MIDI clips, which sit in
+// ticks (meta.ppq per quarter note) on the project timeline defined by `regions` (timemap.ts).
+//   meta    Y.Map  { schemaVersion, sampleRate, ppq, key? }
+//   regions Y.Map  id -> Y.Map Region (the tempo/meter map: metered or free runs of bars; one always at bar 1, none sharing a bar)
+//   markers Y.Map  id -> Y.Map Marker (section marks at a bar)
 //   tracks  Y.Map  id -> Y.Map Track
-//   clips   Y.Map  id -> Y.Map AudioClip | MidiClip
+//   clips   Y.Map  id -> Y.Map AudioClip | MidiClip (MIDI: startTick/lengthTicks on the project timeline)
 //   notes   Y.Map  id -> Y.Map Note
 //   loopers Y.Map  id -> Y.Map Looper (1 to start per 'soundscape' track, add/remove freely; region in *source* time, length 0 = unset)
 //   pads    Y.Map  id -> Y.Map Pad (a free-time gate block on the soundscape's timeline: all its loopers on)
@@ -14,11 +17,26 @@
 import * as Y from 'yjs'
 import { DEVICES, LOFI_DRUM, MIX, MIX_GAIN, MIX_PAN } from './devices.ts'
 import type { ParamTarget } from './params.ts'
+import { defaultRegion, normalizeRegions, timeMap, type TimeMap } from './timemap.ts'
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 export const DEFAULT_SAMPLE_RATE = 48000
 export const DEFAULT_PPQ = 960
 export const DEFAULT_MIDI_BPM = 120
+
+/**
+ * A run of bars from `bar` (1-based) up to the next region's `bar`. Regions partition the timeline: there is always one at bar 1,
+ * and no two share a bar (`normalizeRegions` enforces both as a view; `repairRegions` writes it back).
+ * metered: every bar is `num`/`den` (beats grouped by `groups` when given, e.g. [2,2,3] for 7/8), at `bpm` quarter notes per
+ *          minute; with `rampTo`, the tempo moves linearly in musical time from `bpm` at the region's first beat to `rampTo`
+ *          at the next region (ignored in the last region).
+ * free:    exactly one bar, `length` samples long, with no beats inside. Its tempo for tick arithmetic is the previous region's.
+ */
+export type Region =
+  | { id: string; bar: number; kind: 'metered'; bpm: number; num: number; den: number; groups?: number[]; rampTo?: number }
+  | { id: string; bar: number; kind: 'free'; length: number }
+/** A rehearsal mark / section start at a bar (beat 1). `label` is short ("A", "Verse 2"), `text` optional. */
+export type Marker = { id: string; bar: number; label: string; text?: string }
 
 /**
  * 'soundscape': its audio clips are a *source* lane in their own time world, read by its loopers;
@@ -57,8 +75,11 @@ export type AudioClip = {
  * opens the drum grid instead of the piano roll (absent = piano roll); it is only a view of the same notes.
  * `forever` (only while looping) keeps the pattern repeating past `lengthTicks` for as long as the transport runs: `lengthTicks`
  * stays the finite part that sets the scroll bounds and the export's end.
+ * `startTick` is the clip's place on the project timeline: ticks from bar 1 beat 1 at `meta.ppq`. Notes keep clip-local
+ * `tick`/`durTicks`; a note's global tick is `startTick + tick`. Ticks may be fractional (never rounded on write). Samples come
+ * from the time map (`midiClipStartSample` etc.), so a tempo edit moves MIDI and leaves audio where it is.
  */
-export type MidiClip = { id: string; trackId: string; kind: 'midi'; start: number; bpm: number; ppq: number; lengthTicks: number; loopTicks?: number; forever?: boolean; view?: 'drums' }
+export type MidiClip = { id: string; trackId: string; kind: 'midi'; startTick: number; lengthTicks: number; loopTicks?: number; forever?: boolean; view?: 'drums' }
 export type Clip = AudioClip | MidiClip
 export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number }
 /** `name`, `keyLo` and `keyHi` are optional: an instrument's label and its note range (MIDI 0..127 inclusive; absent = 0 and 127). Not params. */
@@ -108,7 +129,9 @@ export const laneState = (l: Pick<Lane, 'enabled' | 'mode'>): LaneState => (!l.e
 /** `value` is normalised (0..1 along the param's own scale); `curve` shapes the segment *after* this point. */
 export type AutoCurve = 'linear' | 'hold'
 export type Point = { id: string; laneId: string; pos: number; value: number; curve: AutoCurve }
-export type ChatMessage = { id: string; username: string; color: string; text: string; ts: number }
+/** `system: true` marks a message the app wrote (a migration note), not a person: render it as a notice. `username` is then SYSTEM_USER. */
+export type ChatMessage = { id: string; username: string; color: string; text: string; ts: number; system?: boolean }
+export const SYSTEM_USER = 'mobdaw'
 /**
  * `status`: absent means the audio is in storage and anyone in the project can load it. 'incoming' is a take still only on
  * the recorder's device (`by`, their user id; `byName`, their name when recorded); 'missing' is audio whose upload was deleted. `peaks`: base64 waveform
@@ -153,11 +176,13 @@ export const devicesMap = (doc: Y.Doc) => doc.getMap<YM>('devices')
 export const lanesMap = (doc: Y.Doc) => doc.getMap<YM>('lanes')
 export const pointsMap = (doc: Y.Doc) => doc.getMap<YM>('points')
 export const samplesMap = (doc: Y.Doc) => doc.getMap<SampleMeta>('samples')
+export const regionsMap = (doc: Y.Doc) => doc.getMap<YM>('regions')
+export const markersMap = (doc: Y.Doc) => doc.getMap<YM>('markers')
 export const chatLog = (doc: Y.Doc) => doc.getArray<ChatMessage>('chat')
 
 /** Types to pass to `new Y.UndoManager(undoScope(doc), { trackedOrigins })`. */
 export const undoScope = (doc: Y.Doc) => [
-  metaMap(doc), tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), loopersMap(doc), padsMap(doc), lanesMap(doc), pointsMap(doc),
+  metaMap(doc), tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), loopersMap(doc), padsMap(doc), lanesMap(doc), pointsMap(doc), regionsMap(doc), markersMap(doc),
 ]
 
 const all = <T>(m: Y.Map<YM>) => [...m.values()].map((v) => v.toJSON() as T)
@@ -171,12 +196,15 @@ export const getLanes = (doc: Y.Doc) => all<Lane>(lanesMap(doc)).filter((l) => l
 export const getPoints = (doc: Y.Doc) => all<Point>(pointsMap(doc))
 export const getSamples = (doc: Y.Doc): Record<string, SampleMeta> => samplesMap(doc).toJSON()
 export const getSampleRate = (doc: Y.Doc): number => (metaMap(doc).get('sampleRate') as number | undefined) ?? DEFAULT_SAMPLE_RATE
+/** Project tick resolution (ticks per quarter note). */
+export const getPpq = (doc: Y.Doc): number => (metaMap(doc).get('ppq') as number | undefined) ?? DEFAULT_PPQ
+/** The project key for display ("D minor"), if one is set. */
+export const getKey = (doc: Y.Doc): string | undefined => (metaMap(doc).get('key') as string | undefined) || undefined
+export const setKey = (doc: Y.Doc, key: string | undefined) => doc.transact(() => (key ? metaMap(doc).set('key', key) : metaMap(doc).delete('key')))
 
-/** MIDI tick -> sample offset within the clip (docs/engine.md §2). */
+/** Ticks -> samples at one constant tempo (docs/engine.md §2). Not for clips: they go through the time map. */
 export const ticksToSamples = (ticks: number, bpm: number, ppq: number, rate: number) =>
   Math.round((ticks * 60 * rate) / (bpm * ppq))
-export const clipLength = (c: Clip, rate: number) =>
-  c.kind === 'audio' ? c.length : ticksToSamples(c.lengthTicks, c.bpm, c.ppq, rate)
 
 /** Fractional order value that sorts between `before` and `after` (either may be undefined). */
 export function orderBetween(before?: number, after?: number): number {
@@ -190,6 +218,169 @@ const toMap = (o: object) => new Y.Map<unknown>(Object.entries(o))
 const patchMap = (doc: Y.Doc, m: YM | undefined, patch: object) => {
   if (m) doc.transact(() => Object.entries(patch).forEach(([k, v]) => m.set(k, v)))
 }
+
+// --- timeline: regions, markers, the cached time map
+/** Raw stored regions, unsorted, possibly invalid after concurrent edits. Prefer `getRegions`. */
+const rawRegions = (doc: Y.Doc) => all<Region>(regionsMap(doc))
+/** The regions as every client sees them: normalized (one at bar 1, none sharing a bar, sorted; see `normalizeRegions`). */
+export const getRegions = (doc: Y.Doc): Region[] => normalizeRegions(rawRegions(doc))
+/** The region in effect at `bar`. */
+export const regionAtBar = (doc: Y.Doc, bar: number): Region => {
+  const rs = getRegions(doc)
+  let r = rs[0]
+  for (const x of rs) if (x.bar <= bar) r = x
+  return r
+}
+
+/** Fields a region may be given. `groups`/`rampTo` as `undefined` clear them. */
+export type RegionPatch = { bpm?: number; num?: number; den?: number; groups?: number[] | undefined; rampTo?: number | undefined; length?: number; kind?: 'metered' | 'free' }
+type NewRegion = { bar: number } & (
+  | { kind?: 'metered'; bpm: number; num: number; den: number; groups?: number[]; rampTo?: number }
+  | { kind: 'free'; length: number }
+)
+
+/**
+ * Add a region at `bar`, or, when a region already starts there, replace its contents (keeping its id): no two regions share a bar.
+ * Adding a *free* region where no region starts on the next bar also adds a metered region at bar+1 that carries on with the
+ * meter and tempo that were in effect (without a ramp), so the free bar doesn't change what follows it. One transaction.
+ * Returns the region's id.
+ */
+export function addRegion(doc: Y.Doc, r: NewRegion): string {
+  const bar = Math.max(1, Math.round(r.bar))
+  const rs = getRegions(doc)
+  const here = rs.find((x) => x.bar === bar)
+  const before = here ?? regionAtBar(doc, bar)
+  const id = here?.id ?? newId()
+  doc.transact(() => {
+    const fields = r.kind === 'free' ? { kind: 'free', length: r.length } : { kind: 'metered', bpm: r.bpm, num: r.num, den: r.den, ...(r.groups ? { groups: r.groups } : {}), ...(r.rampTo != null ? { rampTo: r.rampTo } : {}) }
+    regionsMap(doc).set(id, toMap({ id, bar, ...fields }))
+    if (r.kind === 'free' && !rs.some((x) => x.bar === bar + 1)) {
+      const prev = before.kind === 'metered' ? before : (rs.filter((x) => x.kind === 'metered' && x.bar < bar).at(-1) as Extract<Region, { kind: 'metered' }> | undefined) ?? (defaultRegion() as Extract<Region, { kind: 'metered' }>)
+      const nid = newId()
+      regionsMap(doc).set(nid, toMap({ id: nid, bar: bar + 1, kind: 'metered', bpm: prev.bpm, num: prev.num, den: prev.den, ...(prev.groups ? { groups: prev.groups } : {}) }))
+    }
+  })
+  return id
+}
+/**
+ * Edit a region in place (tempo, meter, groups, ramp, free length, or `kind` to switch between metered and free: the other kind's
+ * fields are dropped, and a switch to metered without bpm/num/den takes the meter in effect before it). Its `bar` doesn't change here.
+ * Returns false if the region is unknown.
+ */
+export function setRegion(doc: Y.Doc, id: string, patch: RegionPatch): boolean {
+  const m = regionsMap(doc).get(id)
+  if (!m) return false
+  doc.transact(() => {
+    const kind = patch.kind ?? (m.get('kind') as Region['kind'])
+    if (kind !== m.get('kind')) {
+      const bar = m.get('bar') as number
+      const prev = getRegions(doc).filter((x) => x.kind === 'metered' && x.bar < bar).at(-1) as Extract<Region, { kind: 'metered' }> | undefined
+      for (const k of [...m.keys()]) if (k !== 'id' && k !== 'bar') m.delete(k)
+      m.set('kind', kind)
+      if (kind === 'free') m.set('length', patch.length ?? DEFAULT_SAMPLE_RATE)
+      else {
+        m.set('bpm', patch.bpm ?? prev?.bpm ?? 120)
+        m.set('num', patch.num ?? prev?.num ?? 4)
+        m.set('den', patch.den ?? prev?.den ?? 4)
+      }
+    }
+    const allowed = kind === 'free' ? ['length'] : ['bpm', 'num', 'den', 'groups', 'rampTo']
+    for (const [k, v] of Object.entries(patch)) {
+      if (k === 'kind' || !allowed.includes(k)) continue
+      if (v === undefined) m.delete(k)
+      else m.set(k, v)
+    }
+    // a changed numerator invalidates old groups (they must sum to it)
+    if (kind === 'metered' && patch.num != null && patch.groups === undefined && !('groups' in patch)) {
+      const g = m.get('groups') as number[] | undefined
+      if (g && g.reduce((a, b) => a + b, 0) !== patch.num) m.delete('groups')
+    }
+  })
+  return true
+}
+/**
+ * Delete a region: the previous region simply runs on over its bars (a merge into the previous). The region at bar 1 cannot be
+ * deleted (returns false), nor can an unknown id. A same-bar duplicate of the bar-1 region that lost to a smaller id can be.
+ */
+export function deleteRegion(doc: Y.Doc, id: string): boolean {
+  const m = regionsMap(doc).get(id)
+  if (!m) return false
+  const first = getRegions(doc)[0]
+  if (first.id === id) return false
+  doc.transact(() => regionsMap(doc).delete(id))
+  return true
+}
+/**
+ * Write `normalizeRegions` back: drop same-bar losers (smallest id wins) and add the default region at bar 1 when none exists. Writes nothing
+ * when the stored regions are already valid. Run on open and from `sweepOrphans`; concurrent runs write the same thing (the synthesized
+ * region has a fixed id).
+ */
+export function repairRegions(doc: Y.Doc) {
+  const raw = rawRegions(doc)
+  const want = normalizeRegions(raw)
+  const keep = new Set(want.map((r) => r.id))
+  const missing = want.filter((r) => !regionsMap(doc).has(r.id))
+  if (raw.every((r) => keep.has(r.id)) && !missing.length) return
+  doc.transact(() => {
+    for (const r of raw) if (!keep.has(r.id)) regionsMap(doc).delete(r.id)
+    for (const r of missing) regionsMap(doc).set(r.id, toMap(r))
+  })
+}
+
+export const getMarkers = (doc: Y.Doc): Marker[] => all<Marker>(markersMap(doc)).sort((a, b) => a.bar - b.bar || (a.id < b.id ? -1 : 1))
+export function addMarker(doc: Y.Doc, m: Pick<Marker, 'bar' | 'label'> & Partial<Pick<Marker, 'text'>>): string {
+  const id = newId()
+  doc.transact(() => markersMap(doc).set(id, toMap({ id, bar: Math.max(1, Math.round(m.bar)), label: m.label, ...(m.text ? { text: m.text } : {}) } satisfies Marker)))
+  return id
+}
+/** `text: ''`/undefined clears the description. */
+export function updateMarker(doc: Y.Doc, id: string, patch: Partial<Pick<Marker, 'bar' | 'label' | 'text'>>) {
+  const m = markersMap(doc).get(id)
+  if (!m) return
+  doc.transact(() => {
+    if (patch.bar != null) m.set('bar', Math.max(1, Math.round(patch.bar)))
+    if (patch.label != null) m.set('label', patch.label)
+    if ('text' in patch) (patch.text ? m.set('text', patch.text) : m.delete('text'))
+  })
+}
+export const deleteMarker = (doc: Y.Doc, id: string) => doc.transact(() => markersMap(doc).delete(id))
+
+type MapCache = { map: TimeMap | null }
+const mapCaches = new WeakMap<Y.Doc, MapCache>()
+/**
+ * The project's time map (regions + sample rate + ppq), cached per doc and rebuilt after any change to `regions` or `meta`. Cheap to
+ * call per frame. Inside an open transaction that touched those maps it is rebuilt every call (observers have not run yet). A map
+ * is immutable: after an edit, hold on to the new one `getTimeMap` returns.
+ */
+export function getTimeMap(doc: Y.Doc): TimeMap {
+  let c = mapCaches.get(doc)
+  if (!c) {
+    const cache: MapCache = { map: null }
+    c = cache
+    mapCaches.set(doc, cache)
+    const regions = regionsMap(doc), meta = metaMap(doc)
+    doc.on('beforeObserverCalls', (tr) => {
+      if (tr.changedParentTypes.has(regions as Y.AbstractType<any>) || tr.changedParentTypes.has(meta as Y.AbstractType<any>)) cache.map = null
+    })
+  }
+  if (c.map && !(doc as unknown as { _transaction: unknown })._transaction) return c.map
+  const map = timeMap(rawRegions(doc), getSampleRate(doc), getPpq(doc))
+  c.map = map
+  return map
+}
+
+/** Timeline sample of a MIDI clip's start / end (its finite extent), through the time map. `src` is the doc or a map. */
+const mapOf = (src: Y.Doc | TimeMap): TimeMap => ('tickToSample' in src ? src : getTimeMap(src))
+export const midiClipStartSample = (src: Y.Doc | TimeMap, c: Pick<MidiClip, 'startTick'>) => mapOf(src).tickToSample(c.startTick)
+export const midiClipEndSample = (src: Y.Doc | TimeMap, c: Pick<MidiClip, 'startTick' | 'lengthTicks'>) => mapOf(src).tickToSample(c.startTick + c.lengthTicks)
+/** A MIDI clip's start / end / pass-end ticks on the project timeline, and its sample position for a clip-local tick. */
+export const midiClipEndTick = (c: Pick<MidiClip, 'startTick' | 'lengthTicks'>) => c.startTick + c.lengthTicks
+export const midiNoteSample = (src: Y.Doc | TimeMap, c: Pick<MidiClip, 'startTick'>, tick: number) => mapOf(src).tickToSample(c.startTick + tick)
+/** A clip's start on the timeline in samples (audio: stored; MIDI: via the map). */
+export const clipStart = (c: Clip, src: Y.Doc | TimeMap) => (c.kind === 'audio' ? c.start : midiClipStartSample(src, c))
+/** A clip's extent in samples. A MIDI clip's depends on the tempo where it sits. */
+export const clipLength = (c: Clip, src: Y.Doc | TimeMap) => (c.kind === 'audio' ? c.length : midiClipEndSample(src, c) - midiClipStartSample(src, c))
+export const clipEnd = (c: Clip, src: Y.Doc | TimeMap) => clipStart(c, src) + clipLength(c, src)
 
 // --- tracks
 export function addTrack(doc: Y.Doc, name: string, kind: TrackKind = 'audio', order?: number, role?: TrackRole, color?: number): string {
@@ -257,10 +448,9 @@ export function addAudioClip(
   return id
 }
 
-export function addMidiClip(doc: Y.Doc, c: Pick<MidiClip, 'trackId' | 'start'> & Partial<Omit<MidiClip, 'id' | 'kind'>>): string {
+export function addMidiClip(doc: Y.Doc, c: Pick<MidiClip, 'trackId' | 'startTick'> & Partial<Omit<MidiClip, 'id' | 'kind'>>): string {
   const id = newId()
-  const ppq = c.ppq ?? DEFAULT_PPQ
-  const clip: MidiClip = { bpm: DEFAULT_MIDI_BPM, ppq, lengthTicks: 16 * ppq, ...c, id, kind: 'midi' }
+  const clip: MidiClip = { lengthTicks: 16 * getPpq(doc), ...c, id, kind: 'midi' }
   doc.transact(() => clipsMap(doc).set(id, toMap(clip)))
   return id
 }
@@ -435,11 +625,12 @@ export const isLooping = (c: Loopy) => ('lengthTicks' in c ? patternTicks(c) < c
 /** Whether a clip repeats past its end: a `forever` flag only counts while it loops. */
 export const isForever = (c: Loopy) => !!c.forever && isLooping(c)
 export const FOREVER_SECONDS = 24 * 3600
-export const foreverTicks = (c: Pick<MidiClip, 'bpm' | 'ppq'>) => (FOREVER_SECONDS * c.bpm * c.ppq) / 60
+/** How many ticks "forever" covers for a MIDI clip starting at `startTick`: 24 hours of the map's time from its start. */
+export const foreverTicks = (map: TimeMap, startTick: number) => map.sampleToTick(map.tickToSampleExact(startTick) + FOREVER_SECONDS * map.sampleRate) - startTick
 
 /**
  * The metronome: a MIDI track named "click" (`role: 'click'`, first in the list) with two lofi drums, "accent" (the higher,
- * brighter one) and "tick", and a drum-grid clip at 0, 120 bpm in 4/4: one bar looped across four, with the tick on all four
+ * brighter one) and "tick", and a drum-grid clip at tick 0 (it follows the timeline's tempo): one 4/4 bar looped across four, with the tick on all four
  * beats and the accent doubled onto beat 1 (so muting the accent synth leaves a plain click). The clip loops `forever`. One transaction,
  * so one undo step. Returns the track id.
  */
@@ -450,8 +641,8 @@ export function addClickTrack(doc: Y.Doc): string {
     const accent = 37, tick = 36
     addDrum(doc, id, { key: accent, name: 'accent', params: { 0: 3500, 1: 0.8, 2: 40, 3: 0.8 } })
     addDrum(doc, id, { key: tick, name: 'tick', params: { 0: 1500, 1: 0.65, 2: 35, 3: 0.6 } })
-    const ppq = DEFAULT_PPQ
-    const clip = addMidiClip(doc, { trackId: id, start: 0, bpm: 120, ppq, lengthTicks: 16 * ppq, loopTicks: 4 * ppq, forever: true, view: 'drums' })
+    const ppq = getPpq(doc)
+    const clip = addMidiClip(doc, { trackId: id, startTick: 0, lengthTicks: 16 * ppq, loopTicks: 4 * ppq, forever: true, view: 'drums' })
     for (let beat = 0; beat < 4; beat++) addNote(doc, { clipId: clip, tick: beat * ppq, durTicks: ppq / 4, pitch: tick, velocity: 1 })
     addNote(doc, { clipId: clip, tick: 0, durTicks: ppq / 4, pitch: accent, velocity: 1 })
   })
@@ -547,6 +738,8 @@ export function discardSample(doc: Y.Doc, hash: string, origin?: unknown) {
  * note while B deletes its clip). Cheap enough to run opportunistically before an edit.
  */
 export function sweepOrphans(doc: Y.Doc) {
+  if (isFutureDoc(doc)) return
+  repairRegions(doc)
   doc.transact(() => {
     const tracks = tracksMap(doc), clips = clipsMap(doc)
     for (const c of getClips(doc)) if (!tracks.has(c.trackId)) deleteClip(doc, c.id)
@@ -609,6 +802,7 @@ export function migrateToV2(doc: Y.Doc) {
  * one mix device per track and for the master, last in its chain. Run `migrateToV2` first. Origin 'migrate' keeps it out of undo.
  */
 export function migrateToV3(doc: Y.Doc) {
+  if (isFutureDoc(doc)) return
   const meta = metaMap(doc)
   doc.transact(() => {
     const num = (v: unknown, def: number) => (typeof v === 'number' && Number.isFinite(v) ? v : def)
@@ -619,11 +813,124 @@ export function migrateToV3(doc: Y.Doc) {
       t.delete('pan')
     }
     ensureMixDevice(doc, MASTER_TRACK)
-    if (meta.get('schemaVersion') !== SCHEMA_VERSION && meta.get('schemaVersion') != null) meta.set('schemaVersion', SCHEMA_VERSION)
+    const v = meta.get('schemaVersion')
+    if (typeof v === 'number' && v < 3) meta.set('schemaVersion', 3)
   }, 'migrate')
 }
-/** A forever audio clip's length in samples (what the engine is sent), mirroring `foreverTicks`. */
+/** A forever audio clip's length in samples (what the engine is sent). */
 export const foreverSamples = (rate: number) => FOREVER_SECONDS * rate
 /** A clip's pass in samples: its loop when it loops, else its whole (finite) length. */
-export const passLength = (c: Clip, rate: number) =>
-  c.kind === 'audio' ? (isLooping(c) ? c.loopLength! : c.length) : ticksToSamples(patternTicks(c), c.bpm, c.ppq, rate)
+export const passLength = (c: Clip, src: Y.Doc | TimeMap) =>
+  c.kind === 'audio' ? (isLooping(c) ? c.loopLength! : c.length) : mapOf(src).tickToSample(c.startTick + patternTicks(c)) - midiClipStartSample(src, c)
+
+/**
+ * Whether the doc was written by a newer client (`meta.schemaVersion` above `SCHEMA_VERSION`). This client must not write into it: an
+ * older shape written into a newer doc is silent corruption. The migrations and `sweepOrphans` do nothing for such a doc; the UI should
+ * call this after the first sync and open the project read-only with a "reload for the latest version" notice. (Clients deployed before
+ * v4 have no such check: docs/todo.md.)
+ */
+export const isFutureDoc = (doc: Y.Doc): boolean => {
+  const v = metaMap(doc).get('schemaVersion')
+  return typeof v === 'number' && v > SCHEMA_VERSION
+}
+
+/** Append a message from the app itself (rendered as a notice, not a person). A fixed `id` writes it once: a repeat is skipped. */
+export function addSystemMessage(doc: Y.Doc, text: string, id: string = newId()): string | null {
+  const t = text.trim().slice(0, CHAT_MAX)
+  if (!t || chatLog(doc).toArray().some((m) => m.id === id)) return null
+  chatLog(doc).push([{ id, username: SYSTEM_USER, color: 'hsl(0 0% 60%)', text: t, ts: Date.now(), system: true }])
+  return id
+}
+
+/** Make sure the timeline basics exist: `meta.ppq`, and a valid regions map (a default 120 bpm 4/4 region at bar 1). Writes nothing when in order. Fresh docs call this once. */
+export function ensureTimeline(doc: Y.Doc) {
+  if (metaMap(doc).get('ppq') == null) doc.transact(() => metaMap(doc).set('ppq', DEFAULT_PPQ))
+  repairRegions(doc)
+}
+
+type LegacyMidi = { id: string; trackId: string; start: number; bpm: number; ppq: number; lengthTicks: number; loopTicks?: number }
+const legacyMidiClips = (doc: Y.Doc): LegacyMidi[] =>
+  getClips(doc).filter((c) => c.kind === 'midi' && (c as unknown as { startTick?: number }).startTick == null).map((c) => {
+    const o = c as unknown as Partial<LegacyMidi>
+    return { id: c.id, trackId: c.trackId, start: Number(o.start) || 0, bpm: o.bpm && o.bpm > 0 ? o.bpm : DEFAULT_MIDI_BPM, ppq: o.ppq && o.ppq > 0 ? o.ppq : DEFAULT_PPQ, lengthTicks: Number(o.lengthTicks) || 0, ...(o.loopTicks ? { loopTicks: o.loopTicks } : {}) }
+  })
+
+/**
+ * v3 -> v4: one shared timeline (docs/engine.md §3). Idempotent, origin 'migrate' (out of undo), and a pure function of the old doc, so
+ * clients migrating at once write the same thing (fixed region ids). Run after `migrateToV2`/`V3`. Does nothing for a doc from the future.
+ *  1. Picks the tempo map: the click track's clip gives bpm, `loopTicks/ppq` quarters per bar as n/4, and its start (a start other than 0
+ *     becomes a leading free region of that length, then the metered region from bar 2); else the bpm carrying the most MIDI time (120 if none), 4/4.
+ *  2. Converts every legacy MIDI clip (`start`/`bpm`/`ppq`): `startTick = sampleToTick(start)`, and the notes' `tick`/`durTicks` and the clip's
+ *     `lengthTicks`/`loopTicks` scale by (mapBpm/clipBpm)*(meta.ppq/clip.ppq), so every note starts and ends on the same sample (+-1). A clip that
+ *     straddles the end of a leading free region cannot be (the tempo changes under it); it is rare and uses the tempo where it starts.
+ *  3. Audio, pads, loopers and automation are untouched.
+ *  4. Appends one system chat message (`addSystemMessage`, id 'migrate-v4') summarising the map and the clips now off the grid. Not written
+ *     when the doc has no MIDI clips.
+ * Also the repair for fresh docs: `ensureTimeline`.
+ */
+export function migrateToV4(doc: Y.Doc) {
+  if (isFutureDoc(doc)) return
+  const meta = metaMap(doc)
+  const legacy = legacyMidiClips(doc)
+  const sv = meta.get('schemaVersion')
+  if (typeof sv === 'number' && sv >= 4 && !legacy.length) return ensureTimeline(doc)
+  if (typeof sv !== 'number') return // not even v2 yet
+  const v: number = sv
+  const rate = getSampleRate(doc)
+  doc.transact(() => {
+    const ppq = DEFAULT_PPQ
+    if (meta.get('ppq') == null) meta.set('ppq', ppq)
+    let regions = rawRegions(doc)
+    let mapBpm = 120, num = 4
+    if (!regions.length && v < 4) {
+      const tracks = new Map(getTracks(doc).map((t) => [t.id, t]))
+      const clicks = legacy.filter((c) => tracks.get(c.trackId)?.role === 'click').sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : 1))
+      const click = clicks[0]
+      let leading = 0
+      if (click) {
+        mapBpm = click.bpm
+        const q = (click.loopTicks || click.lengthTicks) / click.ppq
+        num = Number.isInteger(q) && q >= 1 && q <= 64 ? q : 4
+        leading = Math.max(0, Math.round(click.start))
+      } else if (legacy.length) {
+        const totals = new Map<number, number>()
+        for (const c of legacy) totals.set(c.bpm, (totals.get(c.bpm) ?? 0) + (c.lengthTicks * 60 * rate) / (c.bpm * c.ppq))
+        mapBpm = [...totals].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0]
+      }
+      const metered = (id: string, bar: number): Region => ({ id, bar, kind: 'metered', bpm: mapBpm, num, den: 4 })
+      const made: Region[] = leading > 0 ? [{ id: 'default', bar: 1, kind: 'free', length: leading }, metered('migrate-2', 2)] : [metered('default', 1)]
+      for (const r of made) regionsMap(doc).set(r.id, toMap(r))
+      regions = made
+    }
+    const map = timeMap(regions, rate, ppq)
+    const trackName = new Map(getTracks(doc).map((t) => [t.id, t.name]))
+    const off: string[] = []
+    const notes = getNotes(doc)
+    for (const c of legacy) {
+      const startTick = map.sampleToTick(c.start)
+      const sp = map.spanAt(startTick)
+      const f = (sp.bpm0 / c.bpm) * (ppq / c.ppq)
+      const m = clipsMap(doc).get(c.id)!
+      m.set('startTick', startTick)
+      m.set('lengthTicks', c.lengthTicks * f)
+      if (c.loopTicks) m.set('loopTicks', c.loopTicks * f)
+      for (const k of ['start', 'bpm', 'ppq']) m.delete(k)
+      for (const n of notes) {
+        if (n.clipId !== c.id) continue
+        const nm = notesMap(doc).get(n.id)!
+        nm.set('tick', n.tick * f)
+        nm.set('durTicks', n.durTicks * f)
+      }
+      if (Math.abs(c.bpm - sp.bpm0) > 1e-9 && sp.region.kind === 'metered') off.push(`'${trackName.get(c.trackId) ?? 'midi'}' at bar ${map.position(startTick).bar}`)
+    }
+    if (legacy.length && v < 4) {
+      const first = map.regions[0]
+      const m = map.regions.find((r) => r.kind === 'metered') as Extract<Region, { kind: 'metered' }> | undefined
+      let text = `migrated to a shared timeline at ${+(m?.bpm ?? 120).toFixed(2)} bpm ${m?.num ?? 4}/${m?.den ?? 4}`
+      if (first.kind === 'free') text += `, with a ${+(first.length / rate).toFixed(2)} s free region before bar 2`
+      if (off.length) text += `; ${off.length} MIDI clip${off.length === 1 ? ' had its' : 's had their'} own tempo and ${off.length === 1 ? 'is' : 'are'} now off the grid: ${off.join(', ')}`
+      addSystemMessage(doc, text, 'migrate-v4')
+    }
+    meta.set('schemaVersion', 4)
+  }, 'migrate')
+}

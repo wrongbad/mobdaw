@@ -1,7 +1,7 @@
 // A tiny picture of a project for the project list: one row per track, one span per clip (or per pad on a
 // soundscape track), positioned as fractions of the project's length. No audio, no engine, no screenshots.
 import type * as Y from 'yjs'
-import { DEFAULT_SAMPLE_RATE, getClips, getPads, getTracks, metaMap, type TrackKind } from './schema.ts'
+import { DEFAULT_SAMPLE_RATE, clipEnd, clipStart, getClips, getPads, getTimeMap, getTracks, metaMap, type TrackKind } from './schema.ts'
 
 export type PreviewRow = { kind: TrackKind; spans: [start: number, end: number][] }
 export type ProjectPreview = { rows: PreviewRow[] }
@@ -15,6 +15,7 @@ export function projectPreview(doc: Y.Doc): ProjectPreview {
   const tracks = getTracks(doc).slice(0, MAX_ROWS)
   const clips = getClips(doc)
   const pads = getPads(doc)
+  const map = getTimeMap(doc)
   const raw = tracks.map((t) => {
     const spans: [number, number][] = []
     if (t.kind === 'soundscape') {
@@ -22,8 +23,10 @@ export function projectPreview(doc: Y.Doc): ProjectPreview {
     } else {
       for (const c of clips) {
         if (c.trackId !== t.id) continue
-        const length = c.kind === 'audio' ? c.length : Math.round((c.lengthTicks / c.ppq) * (60 / c.bpm) * rate)
-        spans.push([c.start, c.start + length])
+        const old = c as unknown as { start?: number; bpm?: number; ppq?: number; lengthTicks?: number }
+        // a project not yet opened since v4 still has the per-clip clock
+        if (c.kind === 'midi' && c.startTick == null) spans.push([old.start ?? 0, (old.start ?? 0) + Math.round(((old.lengthTicks ?? 0) / (old.ppq ?? 960)) * (60 / (old.bpm ?? 120)) * rate)])
+        else spans.push([clipStart(c, map), clipEnd(c, map)])
       }
     }
     return { kind: t.kind, spans: spans.slice(0, MAX_SPANS) }
