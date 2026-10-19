@@ -1,7 +1,8 @@
 import { isLifted, lift } from './lift'
 
 // Shared mechanics for draggable blocks on the timeline: audio clips, MIDI clips and soundscape
-// regions all have a start and a length in samples, move by their body and resize by their edges.
+// regions all have a start and a length on the timeline, move by their body and resize by their edges
+// (MIDI clips are in ticks: see midiClipOps.ts).
 
 export const EDGE = 8
 
@@ -99,19 +100,6 @@ export function trimBlock(
     return { start: b.start + d, length: b.length - d, d }
   }
   return { start: b.start, length: Math.round(clamp(b.length + dSmp, o.minLength, o.maxLength ?? Infinity)), d: 0 }
-}
-
-/**
- * Trim the left edge of a MIDI clip by a pointer delta (samples), snapped to 1/16 notes. The start
- * moves, the length shrinks and `d` (ticks, positive = shorter) is what every note's tick must
- * decrease by so the music stays put on the timeline. The start can't pass 0 and the clip keeps at
- * least one step.
- */
-export function trimMidiLeft(c: { start: number; bpm: number; ppq: number; lengthTicks: number }, dSmp: number, rate: number) {
-  const k = (c.bpm * c.ppq) / (60 * rate) // ticks per sample
-  const step = c.ppq / 4
-  const d = clamp(Math.round((dSmp * k) / step) * step, Math.ceil((-c.start * k) / step) * step, c.lengthTicks - step)
-  return { start: Math.max(0, c.start + Math.round(d / k)), lengthTicks: c.lengthTicks - d, d }
 }
 
 /**

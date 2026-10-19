@@ -17,6 +17,8 @@ export type ProjectMenuOpts = {
   cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean; onPublic(v: boolean): void; onDemo(v: boolean): void }
   /** The project's sample rate; `locked` says why it can't change (it is only possible while the project has no tracks). */
   sampleRate: { value: number; locked: 'tracks' | null; set(rate: number): void }
+  /** The project's key for display ("D minor"); empty clears it. */
+  key?: { value: string | undefined; set(v: string | undefined): void; disabled?: boolean }
   /** The microphone choice changed: re-open the input if it is in use. */
   onInputChanged(): void
   /** Absent when the commands can't be used (viewers). The MIDI input or a binding changed. */
@@ -143,7 +145,10 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   void listMics()
 
   const pedal = o.onLoopBindings && section('loop commands', loopSettings(o.onLoopBindings))
-  const panel = h('div', { className: 'settings' }, section('project', field('name', name, true)), sharing, audio, pedal, msg)
+  const keyIn = h('input', { value: o.key?.value ?? '', placeholder: 'none', disabled: !o.key || o.key.disabled, spellcheck: false, maxLength: 24, title: 'the key of the music, like D minor: shown on the ruler (it does not change anything you hear)' })
+  keyIn.onkeydown = (e) => (e.stopPropagation(), e.key === 'Enter' && keyIn.blur())
+  keyIn.onchange = () => o.key?.set(keyIn.value.trim() || undefined)
+  const panel = h('div', { className: 'settings' }, section('project', field('name', name, true), ...(o.key ? [field('key', keyIn, true)] : [])), sharing, audio, pedal, msg)
   popoverPanel(anchor, panel)
 }
 

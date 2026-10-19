@@ -24,6 +24,8 @@ export type BarProps = {
   loopText: Accessor<string | null>
   unread: Accessor<number>
   chatOpen: Accessor<boolean>
+  /** A line of notice next to the logo (e.g. the project is read-only because a newer version wrote it); null: none. */
+  notice?: Accessor<string | null>
   onStatus(): void
   onClickTrack(): void
   onZoom(factor: number): void
@@ -48,6 +50,7 @@ export function Bar(p: BarProps) {
         <Show when={p.snapshot}>
           <span class="dim" title="you are looking at a snapshot of this project. Your changes stay on this page, are not shared and are lost when you leave, unless you save a copy to this device.">changes stay on this page</span>
         </Show>
+        <Show when={p.notice?.()}>{(n) => <span class="warn" title={n()}>{n()}</span>}</Show>
         <Show when={p.saveCopy?.shown()}>
           <button class="bar-btn" title="your changes are not saved: keep them as a project on this device" on:click={() => p.saveCopy!.onSave()}>save a copy</button>
         </Show>

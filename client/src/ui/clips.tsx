@@ -2,7 +2,7 @@
 // regions of takes in progress. Mounted once per lane body with `render()`; they follow the project store, the selection, the
 // locks, the zoom and the peers' selections by themselves, so a doc change patches the clips it touches and the playhead moves
 // none of them. The canvases (waveforms) and the MIDI widgets (note editor, drum grid) stay imperative, driven by effects.
-import { DEVICES, clipLength, deletePad, isForever, isLooping, type AudioClip, type Clip, type MidiClip, type Note, type SampleMeta } from '@mobdaw/shared'
+import { DEVICES, clipLength, clipStart, deletePad, isForever, isLooping, type AudioClip, type Clip, type MidiClip, type Note, type SampleMeta, type TimeMap } from '@mobdaw/shared'
 import { render } from 'solid-js/web'
 import { For, createEffect, createMemo, createRenderEffect, type Accessor } from 'solid-js'
 import { peaksFailed, peaksFor, storedPeaks } from '../audio/peaks'
@@ -28,6 +28,10 @@ export type SrcView = {
 
 export type ClipsCtx = GestureCtx & {
   scale: Accessor<{ pps: number; rate: number }>
+  /** The project's time map: where MIDI clips sit and how long they are. Follows tempo edits. */
+  map: Accessor<TimeMap>
+  /** Audio clips to draw as ghosts for a moment: they were on a bar or beat line before a tempo edit and are not now. */
+  ghosts: Accessor<ReadonlySet<string>>
   /** The main timeline's extent (samples): a `forever` clip is drawn out to it. */
   total: Accessor<number>
   /** The engine is open (waveforms are drawn from then on). */
@@ -55,7 +59,9 @@ export type ClipsCtx = GestureCtx & {
 const EMPTY: never[] = []
 
 /** Preview of a MIDI clip: its label plus tiny note marks (a looping clip's first pass in full, the repeats faded). */
-export function midiPreview(e: HTMLElement, c: Pick<MidiClip, 'view'>, notes: Pick<Note, 'tick' | 'durTicks' | 'pitch'>[], lp: number, extent: number) {
+export function midiPreview(e: HTMLElement, c: Pick<MidiClip, 'view'>, notes: Pick<Note, 'tick' | 'durTicks' | 'pitch'>[], lp: number, extent: number,
+  /** Where a clip-local tick is, as a fraction of the clip's width (default: linear in ticks; under a tempo change it is not). */
+  frac: (tick: number) => number = (t) => t / extent) {
   const shown = lp ? notes.filter((n) => n.tick < lp) : notes
   const lo = Math.min(...shown.map((n) => n.pitch)), hi = Math.max(...shown.map((n) => n.pitch))
   const passes = lp ? Math.ceil(extent / lp) : 1
@@ -63,11 +69,11 @@ export function midiPreview(e: HTMLElement, c: Pick<MidiClip, 'view'>, notes: Pi
   for (let k = 0; k < passes; k++) {
     if (k) { // where the pattern starts over
       const edge = h('i', { className: 'loop-edge' })
-      edge.style.left = `${((k * lp) / extent) * 100}%`
+      edge.style.left = `${frac(k * lp) * 100}%`
       marks.push(edge)
       if (k === 1) { // the pass handle lights up here when hovered
         const first = h('i', { className: 'seam-first' })
-        first.style.left = `calc(${(lp / extent) * 100}% - 1px)`
+        first.style.left = `calc(${frac(lp) * 100}% - 1px)`
         marks.push(first)
       }
     }
@@ -75,8 +81,8 @@ export function midiPreview(e: HTMLElement, c: Pick<MidiClip, 'view'>, notes: Pi
       const tick = k * lp + n.tick
       if (tick >= extent) continue
       const m = h('i', { className: k ? 'mark rep' : 'mark' })
-      m.style.left = `${(tick / extent) * 100}%`
-      m.style.width = `${(Math.min(n.durTicks, lp || Infinity) / extent) * 100}%` // (min-width in the CSS: a % minimum is huge on a forever clip)
+      m.style.left = `${frac(tick) * 100}%`
+      m.style.width = `${(frac(tick + Math.min(n.durTicks, lp || Infinity)) - frac(tick)) * 100}%` // (min-width in the CSS: a % minimum is huge on a forever clip)
       m.style.top = `${hi === lo ? 50 : 20 + ((hi - n.pitch) / (hi - lo)) * 60}%`
       marks.push(m)
     }
@@ -93,7 +99,9 @@ function ClipEl(p: { ctx: ClipsCtx; clip: Clip; src: SrcView | null }) {
   const cpps = () => (p.src ? p.src.pps() : ctx.scale().pps)
   const forever = () => isForever(c)
   /** The clip's drawn length in seconds: a `forever` clip runs out to the end of the scroll area, which its finite part alone decides. */
-  const secs = () => (forever() ? Math.max(clipLength(c, rate()), ctx.total() - c.start) : clipLength(c, rate())) / rate()
+  const map = () => ctx.map()
+  const start = () => clipStart(c, map())
+  const secs = () => (forever() ? Math.max(clipLength(c, map()), ctx.total() - start()) : clipLength(c, map())) / rate()
   const width = () => Math.max(2, secs() * cpps())
   const audio = c.kind === 'audio' // (a clip's kind never changes)
   const meta = () => (audio ? store.samples[(c as AudioClip).sourceHash] : undefined)
@@ -133,7 +141,7 @@ function ClipEl(p: { ctx: ClipsCtx; clip: Clip; src: SrcView | null }) {
     const notesJson = createMemo(() => JSON.stringify(notes()))
     const instrumentsJson = createMemo(() => JSON.stringify(store.devicesByTrack(c.trackId)().filter((d) => DEVICES[d.type]?.instrument)))
     const m = c as MidiClip
-    const extent = () => (forever() ? secs() * m.bpm * m.ppq / 60 : m.lengthTicks)
+    const extent = () => (forever() ? map().sampleToTick(map().tickToSampleExact(m.startTick) + secs() * rate()) - m.startTick : m.lengthTicks)
     createEffect(() => {
       const editor = m.view === 'drums' ? ctx.dg : ctx.ne
       const other = editor === ctx.dg ? ctx.ne : ctx.dg
@@ -148,17 +156,18 @@ function ClipEl(p: { ctx: ClipsCtx; clip: Clip; src: SrcView | null }) {
       }
       if (editor.el.parentElement === el) { editor.el.remove(); editor.reset() }
       const lp = isLooping(m) ? m.loopTicks! : 0
-      midiPreview(el, m, notes().map((n) => ({ tick: n.tick, durTicks: n.durTicks, pitch: n.pitch })), lp, extent())
+      const mp = map(), s0 = mp.tickToSampleExact(m.startTick), span = secs() * rate()
+      midiPreview(el, m, notes().map((n) => ({ tick: n.tick, durTicks: n.durTicks, pitch: n.pitch })), lp, extent(), (t) => (mp.tickToSampleExact(m.startTick + t) - s0) / span)
     })
   }
 
   return (
     <div class="clip" ref={el}
       classList={{
-        forever: forever(), looping: isLooping(c), loopable: !p.src && !store.locks().has(c.trackId), midi: !audio,
+        forever: forever(), looping: isLooping(c), ghost: ctx.ghosts().has(c.id), loopable: !p.src && !store.locks().has(c.trackId), midi: !audio,
         editing: open(), sel: sel.clips.includes(c.id), unplayable: !canPlay(), incoming: status() === 'incoming', loading: loading(), missing: status() === 'missing',
       }}
-      style={{ left: `${(c.start / rate()) * cpps()}px`, width: `${width()}px`, outline: ctx.store.outlines().has(c.id) ? `2px solid ${ctx.store.outlines().get(c.id)}` : '' }}
+      style={{ left: `${(start() / rate()) * cpps()}px`, width: `${width()}px`, outline: ctx.store.outlines().has(c.id) ? `2px solid ${ctx.store.outlines().get(c.id)}` : '' }}
       on:pointerdown={(ev) => clipDown(ctx, ev, c.id)}
       on:pointermove={(ev) => { // which handle is under the pointer drives the cursor and the edge highlight (CSS, by data-zone)
         if (ev.buttons) return

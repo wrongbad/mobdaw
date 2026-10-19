@@ -112,7 +112,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .body { display: flex; flex: 1; min-height: 0; }
 .scroll { flex: 1; min-width: 0; overflow: auto; min-height: 0; }
 .content { position: relative; min-width: 100%; }
-.ruler { display: flex; height: 24px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
+.ruler { display: flex; height: 40px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
 /* the ruler's bottom line is a pseudo-element under the playhead copies (a real border would draw over them) */
 .ruler::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); z-index: 0; pointer-events: none; }
 /* tracks are tiles with a gutter around them: the ruler's corner is the track header plus the gutter, so its line meets the headers' */
@@ -124,6 +124,28 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .corner { border-right: 1px solid var(--line); }
 .ruler-body { position: relative; height: 100%; overflow: hidden; }
 .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
+/* the main ruler (ui/ruler.tsx): markers on top, then the tempo / meter badges, then bar numbers; beats grow shorter, groups a little taller */
+.rl { position: absolute; top: 12px; bottom: 0; border-left: 1px solid var(--line); padding: 12px 0 0 4px; font-size: 10px; line-height: 14px; color: var(--dim); pointer-events: none; white-space: nowrap; }
+.rl.bar { border-left-color: var(--line-strong, var(--dim)); }
+.rl.group { top: 30px; padding: 0; }
+.rl.beat { top: 34px; padding: 0; }
+.rl.free { border-left-style: dashed; }
+.rl-free { position: absolute; top: 12px; bottom: 0; pointer-events: none; background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--dim) 16%, transparent) 5px 6px); }
+.rl-s { position: absolute; top: 0; bottom: 0; padding: 12px 0 0 3px; border-left: 1px solid var(--line); font-size: 9px; line-height: 14px; color: var(--dim); }
+.rl-badge, .rl-marker { position: absolute; z-index: 1; height: 12px; max-width: 220px; padding: 0 4px; border: 0; border-left: 2px solid var(--accent); font-size: 9px; line-height: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); cursor: pointer; }
+.rl-badge { top: 12px; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
+.rl-marker { top: 0; max-width: 140px; border-left-color: var(--fg); background: var(--raise); }
+.rl-badge:hover, .rl-marker:hover { background: var(--line); }
+.rl-ramp { position: absolute; top: 13px; z-index: 0; fill: none; stroke: var(--accent); stroke-width: 1.5; pointer-events: none; overflow: visible; }
+/* audio clips that were on a bar or beat line before a tempo edit and no longer are: dimmed for a moment (MIDI moved with the bars, audio did not) */
+.clip.ghost { opacity: .4; outline: 1px dashed var(--dim); outline-offset: -2px; }
+.clip { transition: opacity .3s; }
+/* a project from a newer version: playable, not editable */
+.warn { color: var(--rec, #d55); font-size: 11px; }
+.timeline.future .lanes, .timeline.future .master, .timeline.future .add-track { pointer-events: none; }
+.timeline.future .lanes .head, .timeline.future .master .head { opacity: .85; }
+.tl-dialog .error { margin: 0; }
+
 .add-track { display: block; position: sticky; left: 0; margin: 12px 16px; width: 64px; height: 40px; padding: 0; font-size: 22px; line-height: 1; color: var(--dim); background: none; border: 1px dashed var(--line); }
 .add-track:hover { color: var(--fg); border-color: var(--dim); background: none; }
 .overlay { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
@@ -377,6 +399,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .msg { max-width: 85%; padding: 6px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
 .msg.them { align-self: flex-start; background: var(--raise); }
 .msg.me { align-self: flex-end; background: color-mix(in srgb, var(--accent) 22%, var(--raise)); }
+.msg-sys { align-self: center; max-width: 92%; margin: 6px 0; padding: 4px 8px; font-size: 11px; line-height: 1.4; text-align: center; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .msg-meta { padding-top: 8px; font-size: 10px; color: var(--dim); }
 .msg-meta.them { align-self: flex-start; }
 .msg-meta.me { align-self: flex-end; }

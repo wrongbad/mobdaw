@@ -1,5 +1,5 @@
 // Chat sidebar: an SMS-style view of the doc's append-only `chat` array (synced and persisted with the project).
-import { addChatMessage, chatLog, deleteChatMessage, type AwarenessState, type ChatMessage } from '@mobdaw/shared'
+import { SYSTEM_USER, addChatMessage, chatLog, deleteChatMessage, type AwarenessState, type ChatMessage } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { For, Show, createSignal } from 'solid-js'
 import { render } from 'solid-js/web'
@@ -8,6 +8,8 @@ import { popover } from './popover'
 
 const SHOWN = 500
 const GAP_MS = 5 * 60_000 // a new name/time line after this much silence
+/** Messages from the app itself (a migration note, ...): shown as a muted notice, not as a person's bubble. */
+export const isSystem = (m: Pick<ChatMessage, 'username' | 'system'>) => !!m.system || m.username === SYSTEM_USER
 const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
 export type ChatDeps = {
@@ -39,7 +41,7 @@ export function chatPanel({ doc, user, onUnread }: ChatDeps) {
 
   const [msgs, setMsgs] = createSignal<ChatMessage[]>([])
   const Msgs = () => (
-    <For each={msgs()}>{(m, i) => {
+    <For each={msgs()}>{(m, i) => isSystem(m) ? <div class="msg-sys" title={clock(m.ts)}>{m.text}</div> : (() => {
       const me = m.username === user.username
       const side = me ? 'me' : 'them'
       const prev = () => msgs()[i() - 1]
@@ -56,7 +58,7 @@ export function chatPanel({ doc, user, onUnread }: ChatDeps) {
           } : undefined}
         >{m.text}</div>
       </>
-    }}</For>
+    })()}</For>
   )
   const dispose = render(Msgs, list)
 

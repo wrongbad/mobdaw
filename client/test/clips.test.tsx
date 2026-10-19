@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Y from 'yjs'
 import { Awareness } from 'y-protocols/awareness'
 import { createSignal } from 'solid-js'
-import { addAudioClip, addLooper, addMidiClip, addNote, addPad, addTrack, clipsMap, deleteClip, notesMap, padsMap, tracksMap, updateClip, updateLooper, updateNote, updateTrack, type AwarenessState } from '@mobdaw/shared'
+import { getTimeMap, addAudioClip, addLooper, addMidiClip, addNote, addPad, addTrack, clipsMap, deleteClip, notesMap, padsMap, tracksMap, updateClip, updateLooper, updateNote, updateTrack, type AwarenessState } from '@mobdaw/shared'
 import { createProjectStore } from '../src/project/store'
 import { createSelection } from '../src/project/viewState'
 import { mountLaneBody, mountSourceBody, type ClipsCtx, type SrcView } from '../src/ui/clips'
@@ -12,6 +12,8 @@ const cleanup: (() => void)[] = []
 afterEach(() => cleanup.splice(0).forEach((f) => f()))
 
 const RATE = 48000
+/** Ticks (ppq 960, the default 120 bpm map) of a position in samples. */
+const tk = (smp: number) => (smp * 120 * 960) / (60 * RATE)
 function setup() {
   const doc = new Y.Doc()
   const awareness = new Awareness(doc)
@@ -26,9 +28,9 @@ function setup() {
   const ne = editor(), dg = editor()
   const ctx = {
     doc, undo: new Y.UndoManager([tracksMap(doc), clipsMap(doc)]), store, sel,
-    geo: { rate: () => RATE, pps: () => scale().pps, position: () => 0, lane: () => undefined, lanes: () => [], content: document.body, snapLine() {} },
+    geo: { rate: () => RATE, map: () => getTimeMap(doc), pps: () => scale().pps, position: () => 0, lane: () => undefined, lanes: () => [], content: document.body, snapLine() {} },
     select: (ids: string[]) => sel.selectClips(ids),
-    scale, total, ready: () => false, peaks: () => 0, viewW: () => 1000, scrollX: () => 0, scroller: document.body, header: 146, projectId: 'p',
+    scale, map: () => getTimeMap(doc), ghosts: () => new Set<string>(), total, ready: () => false, peaks: () => 0, viewW: () => 1000, scrollX: () => 0, scroller: document.body, header: 146, projectId: 'p',
     ne, dg, menu: () => [], incomingLabel: () => '', myTake: take, position: pos, drawLive() {},
   } as unknown as ClipsCtx
   cleanup.push(() => store.dispose())
@@ -50,14 +52,14 @@ describe('clips', () => {
   it('keep their identity across unrelated doc changes, awareness and playhead ticks', () => {
     const t = setup()
     const a = addTrack(t.doc, 'a', 'midi'), b = addTrack(t.doc, 'b', 'midi')
-    addMidiClip(t.doc, { trackId: a, start: 0 })
-    addMidiClip(t.doc, { trackId: a, start: 4 * RATE })
-    const other = addMidiClip(t.doc, { trackId: b, start: 0 })
+    addMidiClip(t.doc, { trackId: a, startTick: tk(0) })
+    addMidiClip(t.doc, { trackId: a, startTick: tk(4 * RATE) })
+    const other = addMidiClip(t.doc, { trackId: b, startTick: tk(0) })
     const host = lane(t, a)
     const els = clips(host)
     expect(els.length).toBe(2)
     // an unrelated clip and track change, a note, a new track, a peer moving, ticks of the playhead and of a growing take
-    updateClip(t.doc, other, { start: 10 })
+    updateClip(t.doc, other, { startTick: tk(10) })
     updateTrack(t.doc, b, { name: 'bb', muted: true })
     addNote(t.doc, { clipId: other, tick: 0, durTicks: 480, pitch: 60, velocity: 1 })
     addTrack(t.doc, 'c', 'audio')
@@ -75,12 +77,12 @@ describe('clips', () => {
   it('a clip moves when its start changes, the others stay', () => {
     const t = setup()
     const a = addTrack(t.doc, 'a', 'midi')
-    const c1 = addMidiClip(t.doc, { trackId: a, start: 0 })
-    addMidiClip(t.doc, { trackId: a, start: 2 * RATE })
+    const c1 = addMidiClip(t.doc, { trackId: a, startTick: tk(0) })
+    addMidiClip(t.doc, { trackId: a, startTick: tk(2 * RATE) })
     const host = lane(t, a)
     const [e1, e2] = clips(host)
     expect([px(e1), px(e2)]).toEqual([0, 200])
-    updateClip(t.doc, c1, { start: RATE })
+    updateClip(t.doc, c1, { startTick: tk(RATE) })
     expect([px(e1), px(e2)]).toEqual([100, 200])
     // the zoom moves them all (and their widths)
     const w = parseFloat(e1.style.width)
@@ -92,7 +94,7 @@ describe('clips', () => {
   it('a delete removes only that clip', () => {
     const t = setup()
     const a = addTrack(t.doc, 'a', 'midi')
-    const ids = [0, 1, 2].map((i) => addMidiClip(t.doc, { trackId: a, start: i * RATE }))
+    const ids = [0, 1, 2].map((i) => addMidiClip(t.doc, { trackId: a, startTick: tk(i * RATE) }))
     const host = lane(t, a)
     const els = clips(host)
     deleteClip(t.doc, ids[1])
@@ -105,10 +107,10 @@ describe('clips', () => {
   it('a clip dragged to another lane leaves the first and appears in the second', () => {
     const t = setup()
     const a = addTrack(t.doc, 'a', 'midi'), b = addTrack(t.doc, 'b', 'midi')
-    const c = addMidiClip(t.doc, { trackId: a, start: 0 })
+    const c = addMidiClip(t.doc, { trackId: a, startTick: tk(0) })
     const ha = lane(t, a), hb = lane(t, b)
     expect([clips(ha).length, clips(hb).length]).toEqual([1, 0])
-    updateClip(t.doc, c, { trackId: b, start: RATE })
+    updateClip(t.doc, c, { trackId: b, startTick: tk(RATE) })
     expect([clips(ha).length, clips(hb).length]).toEqual([0, 1])
     expect(px(clips(hb)[0])).toBe(100)
   })
@@ -116,7 +118,7 @@ describe('clips', () => {
   it('classes follow the selection, the editor, the locks and the remote selection outline', () => {
     const t = setup()
     const a = addTrack(t.doc, 'a', 'midi')
-    const c1 = addMidiClip(t.doc, { trackId: a, start: 0 }), c2 = addMidiClip(t.doc, { trackId: a, start: 2 * RATE })
+    const c1 = addMidiClip(t.doc, { trackId: a, startTick: tk(0) }), c2 = addMidiClip(t.doc, { trackId: a, startTick: tk(2 * RATE) })
     const host = lane(t, a)
     const [e1, e2] = clips(host)
     expect([e1.classList.contains('sel'), e2.classList.contains('sel')]).toEqual([false, false])
@@ -151,7 +153,7 @@ describe('clips', () => {
   it('a MIDI clip previews its notes, rebuilt when they change', () => {
     const t = setup()
     const a = addTrack(t.doc, 'a', 'midi')
-    const c = addMidiClip(t.doc, { trackId: a, start: 0 })
+    const c = addMidiClip(t.doc, { trackId: a, startTick: tk(0) })
     const host = lane(t, a)
     const e = clips(host)[0]
     expect(e.textContent).toBe('midi')
@@ -166,7 +168,7 @@ describe('clips', () => {
     notesMap(t.doc).delete(n)
     expect(e.querySelectorAll('.mark').length).toBe(0)
     // a drum grid clip says so
-    const d = addMidiClip(t.doc, { trackId: a, start: RATE, view: 'drums', loopTicks: 480 })
+    const d = addMidiClip(t.doc, { trackId: a, startTick: tk(RATE), view: 'drums', loopTicks: 480 })
     expect(clips(host).find((x) => x.textContent === 'drums')).toBeTruthy()
     expect(d).toBeTruthy()
   })
@@ -174,7 +176,7 @@ describe('clips', () => {
   it('a forever clip runs out to the end of the scroll area', () => {
     const t = setup()
     const a = addTrack(t.doc, 'a', 'midi')
-    addMidiClip(t.doc, { trackId: a, start: 0, lengthTicks: 4 * 480, loopTicks: 480, forever: true })
+    addMidiClip(t.doc, { trackId: a, startTick: tk(0), lengthTicks: 4 * 480, loopTicks: 480, forever: true })
     const e = clips(lane(t, a))[0]
     expect(e.classList.contains('forever')).toBe(true)
     expect(parseFloat(e.style.width)).toBe(60 * 100)

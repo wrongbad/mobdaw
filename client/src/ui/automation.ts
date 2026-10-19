@@ -70,6 +70,8 @@ export type RowDeps = {
   /** Timeline sample <-> surface pixel, at the current zoom. */
   x(smp: number): number
   fromX(px: number): number
+  /** Snap a point's position to the project's bar grid (unchanged in a free region). Absent: no snapping. */
+  snap?(smp: number): number
   /** Samples per second (an LFO's phase is `position / rate * hz`). */
   rate: number
 }
@@ -126,11 +128,13 @@ export function autoRow(deps: RowDeps) {
   const el = h('div', { className: 'lane-row auto-row' }, head, body)
 
   // pointer -> (timeline sample, normalised value)
-  const at = (e: { clientX: number; clientY: number }) => {
+  const at = (e: { clientX: number; clientY: number; altKey?: boolean; shiftKey?: boolean }) => {
     const r = body.getBoundingClientRect()
     const v = clamp(1 - (e.clientY - r.top - PAD) / (AUTO_H - 2 * PAD), 0, 1)
     const n = view.def.max - view.def.min
-    return { pos: Math.max(0, deps.fromX(e.clientX - r.left)), value: view.def.options && n > 0 ? Math.round(v * n) / n : v }
+    const raw = Math.max(0, deps.fromX(e.clientX - r.left))
+    const pos = deps.snap && !e.altKey && !e.shiftKey ? Math.max(0, deps.snap(raw)) : raw // (alt: free; shift draws freehand)
+    return { pos, value: view.def.options && n > 0 ? Math.round(v * n) / n : v }
   }
   const newCurve = (): AutoCurve => (view.def.options ? 'hold' : 'linear')
   const livePoints = () => [...pointsMap(doc).values()].map((p) => p.toJSON() as Point).filter((p) => p.laneId === lane.id)

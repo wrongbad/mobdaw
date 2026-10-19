@@ -1,6 +1,6 @@
 // The main timeline's zoom: buttons, ctrl-wheel and touch pinch around a point, fit-to-window, and the zoom into an open MIDI editor
 // (and back). The scale itself is the timeline's (`pps`, which it keeps in step with its `scale` signal).
-import { clipLength } from '@mobdaw/shared'
+import { clipEnd, clipLength, type TimeMap } from '@mobdaw/shared'
 import type { ProjectStore } from '../project/store'
 import type { Selection } from '../project/viewState'
 import { editZoomPps } from './autoZoom'
@@ -15,6 +15,8 @@ export type ZoomDeps = {
   store: ProjectStore
   sel: Selection
   rate(): number
+  /** The project's time map (MIDI clips are placed through it). */
+  map(): TimeMap
   pps(): number
   /** Set the zoom (the timeline lays itself out again). */
   setPps(v: number): void
@@ -60,9 +62,10 @@ export function createZoom(d: ZoomDeps) {
       return
     }
     const rate = d.rate()
+    const map = d.map()
     const scapes = new Set(d.store.tracks().filter((t) => t.kind === 'soundscape').map((t) => t.id))
     const end = Math.max(0,
-      ...d.store.clips().filter((c) => !scapes.has(c.trackId)).map((c) => c.start + clipLength(c, rate)),
+      ...d.store.clips().filter((c) => !scapes.has(c.trackId)).map((c) => clipEnd(c, map)),
       ...d.store.pads().map((p) => p.start + p.length))
     d.setPps(fitPps(end / rate, view))
     scroll.scrollLeft = 0
@@ -93,11 +96,14 @@ export function createZoom(d: ZoomDeps) {
     }
     if (c.kind !== 'midi' || d.isSource(c.trackId)) return
     const rate = d.rate()
-    const next = editZoomPps(d.pps(), clipLength(c, rate) / rate, 60 / c.bpm, scroll.clientWidth - header)
+    const map = d.map()
+    const s0 = map.tickToSampleExact(c.startTick)
+    const beatSec = (map.tickToSampleExact(c.startTick + map.ppq) - s0) / rate // a quarter note where the clip starts
+    const next = editZoomPps(d.pps(), clipLength(c, map) / rate, beatSec, scroll.clientWidth - header)
     if (next == null) return
     saved = saved && saved.auto === d.pps() ? { ...saved, auto: next } : { pps: d.pps(), left: scroll.scrollLeft, auto: next }
     d.setPps(next)
-    const left = Math.max(0, (c.start / rate) * next - 8)
+    const left = Math.max(0, (s0 / rate) * next - 8)
     requestAnimationFrame(() => (scroll.scrollLeft = left))
   }
 

@@ -2,12 +2,12 @@
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import { createZoom } from './zoom'
 import {
-  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, MIX_GAIN, MIX_PAN, migrateToV3, migrateToV4, addClickTrack, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
+  DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, MIX_GAIN, MIX_PAN, migrateToV3, migrateToV4, addClickTrack, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipEnd, clipsMap, deleteClip,
   evalPoints, getPoints, laneOf, laneState, paramToValue, resolveTarget, setLaneEnabled, 
   deleteDevice, deleteLooper, isDrum, isForever, deleteNote, getDevices, getSampleRate, getSamples, metaMap,
-  getLoopers, getTracks, padsMap, migrateToV2, notesMap, splitClip, stashLaneRanges, sweepOrphans, tracksMap, 
+  getLoopers, getTracks, padsMap, getTimeMap, getMarkers, getKey, setKey, isFutureDoc, markersMap, regionsMap, migrateToV2, notesMap, splitClip, stashLaneRanges, sweepOrphans, tracksMap, 
   updateDevice, updateLooper, updateTrack, type AwarenessState, type Lane as AutoLane, type ParamTarget,
-  type Point, type SampleMeta, type Track,
+  type Point, type SampleMeta, type Track, type Marker, type TimeMap,
   type Role, nextTrackColor, trackColor, 
 } from '@mobdaw/shared'
 import { onPeaks } from '../audio/peaks'
@@ -33,6 +33,10 @@ import { automateMenu, type AutoInfo } from './automation'
 import { mountLaneDrawers, mountMasterDrawers, type DrawCtx } from './drawers'
 import { drawLiveWave } from './clipWave'
 import { mountTicks } from './ticks'
+import { barAtPx, mountRuler } from './ruler'
+import { openRulerMenu, type RulerTarget } from './rulerMenu'
+import { GHOST_MS, offGrid } from './ghost'
+import { gridSnap } from './gridSnap'
 import { mountLaneBody, mountSourceBody, type ClipsCtx, type SrcView } from './clips'
 import { drumGrid } from './drumGrid'
 import { noteEditor } from './noteEditor'
@@ -113,6 +117,17 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const [rate, setRate] = createSignal(DEFAULT_SAMPLE_RATE)
   const [pps, setPps] = createSignal(80)
   const scale = () => ({ pps: pps(), rate: rate() })
+  // The shared timeline (docs/engine.md §2): the time map follows the regions and the meta (rate, ppq); MIDI clips are placed through it.
+  const [mapVer, setMapVer] = createSignal(0)
+  const tmap = (): TimeMap => (mapVer(), getTimeMap(doc))
+  const [markers, setMarkers] = createSignal<Marker[]>(getMarkers(doc))
+  const [keyText, setKeyText] = createSignal<string | undefined>(getKey(doc))
+  /** A newer client wrote this project (schema above ours): it opens read-only, with a notice (set after the first sync). */
+  const [future, setFuture] = createSignal(false)
+  /** Audio clips shown as ghosts for a moment after a tempo edit moved the bars away from where they started. */
+  const [ghosts, setGhosts] = createSignal<ReadonlySet<string>>(new Set())
+  let ghostTimer: ReturnType<typeof setTimeout> | undefined
+  let lastMap: TimeMap | null = null // (null until the first sync: loading the regions is not an edit)
   const xs = (smp: number) => (smp / rate()) * pps() // (`x`, for the bindings)
   const [ready, setReady] = createSignal(false) // the engine is open: waveforms are drawn from then on
   const [peakVer, setPeakVer] = createSignal(0) // counts the peaks that arrived
@@ -138,6 +153,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
           locked: isBlank() ? null : 'tracks',
           set: (r) => isBlank() && metaMap(doc).set('sampleRate', r),
         },
+        key: { value: keyText(), set: (v) => setKey(doc, v), disabled: future() },
         onInputChanged: () => void rec.reopenInput(),
         onLoopBindings: () => rec.listenMidi(), // (the keys are read at each press; the input may have changed)
       })
@@ -269,8 +285,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
   /** Where the last clip or region of the main timeline ends (samples; 0 when empty). Source clips live in their own time world. */
   const contentEnd = inRoot(() => createMemo(() => {
-    const r = scale().rate
-    return Math.max(0, ...mainClips().map((c) => c.start + clipLength(c, r)), ...store.pads().map((p) => p.start + p.length))
+    const map = tmap()
+    return Math.max(0, ...mainClips().map((c) => clipEnd(c, map)), ...store.pads().map((p) => p.start + p.length))
   }))
   /** The main timeline's extent (samples): the content and 30 s more, at least a minute. */
   const total = inRoot(() => createMemo(() => Math.max(60 * scale().rate, contentEnd() + 30 * scale().rate)))
@@ -279,7 +295,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const applyOverrides = () => pb?.setOverrides(store.overrides())
   const headCtx: HeadCtx = { doc, undo, store, rec, drawers, avail, drive, toggleTab, autoMenu }
   disposers.push(
-    mountBar(bar, { store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, chatOpen,
+    mountBar(bar, { store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, chatOpen, notice: () => (future() ? 'made with a newer version: read-only. reload the page for the latest.' : null),
       onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: (f) => zoom.button(f), onExport: exportProject, onChat: toggleChat,
       saveCopy: cloud?.saveCopy && { shown: edited, onSave: () => {
         say('saving a copy on this device…')
@@ -468,7 +484,10 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
 
   // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
-  const rowDeps = { doc, grab: () => undo.stopCapturing(), x, fromX, get rate() { return getSampleRate(doc) } }
+  const rowDeps = {
+    doc, grab: () => undo.stopCapturing(), x, fromX, get rate() { return getSampleRate(doc) },
+    snap: (smp: number) => gridSnap(tmap(), smp, pps()) ?? smp, // (automation points snap to the bar grid; in a free region they stay where they are)
+  }
   const drawCtx: DrawCtx = { ...headCtx, auto: autoValues, deps: cardDeps, reordering, loops: loopDeps, rows: rowDeps, armed: () => sel.armedLooper, width: totalPx, scale }
   const masterDrawers = mountMasterDrawers(master, drawCtx)
   disposers.push(masterDrawers.dispose)
@@ -714,16 +733,25 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     bgPicker.click()
   }
 
-  /** A drum grid clip is a one-bar pattern looped across four bars (4/4); a piano roll clip is four bars, unlooped. */
+  /**
+   * A drum grid clip is a one-bar pattern looped across four bars; a piano roll clip is four bars, unlooped. The bars are the
+   * timeline's (a 7/8 bar is a 7/8 bar), and a clip made in a metered region starts on a bar line.
+   */
   function newMidiClip(trackId: string, at: number, drums = false) {
-    const id = addMidiClip(doc, { trackId, start: at, ...(drums ? { view: 'drums', loopTicks: 4 * DEFAULT_PPQ } : {}) })
+    const map = tmap()
+    const tick = gridSnapTickBar(map, map.sampleToTick(at))
+    const bar = map.position(tick).bar
+    const lengthTicks = map.barStart(bar + 4) - map.barStart(bar)
+    const id = addMidiClip(doc, { trackId, startTick: tick, lengthTicks, ...(drums ? { view: 'drums', loopTicks: map.meterAt(bar).barTicks } : {}) })
     sel.editing = id
     select([id])
   }
+  /** A tick moved to the nearest bar line, or left alone inside a free region. */
+  const gridSnapTickBar = (map: TimeMap, tick: number) => map.snapTick(tick, 'bar') ?? tick
 
   /** A soundscape region: a block on the main lane during which all of the loopers are on. */
   function newPad(trackId: string, at: number) {
-    sel.pad = addPad(doc, trackId, at, 2 * rate())
+    sel.pad = addPad(doc, trackId, gridSnap(tmap(), at, pps()) ?? at, 2 * rate())
     select([])
   }
 
@@ -733,7 +761,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     const [scrollX, setScrollX] = createSignal(0)
     const [heads, setHeads] = createSignal(new Map<string, number>(), { equals: (a, b) => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v) })
     /** Where the source audio ends (samples): the end of its last clip. */
-    const end = createMemo(() => Math.max(0, ...store.clipsByTrack(trackId)().map((c) => c.start + clipLength(c, scale().rate))))
+    const end = createMemo(() => Math.max(0, ...store.clipsByTrack(trackId)().map((c) => clipEnd(c, tmap()))))
     const ticks = h('div', { className: 'src-ticks' })
     const body = h('div', { className: 'lane-body src-body', 'data-track': trackId }, ticks)
     const view = h('div', { className: 'src-view' }, body)
@@ -794,13 +822,13 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
 
   const zoom = createZoom({
-    scroll, rulerBody, header: HEADER, store, sel, rate, pps, isSource: (id) => !!lanes.get(id)?.src,
+    scroll, rulerBody, header: HEADER, store, sel, rate, map: tmap, pps, isSource: (id) => !!lanes.get(id)?.src,
     setPps,
   })
 
   // the gestures and the blocks on the lanes see the layout through these
   const geo: GestureCtx['geo'] = {
-    rate, pps, position, content,
+    rate, map: tmap, pps, position, content,
     lane: (id): LaneGeo | undefined => lanes.get(id),
     lanes: () => lanes.entries(),
     snapLine: (at) => {
@@ -810,7 +838,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
   const gctx: GestureCtx = { doc, undo, store, sel, geo, select }
   const clipsCtx: ClipsCtx = {
-    ...gctx, scale, total, ready, peaks: peakVer, viewW, scrollX, scroller: scroll, header: HEADER, projectId: s.projectId, ne, dg,
+    ...gctx, scale, map: tmap, ghosts, total, ready, peaks: peakVer, viewW, scrollX, scroller: scroll, header: HEADER, projectId: s.projectId, ne, dg,
     menu: (id) => clipMenu(id), incomingLabel: (m) => incomingLabel(m), myTake, position: takePos,
     drawLive: (region, startPx, widthPx) => pb && drawLiveWave(region, pb.recorder.peaks, { startPx, widthPx, header: HEADER, scroller: scroll, rate: rate(), pps: pps() }),
   }
@@ -831,6 +859,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       rulerBody.style.width = `${totalPx()}px`
     })
     createEffect(() => (hint.hidden = store.tracks().length > 0))
+    createEffect(() => el.classList.toggle('future', future()))
     createEffect(() => (store.tracks(), untrack(syncRec))) // (the armed track may have been deleted)
     createEffect(() => zoom.editing(sel.editing))
     // what the selection points at may be gone from the doc (the doc is asked as well: a just-made entity may not have reached the store yet)
@@ -838,7 +867,10 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     createEffect(() => sel.pruneClips((id) => (void store.clipById[id], clipsMap(doc).has(id))))
     createEffect(() => sel.prunePad((id) => (void store.padById[id], padsMap(doc).has(id))))
     createEffect(() => sel.pruneNote((id) => (void store.noteById[id], notesMap(doc).has(id))))
-    disposers.push(mountTicks(rulerBody, { totalSec: () => total() / scale().rate, pps: () => scale().pps, after: rulerHeads }))
+    disposers.push(mountRuler(rulerBody, {
+      map: tmap, markers, keyText, pps, scrollX, viewW, after: rulerHeads,
+      onMenu: (t, at, el) => rulerMenu(t, at, el),
+    }))
     disposers.push(render(() => createComponent(For, { get each() { return store.tracks() }, children: (t: Track, i: Accessor<number>) => laneFor(t, i).el }), laneBox))
   })
 
@@ -896,6 +928,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
 
   // --- file drop
   async function dropFiles(files: File[], trackId: string | null, at: number) {
+    if (future()) return say('this project was made with a newer version: reload to edit it', true)
     if (trackId && store.locks().has(trackId)) {
       say(`${store.locks().get(trackId)} is recording on that track`)
       return
@@ -928,7 +961,30 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
 
   // --- input
-  ruler.onpointerdown = (e) => seek(fromX(e.clientX - rulerBody.getBoundingClientRect().left))
+  /** The ruler's editing menu at a bar (not in a project from the future, which is read-only). */
+  function rulerMenu(t: RulerTarget, at: [number, number], anchor: HTMLElement) {
+    if (future()) return
+    openRulerMenu(anchor, doc, tmap(), t, at, say)
+  }
+  const rulerBar = (clientX: number) => barAtPx(tmap(), clientX - rulerBody.getBoundingClientRect().left, pps())
+  let rulerHold = 0 // a long press on the ruler (touch) opens the menu at that bar, like a right click
+  ruler.onpointerdown = (e) => {
+    if (e.button !== 0) return
+    seek(fromX(e.clientX - rulerBody.getBoundingClientRect().left))
+    if (e.pointerType !== 'touch') return
+    const { clientX, clientY } = e
+    const cancel = () => (clearTimeout(rulerHold), removeEventListener('pointerup', cancel), removeEventListener('pointercancel', cancel), removeEventListener('pointermove', move))
+    const move = (m: PointerEvent) => Math.hypot(m.clientX - clientX, m.clientY - clientY) > 8 && cancel()
+    rulerHold = window.setTimeout(() => (cancel(), rulerMenu({ bar: rulerBar(clientX) }, [clientX, clientY], ruler)), 500)
+    addEventListener('pointerup', cancel)
+    addEventListener('pointercancel', cancel)
+    addEventListener('pointermove', move)
+  }
+  ruler.oncontextmenu = (e) => {
+    if (e.target instanceof Element && e.target.closest('.corner')) return
+    e.preventDefault()
+    rulerMenu({ bar: rulerBar(e.clientX) }, [e.clientX, e.clientY], ruler)
+  }
   scroll.addEventListener('scroll', () => setScrollX(scroll.scrollLeft), { passive: true })
   addEventListener('resize', measure)
   const resizes = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure) // (the scroller, and what moves the playhead lines' height)
@@ -939,6 +995,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     const tag = (e.target as HTMLElement).tagName
     if (tag === 'SELECT' || (tag === 'INPUT' && (e.target as HTMLInputElement).type !== 'range')) return
     const mod = e.metaKey || e.ctrlKey
+    // a project from the future is read-only: you can play it and fit it to the window, nothing else
+    if (future() && !(e.code === 'Space' && !e.shiftKey) && !(!mod && !e.shiftKey && e.key.toLowerCase() === 'z')) return
     if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void rec.toggleRecord() : toggle() }
     else if (!mod && !e.shiftKey && e.key.toLowerCase() === 'z') zoom.fit()
     else if (e.key === 'Escape' && sel.escape()) return
@@ -970,6 +1028,23 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
 
   // --- sync
   metaMap(doc).observe(rateChanged)
+  // the timeline: regions and meta (rate, ppq, key) rebuild the map; a regions edit also ghosts the audio it moved the bars away from
+  const onRegions = (_: unknown, tr: { origin: unknown }) => {
+    const before = lastMap
+    setMapVer((n) => n + 1)
+    const after = getTimeMap(doc)
+    lastMap = after
+    if (!before || destroyed || tr.origin === 'migrate') return
+    const ids = offGrid(before, after, mainClips())
+    clearTimeout(ghostTimer)
+    setGhosts(new Set(ids))
+    if (ids.length) ghostTimer = setTimeout(() => setGhosts(new Set()), GHOST_MS)
+  }
+  const onMarkers = () => setMarkers(getMarkers(doc))
+  const onMeta = () => (setMapVer((n) => n + 1), setKeyText(getKey(doc)))
+  regionsMap(doc).observeDeep(onRegions)
+  markersMap(doc).observeDeep(onMarkers)
+  metaMap(doc).observe(onMeta)
   const offPeaks = onPeaks(() => setPeakVer((n) => n + 1))
   const onStatus = ({ status: st }: { status: string }) => (bar.dataset.status = st)
   s.provider?.on('status', onStatus)
@@ -978,11 +1053,18 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   // After the first sync: migrate old projects, then start the engine at the project's sample rate.
   void s.synced.then(() => {
     if (destroyed) return
-    migrateToV2(doc)
-    migrateToV3(doc)
-    migrateToV4(doc)
-    sweepOrphans(doc)
-    stashLaneRanges(doc)
+    if (isFutureDoc(doc)) setFuture(true) // (a newer client wrote it: no migration, no sweep, nothing of ours written)
+    else {
+      migrateToV2(doc)
+      migrateToV3(doc)
+      migrateToV4(doc)
+      sweepOrphans(doc)
+      stashLaneRanges(doc)
+    }
+    lastMap = getTimeMap(doc)
+    setMapVer((n) => n + 1)
+    setMarkers(getMarkers(doc))
+    setKeyText(getKey(doc))
     // (after the migrations, which are not the user's edits)
     if (s.snapshot) doc.on('update', () => setEdited(true))
     chat.markSeen()
@@ -998,8 +1080,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     measure()
     if (refreshPreviews()) ensurePreviewTick()
     zoom.fit() // (zoom is not remembered per project, so every open fits the song to the window)
-    if (!s.snapshot) sweepUnusedTakes(rec.takeCtx())
-    if (!s.snapshot) recoverTakes(rec.takeCtx()).then((n) => {
+    if (!s.snapshot && !future()) sweepUnusedTakes(rec.takeCtx())
+    if (!s.snapshot && !future()) recoverTakes(rec.takeCtx()).then((n) => {
       if (n && !destroyed) say(`recovered ${n} unfinished take${n > 1 ? 's' : ''}`)
     }, (err) => console.warn('take recovery:', err))
   }, () => say('could not load the project', true))
@@ -1017,6 +1099,11 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       resizes?.disconnect()
       rec.destroy()
       metaMap(doc).unobserve(rateChanged)
+      regionsMap(doc).unobserveDeep(onRegions)
+      markersMap(doc).unobserveDeep(onMarkers)
+      metaMap(doc).unobserve(onMeta)
+      clearTimeout(ghostTimer)
+      clearTimeout(rulerHold)
       offPeaks()
       s.provider?.off('status', onStatus)
       s.provider?.off('authenticationFailed', onDenied)

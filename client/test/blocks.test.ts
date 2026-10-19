@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { grabAt, passBoundaries, rotatePhase, rotateTick, snapMove, snapTracker, trimBlock, trimMidiLeft } from '../src/ui/blocks'
+import { grabAt, passBoundaries, rotatePhase, rotateTick, snapMove, snapTracker, trimBlock } from '../src/ui/blocks'
 
 const box = (left: number, width: number) => ({ left, right: left + width, width }) as DOMRect
 
@@ -68,22 +68,6 @@ describe('trimBlock', () => {
     expect(trimBlock('r', b, 700, o)).toEqual({ start: 1000, length: 5700, d: 0 })
     expect(trimBlock('r', b, -9999, o).length).toBe(100)
     expect(trimBlock('r', b, 9999, { ...o, maxLength: 6000 }).length).toBe(6000)
-  })
-})
-
-describe('trimMidiLeft', () => {
-  // 120 bpm, ppq 960 at 48 kHz: one beat = 24000 samples, a 1/16 step = 240 ticks = 6000 samples
-  const c = { start: 48000, bpm: 120, ppq: 960, lengthTicks: 16 * 960 }
-  it('moves the start, shortens the clip and reports the ticks the notes must move back by', () => {
-    const t = trimMidiLeft(c, 24000, 48000) // one beat to the right
-    expect(t).toEqual({ start: 72000, lengthTicks: 15 * 960, d: 960 })
-  })
-  it('snaps to 1/16 notes, restores when dragged out, and stops at timeline 0 and the minimum length', () => {
-    expect(trimMidiLeft(c, 7000, 48000).d).toBe(240) // 7000 samples ~ 280 ticks -> snaps to one step
-    const out = trimMidiLeft(c, -12000, 48000) // half a beat to the left
-    expect(out).toEqual({ start: 36000, lengthTicks: 16 * 960 + 480, d: -480 })
-    expect(trimMidiLeft(c, -9e6, 48000).start).toBe(0)
-    expect(trimMidiLeft(c, 9e6, 48000).lengthTicks).toBe(240)
   })
 })
 
