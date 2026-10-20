@@ -108,6 +108,14 @@ def main(pid):
         assert sorted(map(key, a["notes"])) == sorted(map(key, b["notes"])), "snapshot after push != fresh pull"
         cli(piece2, "check")
 
+        # more passes of a loop is one updateClip, not more notes
+        with open(piece, "a") as f:
+            f.write('\nscore["perc"].clear(3, 4)\nscore["perc"].loop(3, "G2*0.25 R*2.75 |", times=3)\n')
+        out = cli("push", piece, "--apply", "--label", "e2e: 3 passes")
+        assert "1 ops" in out and "~0" in out or "updateClip" in out or "+0 -0 ~0" in out, out
+        perc = c.state(pid)["tracks"][4]["clips"]
+        assert len(perc) == 1 and perc[0]["lengthTicks"] == 8640 and perc[0]["loopTicks"] == 2880 and len(perc[0]["notes"]) == 1, perc
+
         # a stale pull is refused
         c.ops(pid, [{"op": "addMarker", "bar": 7, "label": "C"}], "someone else")
         with open(piece, "a") as f:

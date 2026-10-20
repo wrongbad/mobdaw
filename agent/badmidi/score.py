@@ -202,8 +202,10 @@ class Part:
             raise ValueError("loop() material can't contain numbered anchors (|N): they name one bar, "
                              "and the material is played several times")
         t = self.score.time(bar, beat)
+        self._guard_loops(t, t + body.dur * times, "loop()")
+        self._place(t, [body] * times)
         self.score.loops.append(Loop(self, t, body.dur, times))
-        return self._place(t, [body] * times)
+        return self
 
     def clear(self, first_bar: int, last_bar: int | None = None) -> "Part":
         """Remove this part's notes and markings from the start of first_bar
@@ -252,7 +254,18 @@ class Part:
                             if lp.part is not self or lp.end <= a or lp.start >= b]
         return self
 
+    def _guard_loops(self, a: Fraction, b: Fraction, what: str) -> None:
+        """A loop is its body played `times` times: notes placed over it would be part of one pass and not the others,
+        which is not a loop any more. Say so now (clear() the bars first to replace a loop)."""
+        for lp in self.score.loops:
+            if lp.part is self and a < lp.end and b > lp.start:
+                raise ValueError(f"{what} on {self.name!r} overlaps the loop at bar {self.score.position(lp.start)[0]}: "
+                                 f"a loop repeats one body; change the body, or clear() those bars first")
+
     def _place(self, t: Fraction, material) -> "Part":
+        dur = sum((Motif(m).dur for m in material), Fraction(0))
+        if dur:
+            self._guard_loops(t, t + dur, "a placement")
         # one placement per argument: check() treats a motif that enters
         # mid-bar on its own terms (see views._enters_mid_bar)
         for m in material:
@@ -382,8 +395,9 @@ def ahead_name(ahead: Fraction) -> str:
 
 class Loop:
     """A passage placed `times` times in a row by Part.loop(): where it
-    starts, how long one pass is. Only a statement of intent; the notes are
-    ordinary placements."""
+    starts, how long one pass is. The notes are ordinary placements, and
+    Part refuses other notes over the span, so the span is exactly the body
+    repeated: the first pass says everything about the loop."""
     __slots__ = ("part", "start", "body", "times")
 
     def __init__(self, part: Part, start: Fraction, body: Fraction, times: int):

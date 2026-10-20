@@ -582,9 +582,13 @@ badmidi push song.py --apply --label "violin 3 descant" --like Violin   # one hi
   (`C2 = Kick, F#2 = Hat`), writes a hit above the part's level as an accent `>` (a louder hit), and keeps the part's level as one dynamic.
   A new drum part needs `--like <drum track>` (a kit is one keyed device per drum, which a piece cannot describe) and becomes a
   drum-view clip.
-- **Loops.** A looped clip (whole passes) is `part.loop(bar, pattern, times=n)` in the piece. The project stores one pass, so push edits
-  the pattern: change pass 1, keep the passes identical, or it refuses and says which pass differs. A new `p.loop()` on a new part
-  becomes a looped clip. Partial-pass loops and `forever` clips are shown and read-only.
+- **Loops.** A looped clip (whole passes) is `part.loop(bar, pattern, times=n)` in the piece, and that is also what the project
+  holds: one pattern, a loop length and a clip length. A loop is its body: badmidi refuses `at()` notes over a loop's bars, so the
+  passes cannot differ, and `push` reads the first pass only. Edit the pattern and the loop's notes change; change `times` or the
+  body's length and the clip's loop and length change (`updateClip`); `clear()` the bars (it forgets the loop) and the clip stops
+  looping, its notes becoming plain; put a `loop()` at a plain clip's start and the clip loops. A `loop()` that starts inside a
+  clip, not at its start, has no clip to be and is refused. A new `p.loop()` becomes a looped clip. Dynamics inside a loop are
+  read from its first pass and repeat in every pass. Partial-pass loops and `forever` clips are read-only.
 - Audio clips are left out of the pull. `pull` prints what it left out, and a meter hint when the project looks mis-metered.
 - One push is one history entry, so a person can revert it from the History panel. Say which checks you ran, and that the
   audio is unheard.

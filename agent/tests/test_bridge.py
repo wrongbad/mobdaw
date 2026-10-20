@@ -137,6 +137,19 @@ class Bridge(unittest.TestCase):
             self.assertEqual({n["id"] for o in upd for n in o["notes"]}, {"n1"})
             self.assertTrue(all(n["v"] >= 108 for o in upd for n in o["notes"]))
 
+    def test_a_dynamic_inside_a_loop_repeats_in_every_pass(self):
+        st = state()
+        c = st["tracks"][0]["clips"][0]
+        c["loopTicks"], c["notes"] = 5760, [note(1, 62, 0, 2880, 40), note(2, 64, 2880, 2880, 100)]      # a two-bar body, 2 passes
+        p = pull(st, "P")
+        self.assertEqual(len(p.score.loops), 1)
+        self.assertEqual([str(m.value) for t, m in p.score["cello"].marks() if hasattr(m, "value")], ["pp", "f", "pp", "f"])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = piece(p, tmp)
+            with open(path) as f:
+                self.assertIn(".loop(", f.read())      # the passes are identical, so the source says loop(), not four bars
+            self.assertTrue(plan(load_score(path), read_snapshot(snapshot_path(path))).empty)
+
     def test_drums_and_loops(self):
         st = state()
         drum = {"id": "t2", "name": "Drums", "kind": "midi", "muted": False, "soloed": False,
@@ -179,12 +192,47 @@ class Bridge(unittest.TestCase):
             self.assertEqual(add[0]["clipId"], "d1")
             self.assertEqual({(n["p"], n["t"]) for n in add[0]["notes"]}, {(38, 960)})
             self.assertEqual(pl.removes, 2)                           # the two hats are gone from the pattern
-            # an edit to one pass alone is refused
+            # a loop is its body: placing notes over it is refused when you write it, not when you push
             score3 = load_score(path)
+            with self.assertRaises(ValueError) as e:
+                score3["drums"].at(2, "C2.q |")
+            self.assertIn("overlaps the loop", str(e.exception))
+            # clear() forgets the loop (bars 3 emptied): the clip stops looping, and what is left is plain notes in every pass
             score3["drums"].clear(3, 3)
+            pl = plan(score3, snap)
+            self.assertEqual(pl.ops[0], {"op": "updateClip", "id": "d1", "loop": 0})
+            added = next(o for o in pl.ops if o["op"] == "addNotes")
+            self.assertEqual(added["clipId"], "d1")
+            self.assertEqual(sorted((n["p"], n["t"]) for n in added["notes"]), sorted([(36, 2880), (42, 3840), (42, 4800), (36, 8640), (42, 9600), (42, 10560)]))
+            self.assertEqual(pl.removes, 0)
+            # more passes, or a longer body: the clip's loop and length change, notes diff against pass 1
+            more = load_score(path)
+            more["drums"].clear(1, 4)
+            more["drums"].loop(1, "C2*0.25 R*0.75 F#2*0.125 R*0.875 F#2*0.125 R*0.875 |", times=6)
+            ops = plan(more, snap).ops          # (clear() also dropped the marks, so the hits' velocities follow the markings)
+            self.assertEqual(ops[0], {"op": "updateClip", "id": "d1", "loop": 2880, "length": 17280})
+            self.assertEqual({o["op"] for o in ops[1:]}, {"updateNotes"})
+            self.assertTrue(all(set(n) == {"id", "v"} for o in ops[1:] for n in o["notes"]), "only velocities, no lengths or positions")
+            two_bar = load_score(path)
+            two_bar["drums"].clear(1, 4)
+            two_bar["drums"].loop(1, "C2*0.25 R*0.75 F#2*0.125 R*0.875 F#2*0.125 R*0.875 | C2*0.25 R*2.75 |", times=2)
+            ops = plan(two_bar, snap).ops
+            self.assertEqual(ops[0], {"op": "updateClip", "id": "d1", "loop": 5760, "length": 11520})
+            self.assertEqual([(n["p"], n["t"]) for o in ops if o["op"] == "addNotes" for n in o["notes"]], [(36, 2880)])
+            # a plain clip becomes a loop by a Loop at its start; the old notes past the body go
+            cello = load_score(path)
+            cello["cello"].clear(1, 4)
+            cello["cello"].loop(1, "D4.hd |", times=4)
+            ops = plan(cello, snap).ops
+            self.assertEqual(ops[0], {"op": "updateClip", "id": "c1", "loop": 2880, "length": 11520})
+            self.assertIn({"op": "removeNotes", "ids": ["n1", "n2", "n3"]}, ops)
+            # a loop that starts in the middle of a clip has no clip to be
+            mid = load_score(path)
+            mid["cello"].clear(2, 3)
+            mid["cello"].loop(2, "D3.hd |", times=2)
             with self.assertRaises(BridgeError) as e:
-                plan(score3, snap)
-            self.assertIn("differs from pass 1", str(e.exception))
+                plan(mid, snap)
+            self.assertIn("overlaps the clip", str(e.exception))
             # a new drum part needs --like; with it: a looped drum-view clip on a copied track
             score4 = load_score(path)
             d2 = score4.part("perc", "drums")

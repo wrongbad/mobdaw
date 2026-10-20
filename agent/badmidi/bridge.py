@@ -168,12 +168,14 @@ def _score_meter(r: dict) -> str:
 
 class _VN(_N):
     """An importer note that also knows the project's velocity for it."""
-    __slots__ = ("vel",)
+    __slots__ = ("vel", "ghost")
 
 
-def _vnote(on: Fraction, dur: Fraction, midi: int, vel: int) -> _VN:
+def _vnote(on: Fraction, dur: Fraction, midi: int, vel: int, ghost: bool) -> _VN:
+    """`ghost`: a repeat of a looped clip's pattern (a later pass). It is placed so the views hear it, but the project has no
+    note for it: the loop is the pattern, and the passes are what the loop means."""
     n = _VN(SourceNote(on, dur, midi))
-    n.vel = vel
+    n.vel, n.ghost = vel, ghost
     return n
 
 
@@ -272,7 +274,7 @@ def infer_dynamics(score: Score, line: list[_Item], drums: bool) -> list[tuple[F
     if drums:
         level = _level_name(statistics.median(base))
         return [] if level == "mf" else [(line[0].onset, dyn_mark(level))]
-    sm = [statistics.median(base[max(0, i - 1):i + 2]) for i in range(len(base))]
+    sm = [statistics.median(base[i - 1:i + 2]) if 0 < i < len(base) - 1 else base[i] for i in range(len(base))]   # (the ends have no neighbour to vote)
     cur, marks = "mf", []
     for it, v in zip(line, sm):
         lv = _level_name(v)
@@ -435,7 +437,7 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None) -> Pul
             continue
         ns = []
         for n in tr.notes:
-            vn = _vnote(n["on"], n["dur"], n["midi"], n["vel"])
+            vn = _vnote(n["on"], n["dur"], n["midi"], n["vel"], n["id"] is None and not n["readonly"])
             ns.append(vn)
         by_pitch = defaultdict(list)
         for n in sorted(ns, key=lambda n: (n.onset, -n.end)):
@@ -471,17 +473,19 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None) -> Pul
         rng = None if tr.drums else (Pitch(min(INSTRUMENTS[inst][1], *pitches)), Pitch(max(INSTRUMENTS[inst][2], *pitches)))
         main = score.part(name, inst, range=rng) if rng else score.part(name, inst)
         parts = [main] + [main.voice(_unique(f"{name} {k}", taken)) for k in range(2, len(lines) + 1)]
+        loops = [(_frac(c["startTick"]) / ppq, _frac(c["loopTicks"]) / ppq, c["passes"]) for c in tr.clips if c["passes"] >= 2 and not c["readonly"]]
         for part, line in zip(parts, lines):
-            _place(score, part, line, infer_dynamics(score, line, tr.drums), nbars, 4)
+            # dynamics are read from the first pass of a loop and repeated in each pass: a loop is its body
+            marks = infer_dynamics(score, [it for it in line if not any(n.ghost for n in it.notes)], tr.drums)
+            for a, body, passes in loops:
+                marks += [(t + k * body, m) for t, m in marks if a <= t < a + body for k in range(1, passes)]
+            _place(score, part, line, sorted(marks, key=lambda x: x[0]), nbars, 4)
         parts_by_track[t["id"]] = [p.name for p in parts]
-        # loops that repeat whole passes are p.loop() in the piece (the sounding events are the same either way)
-        for c in tr.clips:
-            if c["passes"] >= 2 and not c["readonly"]:
-                a = _frac(c["startTick"]) / ppq
-                body = _frac(c["loopTicks"]) / ppq
-                for part in parts:
-                    if any(a <= on < a + body * c["passes"] for on, _ in part.events()):
-                        score.loops.append(Loop(part, a, body, c["passes"]))
+        # a looped clip is a Loop in the piece (p.loop() in its source): the pattern once, `times` passes
+        for a, body, passes in loops:
+            for part in parts:
+                if any(a <= on < a + body * passes for on, _ in part.events()):
+                    score.loops.append(Loop(part, a, body, passes))
     baseline = _baseline(score, parts_by_track, tracks)
     return Pulled(score, _snapshot(state, project, filter_info, tracks, parts_by_track, baseline, score.bars if score.parts else 0), report)
 
@@ -534,28 +538,50 @@ def check_timeline(score: Score, snap: dict) -> None:
                 "(addRegion / setRegion), then pull again")
 
 
-def _fold_loops(new: list, clips: list[dict], ppq: int, name: str) -> list:
-    """Drop the later passes of the project's looped clips from `new` after checking they repeat pass 1: the project holds one
-    pass. A pass that was edited alone has no place in the project: say so."""
-    for c in clips:
-        if c["passes"] < 2 or c["readonly"]:
+def _first_passes(loops: list, events: list) -> list:
+    """A loop is its body played `times` times: the later passes are what the loop means, not more notes, so only the first
+    pass of each loop is kept (Part refuses notes over a loop's span, so the passes cannot differ)."""
+    spans = [(lp.start + lp.body, lp.end) for lp in loops]
+    return [e for e in events if not any(a <= e[0] < b for a, b in spans)]
+
+
+def _reconcile_clips(score: Score, t: dict, parts: list[str], loops: list, ppq: int, pl: "PushPlan") -> list[dict]:
+    """The track's clips as they will be after this push. A Loop in the piece at a clip's start makes the clip loop that
+    body that many times (an `updateClip` when the project's loop differs); a looped clip with no Loop over it is unlooped,
+    and its notes in every pass are then plain notes. A Loop that starts inside a clip without matching its start has no
+    clip to be: say so."""
+    eff = []
+    for c in t["clips"]:
+        c = dict(c)
+        eff.append(c)
+        if c["readonly"]:
             continue
-        a, loop = _frac(c["startTick"]) / ppq, _frac(c["loopTicks"]) / ppq
-        b = a + loop * c["passes"]
-        inside = [e for e in new if a <= e[0] < b]
-        by_pass = defaultdict(list)
-        for on, midi, dur, v in inside:
-            k = int((on - a) // loop)
-            local = on - a - k * loop
-            by_pass[k].append((local, midi, min(dur, loop - local), v))
-        first = sorted(by_pass[0])
-        for k in range(1, c["passes"]):
-            if sorted(by_pass[k]) != first:
-                where = f"bar {k + 1} of the loop starting at tick {float(a * ppq):g}"
-                raise BridgeError(f"{name}: pass {k + 1} of a looped clip differs from pass 1 ({where}). The project loops one pattern: "
-                                  "edit pass 1 (or the p.loop() body), and keep the passes identical")
-        new = [e for e in new if not (a + loop <= e[0] < b)]
-    return new
+        a = _frac(c["startTick"]) / ppq
+        ln = _frac(c["lengthTicks"]) / ppq
+        here = [lp for lp in loops if lp.start == a]
+        want = {(lp.body, lp.times) for lp in here}
+        if len(want) > 1:
+            raise BridgeError(f"{t['name']}: the lines of the clip at bar {score.position(a)[0]} loop differently; a clip has one loop")
+        if want:
+            (body, times), = want
+            for name in parts:
+                if name not in {lp.part.name for lp in here} and any(a <= on < a + ln for on, n in score[name].events() if not n.is_rest):
+                    raise BridgeError(f"{t['name']}: part {name!r} has notes in the looped clip at bar {score.position(a)[0]} but no loop; "
+                                      "every line of a looped clip loops together")
+            cur = (_frac(c["loopTicks"]) / ppq, c["passes"]) if c["passes"] >= 2 else None
+            if cur != (body, times):
+                pl.ops.append({"op": "updateClip", "id": c["id"], "loop": _tick(body, ppq), "length": _tick(body * times, ppq)})
+                c.update(loopTicks=_tick(body, ppq), passes=times, lengthTicks=_tick(body * times, ppq))
+        elif c["passes"] >= 2:
+            pl.ops.append({"op": "updateClip", "id": c["id"], "loop": 0})
+            c.update(loopTicks=None, passes=1)
+    for lp in loops:
+        if not any(_frac(c["startTick"]) / ppq == lp.start for c in t["clips"]):
+            hit = next((c for c in t["clips"] if _frac(c["startTick"]) / ppq < lp.end and _frac(c["startTick"]) / ppq + _frac(c["lengthTicks"]) / ppq > lp.start), None)
+            if hit:
+                raise BridgeError(f"{t['name']}: the loop at bar {score.position(lp.start)[0]} overlaps the clip at tick {hit['startTick']}: "
+                                  "start it where that clip starts (to loop the clip), or clear() the clip's bars first")
+    return eff
 
 
 def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, preset: str | None = None) -> PushPlan:
@@ -585,11 +611,10 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
     def note_json(on: Fraction, midi: int, dur: Fraction, v: int, origin: Fraction) -> dict:
         return {"p": midi, "t": _tick(on - origin, ppq), "d": _tick(dur, ppq), "v": v}
 
-    def clip_ops(track_ref: str, track_id: str | None, notes: list, name: str, drums: bool, loops: list):
-        """addNotes into covering clips (a looped one takes pass 1 only); leftovers into new clips: one looped clip per
-        p.loop() of the piece, one clip per run of nearby notes."""
+    def clip_ops(track_ref: str, clips: list[dict], notes: list, name: str, drums: bool, loops: list):
+        """addNotes into covering clips; leftovers into new clips: one looped clip per Loop of the piece, one plain clip per
+        run of nearby notes. `notes` has only the first pass of every loop."""
         nonlocal new_notes_total
-        clips = list(clips_of.get(track_id) or []) if track_id else []
         rest = []
         into: dict[str, list] = defaultdict(list)
         for e in sorted(notes):
@@ -600,8 +625,6 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
                     continue
                 if c["readonly"]:
                     raise BridgeError(f"{name}: a new note at tick {float(on * ppq):g} falls inside a read-only looped clip")
-                if c["passes"] >= 2 and on * ppq >= a + _frac(c["loopTicks"]):
-                    break                           # a later pass: folded away before this (identical to pass 1)
                 into[c["id"]].append((e, a / ppq))
                 break
             else:
@@ -611,17 +634,10 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
         view = {"view": "drums"} if drums else {}
         # looped clips for the piece's loops over what is left
         for lp in loops:
-            span = [e for e in rest if lp.start <= e[0] < lp.end]
+            span = [e for e in rest if lp.start <= e[0] < lp.start + lp.body]
             if not span:
                 continue
-            first = sorted(e for e in span if e[0] < lp.start + lp.body)
-            for k in range(1, lp.times):
-                got = sorted((on - k * lp.body, m, min(d, lp.start + lp.body - (on - k * lp.body)), v) for on, m, d, v in span
-                             if lp.start + k * lp.body <= on < lp.start + (k + 1) * lp.body)
-                want = sorted((on, m, min(d, lp.start + lp.body - on), v) for on, m, d, v in first)
-                if got != want:
-                    raise BridgeError(f"{name}: pass {k + 1} of the loop at bar {score.position(lp.start)[0]} differs from pass 1; "
-                                      "a looped clip repeats one pattern")
+            first = sorted(span)                 # a loop is its body: only the first pass was kept (_first_passes)
             rest = [e for e in rest if e not in span]
             start, length, loop = lp.start * ppq, lp.body * lp.times * ppq, lp.body * ppq
             pl.ops.append({"op": "addMidiClip", "trackId": track_ref, "start": _tick(lp.start, ppq), "length": _tick(lp.body * lp.times, ppq),
@@ -651,7 +667,9 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
         new = _events(score, parts)
         for e in new:
             window_ok(e[0], t["name"])
-        new = _fold_loops(new, t["clips"], ppq, t["name"])
+        loops = [lp for lp in score.loops if lp.part.name in parts]
+        eff = _reconcile_clips(score, t, parts, loops, ppq, pl)
+        new = _first_passes(loops, new)
         old = base.get(t["id"], [])
         have = defaultdict(list)
         for n in old:
@@ -683,8 +701,7 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
             pl.ops.append({"op": "removeNotes", "ids": [n["id"] for n in gone]})
             pl.removes += len(gone)
         if added:
-            loops = [lp for lp in score.loops if lp.part.name in parts]
-            clip_ops(t["id"], t["id"], added, t["name"], t.get("drums", False), loops)
+            clip_ops(t["id"], eff, added, t["name"], t.get("drums", False), loops)
             pl.adds += len(added)
             new_notes_total += len(added)
         if gone or added or changed:
@@ -697,7 +714,7 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
             continue
         groups.setdefault(p.staff, []).append(p.name)
     for root, names in groups.items():
-        ev = _events(score, names)
+        ev = _first_passes([lp for lp in score.loops if lp.part.name in names], _events(score, names))
         if not ev:
             continue
         for e in ev:
@@ -715,7 +732,7 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
         pl.ops.append(op)
         ref = f"${len(pl.ops) - 1}"
         pl.new_parts[len(pl.ops) - 1] = names
-        clip_ops(ref, None, ev, root, drums, [lp for lp in score.loops if lp.part.name in names])
+        clip_ops(ref, [], ev, root, drums, [lp for lp in score.loops if lp.part.name in names])
         pl.new_tracks += 1
         pl.adds += len(ev)
         new_notes_total += len(ev)
