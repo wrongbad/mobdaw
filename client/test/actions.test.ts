@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  SIMPLE_FILTER, addAudioClip, addDevice, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getTracks, undoScope, type AudioClip, type MidiClip,
+  SIMPLE_FILTER, addAudioClip, addDevice, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getTracks, undoScope, updateClip, type AudioClip, type MidiClip,
 } from '@mobdaw/shared'
 import {
   addImportedClip, commitParam, commitParams, deleteClips, loopClip, loopForever, passClip, reorderDevice, startPass, trimClip, unloopClip,
@@ -28,19 +28,19 @@ describe('clip loops', () => {
   it('dragging a plain audio clip longer starts a loop whose pass is the old length', () => {
     const { doc } = setup()
     const c = audio(doc, { length: 2000 })
-    loopClip(doc, RATE, c(), 5000, 10000)
+    updateClip(doc, c().id, loopClip(RATE, c(), 5000, 10000))
     expect(c()).toMatchObject({ length: 5000, loopLength: 2000, loopPhase: 0, sourceOffset: 0 })
   })
   it('an already looping clip keeps its pass, and forever is cleared', () => {
     const { doc } = setup()
     const c = audio(doc, { length: 4000, loopLength: 1000, forever: true })
-    loopClip(doc, RATE, c(), 6000, 10000)
+    updateClip(doc, c().id, loopClip(RATE, c(), 6000, 10000))
     expect(c()).toMatchObject({ length: 6000, loopLength: 1000, forever: false })
   })
   it('the extent never goes below the minimum', () => {
     const { doc } = setup()
     const c = audio(doc)
-    loopClip(doc, RATE, c(), 1, 10000)
+    updateClip(doc, c().id, loopClip(RATE, c(), 1, 10000))
     expect(c().length).toBe(50)
   })
   it('startPass folds a stale pass phase into the source offset', () => {
@@ -52,11 +52,11 @@ describe('clip loops', () => {
   it('passClip clamps the pass between the minimum and the clip', () => {
     const { doc } = setup()
     const c = audio(doc, { length: 4000, loopLength: 1000 })
-    passClip(doc, RATE, c(), 2500, 10000)
+    updateClip(doc, c().id, passClip(RATE, c(), 2500, 10000))
     expect(c().loopLength).toBe(2500)
-    passClip(doc, RATE, c(), 10, 10000)
+    updateClip(doc, c().id, passClip(RATE, c(), 10, 10000))
     expect(c().loopLength).toBe(50)
-    passClip(doc, RATE, c(), 99999, 3000)
+    updateClip(doc, c().id, passClip(RATE, c(), 99999, 3000))
     expect(c().loopLength).toBe(3000)
   })
   it('loopForever toggles on a looping clip and starts a doubled loop otherwise', () => {
@@ -87,21 +87,21 @@ describe('trimClip', () => {
   it('trims an audio clip from the left, moving the source offset with it, and back out restores', () => {
     const { doc } = setup()
     const c = audio(doc, { start: 1000, length: 2000, sourceOffset: 0 })
-    trimClip(doc, RATE, c(), 'l', 300, 10000)
+    updateClip(doc, c().id, trimClip(RATE, c(), 'l', 300, 10000))
     expect(c()).toMatchObject({ start: 1300, length: 1700, sourceOffset: 300 })
   })
   it('trims the right edge but not past the source', () => {
     const { doc } = setup()
     const c = audio(doc, { length: 2000 })
-    trimClip(doc, RATE, c(), 'r', 500, 2200)
+    updateClip(doc, c().id, trimClip(RATE, c(), 'r', 500, 2200))
     expect(c().length).toBe(2200)
-    trimClip(doc, RATE, c(), 'r', -5000, 2200)
+    updateClip(doc, c().id, trimClip(RATE, c(), 'r', -5000, 2200))
     expect(c().length).toBe(50)
   })
   it('a stale pass goes when trimming a non-looping clip', () => {
     const { doc } = setup()
     const c = audio(doc, { length: 800, loopLength: 1000, loopPhase: 100 })
-    trimClip(doc, RATE, c(), 'r', 100, 10000)
+    updateClip(doc, c().id, trimClip(RATE, c(), 'r', 100, 10000))
     expect(c()).toMatchObject({ loopLength: 0, loopPhase: 0, sourceOffset: 100 })
   })
 })

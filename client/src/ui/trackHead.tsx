@@ -1,6 +1,6 @@
 // A track's header (and the master bus's): name, kind icon, M / S / R / I, input meter, fader and pan, and the drawer tabs. Mounted
 // into the lane's `.head` with `render()`. The widgets that are not Solid (`knob`, `ticks`, `valueTip`, `popover`) are used as they are.
-import { MASTER_TRACK, MIX_GAIN, MIX_PAN, deleteTrack, setMixParam, tracksMap, updateTrack, type ParamTarget } from '@mobdaw/shared'
+import { MASTER_TRACK, MIX_GAIN, MIX_PAN, deleteTrack, tracksMap, updateTrack, type ParamTarget } from '@mobdaw/shared'
 import { render } from 'solid-js/web'
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from 'solid-js'
 import type * as Y from 'yjs'
@@ -34,6 +34,12 @@ export type HeadCtx = {
   toggleTab(id: string, tab: TabName): void
   /** Right-click (and click) on a control offers automation. */
   autoMenu(label: HTMLElement, target: () => ParamTarget, clickToo?: boolean): void
+  /** A fader or pan mid-drag: the engine takes the value now (not in the doc)... */
+  live(deviceId: string, paramId: number, value: number): void
+  /** ...the peers are told (null: the drag is over)... */
+  drag(drags: { deviceId: string; paramId: number; value: number }[] | null): void
+  /** ...and the final value is written once (one undo step). */
+  commit(deviceId: string, paramId: number, value: number): void
 }
 
 /** The elements the timeline drives itself, per frame (the level meters write `--l` / `--r` on the fader and `--lv` on the input meter). */
@@ -66,14 +72,26 @@ function MixRow(p: { ctx: HeadCtx; scope: string; refs: (gain: HTMLInputElement)
   const gain = (<input type="range" class="gain" min={0} max={1} step="any" title="volume" />) as HTMLInputElement
   ticks(gain, [UNITY_POS]) // 0 dB; the top of the range is +6 dB
   valueTip(gain, () => fmtDb(posToGain(gain.valueAsNumber)))
-  gain.addEventListener('input', () => setMixParam(doc, p.scope, 'gain', posToGain(gain.valueAsNumber)))
-  gain.addEventListener('pointerdown', () => undo.stopCapturing())
+  // a drag is the live value to the engine and the peers (as a device knob's is); the doc is written once, when it lets go
+  const moving = (param: number, v: number) => {
+    const m = mix()
+    if (!m) return
+    p.ctx.live(m.id, param, v)
+    p.ctx.drag([{ deviceId: m.id, paramId: param, value: v }])
+  }
+  const done = (param: number, v: number) => {
+    const m = mix()
+    if (m) p.ctx.commit(m.id, param, v)
+    p.ctx.drag(null)
+  }
+  gain.addEventListener('input', () => moving(MIX_GAIN, posToGain(gain.valueAsNumber)))
+  gain.addEventListener('change', () => done(MIX_GAIN, posToGain(gain.valueAsNumber)))
+  const snapPan = (v: number) => (Math.abs(v) < 0.02 ? 0 : v)
   const pan = knob({
     min: -1, max: 1, value: 0, def: 0, bipolar: true, size: 20,
     title: (v) => (Math.abs(v) < 0.005 ? 'pan: centre (double-click to reset)' : `pan: ${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v) * 100)}`),
-    onStart: () => undo.stopCapturing(), // one undo step per gesture
-    onInput: (v) => setMixParam(doc, p.scope, 'pan', Math.abs(v) < 0.02 ? 0 : v),
-    onChange: () => undo.stopCapturing(),
+    onInput: (v) => moving(MIX_PAN, snapPan(v)),
+    onChange: (v) => done(MIX_PAN, snapPan(v)),
   })
   const target = (param: number) => (): ParamTarget => ({ scope: p.scope, kind: 'effect', owner: mix()?.id ?? '', param: String(param) })
   p.ctx.autoMenu(gain, target(MIX_GAIN), false)
@@ -82,13 +100,16 @@ function MixRow(p: { ctx: HeadCtx; scope: string; refs: (gain: HTMLInputElement)
   createEffect(() => {
     const g = drive().gain
     gain.disabled = g != null
-    const v = g ?? mix()?.params?.[MIX_GAIN] ?? 1
+    const m = mix()
+    const peer = m ? store.drags(m.id)().get(MIX_GAIN) : undefined // (a collaborator is dragging it)
+    const v = g ?? peer ?? m?.params?.[MIX_GAIN] ?? 1
     if (g != null || !inUse(gain)) gain.value = String(gainToPos(v)) // (not while it is being dragged)
   })
   createEffect(() => {
     const pn = drive().pan
     pan.setDisabled(pn != null)
-    pan.set(pn ?? mix()?.params?.[MIX_PAN] ?? 0)
+    const m = mix()
+    pan.set(pn ?? (m ? store.drags(m.id)().get(MIX_PAN) : undefined) ?? m?.params?.[MIX_PAN] ?? 0)
   })
   return <div class="ctl gain-row">{gain}{pan.el}</div>
 }

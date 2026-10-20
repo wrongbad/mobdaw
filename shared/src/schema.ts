@@ -148,6 +148,23 @@ export type AwarenessState = {
   dragging?: { deviceId: string; paramId: number; value: number }[] | null
   /** A take in progress: collaborators treat the track as read-only and draw a growing region from `start` (timeline samples). */
   recording?: { trackId: string; start: number } | null
+  /** A gesture in progress (a clip or note drag, a slider, an automation point): the live values, nothing written to the doc until release. */
+  moving?: Moving | null
+}
+
+/**
+ * Draft values for entities a drag is changing, by id. A patch is laid over the entity's doc fields; one that carries an `id`
+ * and has no entity in the doc yet is a draft-only entity (a note copy being dragged). The doc is written once, on release.
+ */
+export type Moving = {
+  clips?: Record<string, Partial<Clip>>
+  /** `null`: the note is deleted in the draft (it is hidden now and removed on the drop). */
+  notes?: Record<string, Partial<Note> | null>
+  pads?: Record<string, Partial<Pad>>
+  loopers?: Record<string, Partial<Looper>>
+  lanes?: Record<string, Partial<Lane>>
+  /** `null`: as for notes. */
+  points?: Record<string, Partial<Point> | null>
 }
 
 export const docName = (projectId: string) => `project:${projectId}`
@@ -488,8 +505,7 @@ export function splitClip(doc: Y.Doc, id: string, at: number): string | null {
 }
 
 // --- notes
-export function addNote(doc: Y.Doc, n: Omit<Note, 'id'>): string {
-  const id = newId()
+export function addNote(doc: Y.Doc, n: Omit<Note, 'id'>, id: string = newId()): string {
   doc.transact(() => notesMap(doc).set(id, toMap({ ...n, id })))
   return id
 }
@@ -675,8 +691,7 @@ export function deleteLane(doc: Y.Doc, id: string) {
     lanesMap(doc).delete(id)
   })
 }
-export function addPoint(doc: Y.Doc, laneId: string, pos: number, value: number, curve: AutoCurve = 'linear'): string {
-  const id = newId()
+export function addPoint(doc: Y.Doc, laneId: string, pos: number, value: number, curve: AutoCurve = 'linear', id: string = newId()): string {
   const p: Point = { id, laneId, pos: Math.max(0, Math.round(pos)), value: Math.min(1, Math.max(0, value)), curve }
   doc.transact(() => pointsMap(doc).set(id, toMap(p)))
   return id

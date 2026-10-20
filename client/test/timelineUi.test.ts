@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  addAudioClip, addMidiClip, addTrack, clipsMap, ensureTimeline, getMarkers, getRegions, notesMap, addNote, getNotes, timeMap, type AudioClip, type MidiClip, type Region,
+  addAudioClip, addMidiClip, addTrack, clipsMap, ensureTimeline, getMarkers, getRegions, notesMap, addNote, getNotes, timeMap, undoScope, type Moving, type AudioClip, type MidiClip, type Region,
 } from '@mobdaw/shared'
 import { BAR_PX, BEAT_PX, HALF_PX, divisionAt, gridSnap, gridSnapTick, pxPerBeatAt, snapDivision, softGrid } from '../src/ui/gridSnap'
 import { labelStep, meterLabel, nearestBar, regionLabel, rulerBadges, rulerGrid, rulerMarkers, fmtFree } from '../src/ui/rulerModel'
 import { offGrid } from '../src/ui/ghost'
+import { commitMoving } from '../src/project/draft'
 import { loopMidi, moveMidi, moveTick, passMidi, trimLeft, trimMidi } from '../src/ui/midiClipOps'
 import { parseBpm, parseFreeSeconds, parseGroups, parseMeter, parseTempoForm, rampOption, setFreeHere, setTempoHere, toggleRamp } from '../src/ui/rulerEdit'
 
@@ -86,16 +87,18 @@ describe('moving MIDI clips on the grid', () => {
     const nid = addNote(doc, { clipId: id, pitch: 60, tick: PPQ * 2, durTicks: 100, velocity: 100 })
     const c = () => clipsMap(doc).get(id)!.toJSON() as MidiClip
     const doc0 = timeMap([], RATE, PPQ)
-    moveMidi(doc, doc0, c(), 48000, 20, true)
+    const undo = new Y.UndoManager(undoScope(doc))
+    const w = (m: Moving) => commitMoving(doc, undo, m)
+    w(moveMidi(doc0, c(), 48000, 20, true))
     expect(c().startTick).toBe(2 * PPQ) // 1 s = 2 beats
-    trimMidi(doc, doc0, c(), 'l', 24000 * 3, 20, true, [{ id: nid, tick: PPQ * 2 }])
+    w(trimMidi(doc0, c(), 'l', 24000 * 3, 20, true, [{ id: nid, tick: PPQ * 2 }]))
     expect(c()).toMatchObject({ startTick: 3 * PPQ, lengthTicks: 3 * PPQ })
     expect(notesMap(doc).get(nid)!.get('tick')).toBe(PPQ) // the music stayed put
-    trimMidi(doc, doc0, c(), 'r', 24000 * 8, 20, true, [])
+    w(trimMidi(doc0, c(), 'r', 24000 * 8, 20, true, []))
     expect(c().lengthTicks).toBe(5 * PPQ)
-    loopMidi(doc, doc0, c(), 24000 * 12, 20, true)
+    w(loopMidi(doc0, c(), 24000 * 12, 20, true))
     expect(c()).toMatchObject({ lengthTicks: 9 * PPQ, loopTicks: 5 * PPQ })
-    passMidi(doc, doc0, c(), 24000 * 6, 20, true)
+    w(passMidi(doc0, c(), 24000 * 6, 20, true))
     expect(c().loopTicks).toBe(3 * PPQ)
     expect(getNotes(doc)).toHaveLength(1)
   })

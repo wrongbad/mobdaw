@@ -4,9 +4,11 @@
 // project's time map at the clip's place on the timeline, so a clip crossing a meter change is re-gridded bar by bar, and a free
 // region has no columns (it cannot be clicked, existing hits there are still drawn). Click a cell to toggle a hit. Notes on
 // pitches with no drum row are kept, just not shown.
-import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, getPpq, getTimeMap, isDrum, isLooping, patternTicks, setMidiView, updateClip, updateNote, type Device, type MidiClip, type Note, type TimeMap } from '@mobdaw/shared'
+import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, getPpq, getTimeMap, isDrum, isLooping, patternTicks, setMidiView, updateClip, updateNote, type Device, type Moving, type MidiClip, type Note, type TimeMap } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'
+import { commitMoving } from '../project/draft'
+import type { ProjectStore } from '../project/store'
 import { drumColor } from './drumColor'
 import { segmented } from './segmented'
 import { barsToTicks, clampVelocity, gmDrum, hitOpacity, nextVelocity, ticksToBars } from './noteOps'
@@ -29,9 +31,9 @@ export function stepCell(map: TimeMap, startTick: number, t: number): { tick: nu
   return { tick: g - p.tickInBar + at - startTick, len: Math.min(step, barTicks - at) }
 }
 
-export type DrumGridDeps = { doc: Y.Doc; undo: Y.UndoManager }
+export type DrumGridDeps = { doc: Y.Doc; undo: Y.UndoManager; store: Pick<ProjectStore, 'setDraft' | 'clearDraft'> }
 
-export function drumGrid({ doc, undo }: DrumGridDeps) {
+export function drumGrid({ doc, undo, store }: DrumGridDeps) {
   let clip: MidiClip | null = null
   let notes: Note[] = []
   let map: TimeMap = getTimeMap(doc)
@@ -82,17 +84,21 @@ export function drumGrid({ doc, undo }: DrumGridDeps) {
     const y0 = e.clientY
     const v0 = here.map((n) => n.velocity)
     let dragged = false
+    let draft: Moving | null = null // (the velocity under the pointer: the notes are written on release)
     const move = (m: PointerEvent) => {
       if (!dragged && Math.abs(m.clientY - y0) < 3) return
       dragged = true
       const d = (y0 - m.clientY) / 60
-      doc.transact(() => here.forEach((n, i) => updateNote(doc, n.id, { velocity: clampVelocity(v0[i] + d) })))
+      store.setDraft((draft = { notes: Object.fromEntries(here.map((n, i) => [n.id, { velocity: clampVelocity(v0[i] + d) }])) }))
     }
     const up = () => {
       removeEventListener('pointermove', move)
       removeEventListener('pointerup', up)
       removeEventListener('pointercancel', up)
-      if (!dragged) {
+      if (dragged) {
+        if (draft) commitMoving(doc, undo, draft)
+        store.clearDraft()
+      } else {
         if (e.altKey) doc.transact(() => here.forEach((n) => updateNote(doc, n.id, { velocity: nextVelocity(n.velocity) })))
         else doc.transact(() => here.forEach((n) => deleteNote(doc, n.id)))
       }

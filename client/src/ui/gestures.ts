@@ -1,12 +1,14 @@
 // The pointer gestures on the timeline's blocks: clips (move, trim, loop, pass), soundscape regions, loop boxes and the
-// region a looper is armed to draw. They write the doc live (one undo step per drag) and know the layout only through `Geo`.
+// region a looper is armed to draw. While the pointer is down the live values are a draft in the store (shown at once, sent to
+// the peers through presence); the doc is written once on release (one transaction, one undo step) and know the layout only through `Geo`.
 import {
-  clipLength, clipStart, getPads, isForever, isLooping, loopersMap, padsMap, passLength, clipsMap, tracksMap, updateClip, updateLooper, updatePad,
-  type AudioClip, type Clip, type Looper, type MidiClip, type TimeMap,
+  clipLength, clipStart, getPads, isForever, isLooping, loopersMap, padsMap, passLength, clipsMap, tracksMap,
+  type AudioClip, type Clip, type Looper, type MidiClip, type Moving, type TimeMap,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import type { Accessor } from 'solid-js'
 import { MIN_SEC, loopClip, passClip, trimClip } from '../project/actions'
+import { commitMoving } from '../project/draft'
 import { softGrid } from './gridSnap'
 import { loopMidi, moveMidi, passMidi, trimMidi } from './midiClipOps'
 import type { ProjectStore } from '../project/store'
@@ -141,7 +143,7 @@ export function hostOf(g: GestureCtx, trackId: string) {
   return l?.src ? { el: l.src.body, pps: l.src.pps() } : { el: l?.body ?? g.geo.content, pps: g.geo.pps() }
 }
 
-/** Press on a clip: select it, then (live Yjs updates, rAF-throttled, one undo step per drag) move it or trim, loop or pass its edges. */
+/** Press on a clip: select it, then move it or trim, loop or pass its edges (a draft while dragging, one write and one undo step on release). */
 export function clipDown(g: GestureCtx, ev: PointerEvent, id: string) {
   const { doc, undo, store, sel, geo } = g
   if (ev.button !== 0) return
@@ -162,8 +164,9 @@ export function clipDown(g: GestureCtx, ev: PointerEvent, id: string) {
   }
   g.select([id])
   if (lane0?.src || store.locks().has(clip.trackId)) return zoom() // source audio stays anchored: only the loop windows move
-  undo.stopCapturing()
   ev.preventDefault()
+  let draft: Moving | null = null // (the last one shown; the drop writes it)
+  const show = (d: Moving) => (draft = d, store.setDraft(d))
   const grab = ev.clientX - box.left // where in the clip it was picked up
   let curTrack = clip.trackId
   const srcFrames = sourceFrames(store, rate, clip)
@@ -204,19 +207,19 @@ export function clipDown(g: GestureCtx, ev: PointerEvent, id: string) {
       // (a MIDI clip's ticks are put on the grid by its own edit, unless alt is held or an edge was caught)
       if (mode === 'loop') {
         const r = snapEdges(m, [s0 + drawn], dSmp)
-        if (midi) return loopMidi(doc, map, midi, s0 + drawn + r.d, pps, !m.altKey && !r.hit)
-        return loopClip(doc, rate, clip as AudioClip, drawn + r.d, srcFrames)
+        if (midi) return show(loopMidi(map, midi, s0 + drawn + r.d, pps, !m.altKey && !r.hit))
+        return show({ clips: { [id]: loopClip(rate, clip as AudioClip, drawn + r.d, srcFrames) } })
       }
       if (mode === 'pass') {
         const r = snapEdges(m, [seam0], dSmp)
-        if (midi) return passMidi(doc, map, midi, seam0 + r.d, pps, !m.altKey && !r.hit)
-        return passClip(doc, rate, clip as AudioClip, pass0 + r.d, srcFrames)
+        if (midi) return show(passMidi(map, midi, seam0 + r.d, pps, !m.altKey && !r.hit))
+        return show({ clips: { [id]: passClip(rate, clip as AudioClip, pass0 + r.d, srcFrames) } })
       }
       if (mode !== 'move') {
         const edge = mode === 'l' ? s0 : s0 + length
         if (midi) {
           geo.snapLine(null)
-          return trimMidi(doc, map, midi, mode, edge + dSmp, pps, !m.altKey, notes0)
+          return show(trimMidi(map, midi, mode, edge + dSmp, pps, !m.altKey, notes0))
         }
         // an audio clip's edge snaps to the same targets, repeat seams included, so it can be trimmed to land on them
         const base = clip.kind === 'audio' && !m.altKey ? trimSnap(snapAt, mode, s0, length, dSmp, tol) : { d: dSmp, at: null as number | null }
@@ -227,7 +230,7 @@ export function clipDown(g: GestureCtx, ev: PointerEvent, id: string) {
           if (g) (d += g.shift), (at = g.at)
         }
         geo.snapLine(at)
-        return trimClip(doc, rate, clip as AudioClip, mode, d, srcFrames)
+        return show({ clips: { [id]: trimClip(rate, clip as AudioClip, mode, d, srcFrames) } })
       }
       // Absolute position under the pointer, in the target lane's own scale (source lanes differ).
       const hit = targetAt(g, m.clientY, clip.kind)
@@ -246,12 +249,13 @@ export function clipDown(g: GestureCtx, ev: PointerEvent, id: string) {
           geo.snapLine(gr ? gr.at : null)
         }
       } else geo.snapLine(null)
-      if (midi) return moveMidi(doc, map, midi, start, host.pps, !m.altKey && !src && !caught, curTrack)
-      updateClip(doc, id, { start, ...(curTrack !== clip.trackId ? { trackId: curTrack } : {}) })
+      if (midi) return show(moveMidi(map, midi, start, host.pps, !m.altKey && !src && !caught, curTrack))
+      show({ clips: { [id]: { start, ...(curTrack !== clip.trackId ? { trackId: curTrack } : {}) } } })
     },
     onEnd: (moved) => {
       geo.snapLine(null)
-      undo.stopCapturing()
+      if (moved && draft) commitMoving(doc, undo, draft) // (a click that wobbled by a pixel or two writes nothing)
+      store.clearDraft()
       if (!moved) zoom()
     },
   })
@@ -268,8 +272,9 @@ export function padDown(g: GestureCtx, ev: PointerEvent, id: string) {
   const mode = grabAt(ev.clientX, (ev.currentTarget as HTMLElement).getBoundingClientRect())
   sel.selectPad(id)
   g.select([])
-  undo.stopCapturing()
   ev.preventDefault()
+  let draft: Moving | null = null
+  const show = (d: Moving) => (draft = d, g.store.setDraft(d))
   dragPointer(ev, {
     onDrag: (m) => {
       if (!padsMap(doc).has(id)) return
@@ -279,17 +284,21 @@ export function padDown(g: GestureCtx, ev: PointerEvent, id: string) {
       const gr = m.altKey ? null : softGrid(map, edges.map((e) => e + dSmp), geo.pps(), (SNAP_PX / geo.pps()) * geo.rate())
       geo.snapLine(gr ? gr.at : null)
       if (gr) dSmp += gr.shift
-      if (mode === 'move') updatePad(doc, id, { start: Math.max(0, pad.start + dSmp) })
+      if (mode === 'move') show({ pads: { [id]: { start: Math.max(0, pad.start + dSmp) } } })
       else {
         const t = trimBlock(mode, pad, dSmp, { minLength: MIN_SEC * geo.rate(), slackLeft: pad.start })
-        updatePad(doc, id, { start: t.start, length: t.length })
+        show({ pads: { [id]: { start: t.start, length: t.length } } })
       }
     },
-    onEnd: () => (geo.snapLine(null), undo.stopCapturing()),
+    onEnd: (moved) => {
+      geo.snapLine(null)
+      if (moved && draft) commitMoving(doc, undo, draft)
+      g.store.clearDraft()
+    },
   })
 }
 
-/** Drag a loop window to move it, or either edge to resize it (live in the doc, one undo step). */
+/** Drag a loop window to move it, or either edge to resize it (a draft until release, then one undo step). */
 export function loopBoxDown(g: GestureCtx, ev: PointerEvent, id: string, el: HTMLElement) {
   const { doc, undo, sel, geo } = g
   if (ev.button !== 0) return
@@ -304,36 +313,39 @@ export function loopBoxDown(g: GestureCtx, ev: PointerEvent, id: string, el: HTM
   const rate = geo.rate()
   const min = Math.round(MIN_SEC * rate)
   const end = lp.start + lp.length
-  undo.stopCapturing()
+  let draft: Moving | null = null
+  const show = (patch: Partial<Looper>) => (draft = { loopers: { [id]: patch } }, g.store.setDraft(draft))
   dragPointer(ev, {
     onDrag: (m) => {
       if (!loopersMap(doc).has(id)) return
       const d = Math.round(((m.clientX - ev.clientX) / pps) * rate)
-      if (mode === 'move') updateLooper(doc, id, { start: Math.max(0, lp.start + d) })
+      if (mode === 'move') show({ start: Math.max(0, lp.start + d) })
       else if (mode === 'l') {
         const start = clamp(lp.start + d, 0, end - min)
-        updateLooper(doc, id, { start, length: end - start })
-      } else updateLooper(doc, id, { length: Math.max(min, lp.length + d) })
+        show({ start, length: end - start })
+      } else show({ length: Math.max(min, lp.length + d) })
     },
-    onEnd: () => undo.stopCapturing(),
+    onEnd: (moved) => {
+      if (moved && draft) commitMoving(doc, undo, draft)
+      g.store.clearDraft()
+    },
   })
 }
 
-/** Drag across a source lane to set an armed looper's region (live in the doc, one undo step). */
+/** Drag across a source lane to set an armed looper's region (a draft until release, then one undo step). */
 export function drawRegion(g: GestureCtx, ev: PointerEvent, lp: Looper, src: SrcGeo) {
   const { doc, undo, sel, geo } = g
   const at = (cx: number) => Math.max(0, Math.round(((cx - src.body.getBoundingClientRect().left) / src.pps()) * geo.rate()))
-  let drew = false
-  undo.stopCapturing()
+  let drew: Moving | null = null
   dragPointer(ev, {
     onDrag: (m) => {
       if (Math.abs(m.clientX - ev.clientX) < 4) return // a click doesn't erase the old region
-      drew = true
       const a = at(ev.clientX), b = at(m.clientX)
-      updateLooper(doc, lp.id, { start: Math.min(a, b), length: Math.abs(b - a) })
+      g.store.setDraft((drew = { loopers: { [lp.id]: { start: Math.min(a, b), length: Math.abs(b - a) } } }))
     },
     onEnd: () => {
-      undo.stopCapturing()
+      if (drew) commitMoving(doc, undo, drew)
+      g.store.clearDraft()
       if (drew) sel.doneDrawing()
     },
   })

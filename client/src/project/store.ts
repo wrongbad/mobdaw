@@ -2,13 +2,14 @@
 // entities that changed, so every other entity keeps its object (and its subscribers stay quiet).
 // Components read the derived accessors; the doc stays the single source of truth (all writes go through the schema mutators).
 import {
-  MIX, type AwarenessState, type Clip, type Device, type Lane, type Looper, type Note, type Pad, type Point, type SampleMeta, type Track,
+  MIX, type AwarenessState, type Moving, type Clip, type Device, type Lane, type Looper, type Note, type Pad, type Point, type SampleMeta, type Track,
   clipsMap, devicesMap, lanesMap, loopersMap, notesMap, padsMap, pointsMap, samplesMap, tracksMap,
 } from '@mobdaw/shared'
 import { batch, createMemo, createRoot, createSignal, getOwner, runWithOwner, type Accessor } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
 import type * as Y from 'yjs'
 import type { Awareness } from 'y-protocols/awareness'
+import { KINDS, mergeMoving } from './draft'
 
 type Entity = { id: string }
 type YM = Y.Map<unknown>
@@ -16,14 +17,19 @@ type YM = Y.Map<unknown>
 const EMPTY: never[] = []
 const sameList = <T>(a: readonly T[], b: readonly T[]) => a.length === b.length && a.every((x, i) => x === b[i])
 
-/** One map mirrored into a store. `keep` drops entities the schema getters drop (a half-made clip, a lane with no owner). */
-function mirror<T extends Entity>(map: Y.Map<any>, keep: (v: T) => boolean = () => true) {
+/**
+ * One map mirrored into a store. `keep` drops entities the schema getters drop (a half-made clip, a lane with no owner).
+ * `draft` gives the in-progress gesture values laid over an entity (a patch whose `id` is set and that has no doc entity is one by itself).
+ */
+function mirror<T extends Entity>(map: Y.Map<any>, keep: (v: T) => boolean = () => true, draft: (id: string) => Partial<T> | null | undefined = () => undefined) {
   const [store, set] = createStore<Record<string, T>>({})
   const read = (id: string): T | undefined => {
     const v = map.get(id)
-    if (v == null) return undefined
-    const j = (typeof v === 'object' && 'toJSON' in v ? (v as YM).toJSON() : structuredClone(v)) as T
-    return keep(j) ? j : undefined
+    const p = draft(id)
+    if (p === null) return undefined // (deleted in the draft)
+    const base = v == null ? undefined : ((typeof v === 'object' && 'toJSON' in v ? (v as YM).toJSON() : structuredClone(v)) as T)
+    const j = p ? (base ? ({ ...base, ...p } as T) : p.id != null ? (p as T) : undefined) : base
+    return j && keep(j) ? j : undefined
   }
   const sync = (ids: Iterable<string>) => batch(() => {
     for (const id of ids) {
@@ -44,26 +50,52 @@ function mirror<T extends Entity>(map: Y.Map<any>, keep: (v: T) => boolean = () 
     sync(ids)
   }
   map.observeDeep(observer)
-  return { store, off: () => map.unobserveDeep(observer) }
+  return { store, sync, off: () => map.unobserveDeep(observer) }
 }
 
 export type ProjectStore = ReturnType<typeof createProjectStore>
 
 /** `s`: the doc and its awareness (the peers' states are read through `remoteStates`, which leaves our own out). */
-export function createProjectStore(s: { doc: Y.Doc; awareness: Pick<Awareness, 'on' | 'off'>; remoteStates(): AwarenessState[] }) {
+export function createProjectStore(s: {
+  doc: Y.Doc; awareness: Pick<Awareness, 'on' | 'off'>; remoteStates(): AwarenessState[]
+  /** Tell the peers (the draft of our gesture goes out through this). */
+  setLocal?(patch: { moving: Moving | null }): void
+}) {
   const { doc } = s
   return createRoot((disposeRoot) => {
     const owner = getOwner()!
+    // the gestures in progress laid over the doc: the peers' (from awareness) and our own (set at once), ours winning
+    let local: Moving | null = null
+    let overlay: Moving = {}
+    const draftOf = <T extends Entity>(kind: (typeof KINDS)[number]) => (id: string) => overlay[kind]?.[id] as Partial<T> | null | undefined
     const tracks_ = mirror<Track>(tracksMap(doc))
-    const clips_ = mirror<Clip>(clipsMap(doc), (c) => c.kind === 'audio' || c.kind === 'midi')
-    const notes_ = mirror<Note>(notesMap(doc))
+    const clips_ = mirror<Clip>(clipsMap(doc), (c) => c.kind === 'audio' || c.kind === 'midi', draftOf('clips'))
+    const notes_ = mirror<Note>(notesMap(doc), undefined, draftOf('notes'))
     const devices_ = mirror<Device>(devicesMap(doc))
-    const loopers_ = mirror<Looper>(loopersMap(doc))
-    const pads_ = mirror<Pad>(padsMap(doc))
-    const lanes_ = mirror<Lane>(lanesMap(doc), (l) => l.owner != null)
-    const points_ = mirror<Point>(pointsMap(doc))
+    const loopers_ = mirror<Looper>(loopersMap(doc), undefined, draftOf('loopers'))
+    const pads_ = mirror<Pad>(padsMap(doc), undefined, draftOf('pads'))
+    const lanes_ = mirror<Lane>(lanesMap(doc), (l) => l.owner != null, draftOf('lanes'))
+    const points_ = mirror<Point>(pointsMap(doc), undefined, draftOf('points'))
     const samples_ = mirror<SampleMeta & Entity>(samplesMap(doc) as Y.Map<any>)
     const mirrors = [tracks_, clips_, notes_, devices_, loopers_, pads_, lanes_, points_, samples_]
+    const draftMirrors = { clips: clips_, notes: notes_, pads: pads_, loopers: loopers_, lanes: lanes_, points: points_ }
+    /** Lay the current drafts over the doc: re-read every entity a draft touches now or touched before. */
+    const refresh = () => {
+      const next = mergeMoving(...s.remoteStates().map((r) => r.moving), local)
+      const prev = overlay
+      overlay = next
+      batch(() => {
+        for (const k of KINDS) {
+          const a = (prev[k] ?? {}) as Record<string, unknown>, b = (next[k] ?? {}) as Record<string, unknown>
+          const ids = new Set([...Object.keys(a), ...Object.keys(b)])
+          draftMirrors[k].sync([...ids].filter((id) => JSON.stringify(a[id]) !== JSON.stringify(b[id])))
+        }
+      })
+    }
+    refresh()
+    let pub: ReturnType<typeof setTimeout> | undefined
+    const PUBLISH_MS = 50 // (the peers get a draft at most this often; our own view follows every move)
+    const publish = () => ((pub = undefined), s.setLocal?.({ moving: local }))
 
     /** The entities in a given order; the list only changes when its members or their order do. */
     const list = <T extends Entity>(store: Record<string, T>, cmp?: (a: T, b: T) => number) =>
@@ -102,7 +134,7 @@ export function createProjectStore(s: { doc: Y.Doc; awareness: Pick<Awareness, '
 
     // the peers' awareness states (not ours): set on every change, so readers see playheads, drags and recordings as they come
     const [remote, setRemote] = createSignal<AwarenessState[]>(s.remoteStates(), { equals: false })
-    const onAware = () => setRemote(s.remoteStates())
+    const onAware = () => (setRemote(s.remoteStates()), refresh())
     s.awareness.on('change', onAware)
     /** Who is recording on which track (someone else): track id -> username. */
     const locks = createMemo(() => new Map(remote().flatMap((r) => (r.recording ? [[r.recording.trackId, r.user.username] as [string, string]] : []))),
@@ -135,6 +167,21 @@ export function createProjectStore(s: { doc: Y.Doc; awareness: Pick<Awareness, '
 
     return {
       overrides, drags,
+      /** Our gesture's live values: shown at once, sent to the peers (throttled), and not written to the doc (the gesture's drop does that). */
+      setDraft(d: Moving) {
+        local = d
+        refresh()
+        pub ??= setTimeout(publish, PUBLISH_MS)
+      },
+      /** The gesture ended (dropped or cancelled): the draft goes from our view and the peers'. Call it after the final write. */
+      clearDraft() {
+        if (!local && pub === undefined) return
+        local = null
+        refresh()
+        clearTimeout(pub)
+        pub = undefined
+        s.setLocal?.({ moving: null })
+      },
       /** The entities by id (stores: read inside an effect or memo to follow one field). */
       trackById: tracks_.store, clipById: clips_.store, noteById: notes_.store, deviceById: devices_.store, looperById: loopers_.store,
       padById: pads_.store, laneById: lanes_.store, pointById: points_.store, samples: samples_.store as Record<string, SampleMeta>,
@@ -146,6 +193,7 @@ export function createProjectStore(s: { doc: Y.Doc; awareness: Pick<Awareness, '
       remote, locks, outlines,
       dispose() {
         s.awareness.off('change', onAware)
+        clearTimeout(pub)
         mirrors.forEach((m) => m.off())
         disposeRoot()
       },

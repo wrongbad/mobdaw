@@ -52,37 +52,36 @@ export function startPass(clip: Clip & { kind: 'audio' }, srcFrames: number) {
 }
 
 /**
- * Drag a clip's right edge to change its extent to `extent` samples; the pass repeats to fill it. A clip that wasn't
+ * The fields to write for a clip's right edge dragged to change its extent to `extent` samples; the pass repeats to fill it. A clip that wasn't
  * looping starts to, with its current length as the pass. Dragging it back to a pass or less ends the loop (isLooping),
  * and a `forever` clip stops being forever.
  */
-export function loopClip(doc: Y.Doc, rate: number, clip: AudioClip, extent: number, srcFrames: number) {
+export function loopClip(rate: number, clip: AudioClip, extent: number, srcFrames: number): Partial<AudioClip> {
   const forever = clip.forever ? { forever: false } : {}
-  updateClip(doc, clip.id, { length: Math.max(Math.round(MIN_SEC * rate), Math.round(extent)), ...(isLooping(clip) ? {} : startPass(clip, srcFrames)), ...forever })
+  return { length: Math.max(Math.round(MIN_SEC * rate), Math.round(extent)), ...(isLooping(clip) ? {} : startPass(clip, srcFrames)), ...forever }
 }
 
-/** Drag a looping audio clip's first seam: the pass becomes `pass` samples and the repeats re-tile. */
-export function passClip(doc: Y.Doc, rate: number, clip: AudioClip, pass: number, srcFrames: number) {
+/** The fields for a looping audio clip's first seam dragged: the pass becomes `pass` samples and the repeats re-tile. */
+export function passClip(rate: number, clip: AudioClip, pass: number, srcFrames: number): Partial<AudioClip> {
   const lo = Math.round(MIN_SEC * rate) + (clip.loopPhase ?? 0) // the first seam stays after the clip's start
-  updateClip(doc, clip.id, { loopLength: Math.round(clamp(pass, lo, Math.max(lo, Math.min(clip.length, srcFrames - clip.sourceOffset)))) })
+  return { loopLength: Math.round(clamp(pass, lo, Math.max(lo, Math.min(clip.length, srcFrames - clip.sourceOffset)))) }
 }
 
 /**
- * Resize a clip from either edge, non-destructively (the source audio and the notes stay whole;
+ * The fields to write to resize a clip from either edge, non-destructively (the source audio and the notes stay whole;
  * dragging the edge back out restores them). `dSmp` is the pointer delta since the grab.
  */
-export function trimClip(doc: Y.Doc, rate: number, clip: AudioClip, mode: 'l' | 'r', dSmp: number, srcFrames: number) {
+export function trimClip(rate: number, clip: AudioClip, mode: 'l' | 'r', dSmp: number, srcFrames: number): Partial<AudioClip> {
   const minLength = MIN_SEC * rate
   if (isLooping(clip)) { // the left edge turns the pass instead (the seams stay put); the right edge is the loop handle
     const t = trimBlock('l', clip, dSmp, { minLength, slackLeft: clip.start })
-    updateClip(doc, clip.id, { start: t.start, length: t.length, loopPhase: rotatePhase(clip.loopPhase ?? 0, t.d, clip.loopLength!) })
-    return
+    return { start: t.start, length: t.length, loopPhase: rotatePhase(clip.loopPhase ?? 0, t.d, clip.loopLength!) }
   }
   // a stale pass (the clip was pulled back to a pass or less) goes, so trimming it longer can't start it looping
   const stale = clip.loopLength ? { loopLength: 0, loopPhase: 0 } : {}
   const sourceOffset = clip.sourceOffset + (clip.loopLength ? clip.loopPhase ?? 0 : 0)
   const t = trimBlock(mode, clip, dSmp, { minLength, slackLeft: Math.min(sourceOffset, clip.start), maxLength: srcFrames - sourceOffset })
-  updateClip(doc, clip.id, { ...stale, ...(mode === 'l' ? { start: t.start, length: t.length, sourceOffset: sourceOffset + t.d } : { length: t.length, sourceOffset }) })
+  return { ...stale, ...(mode === 'l' ? { start: t.start, length: t.length, sourceOffset: sourceOffset + t.d } : { length: t.length, sourceOffset }) }
 }
 
 /** Clip menu: "loop forever" / "loop to end" on a clip that loops (toggle), else it starts looping with two passes. */

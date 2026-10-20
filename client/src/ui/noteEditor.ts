@@ -2,9 +2,11 @@
 // beat-group / sub-beat lines with snap, box select, group edits, a velocity lane and key shortcuts (the pure edits are in
 // noteOps.ts). Time is the project's: the x axis follows the timeline's scale through the time map (so bar lines match the ruler,
 // 7/8 shows its 2+2+3 groups, a free region has no lines), and notes snap to the map's grid at the clip's place on the timeline.
-import { addNote, getPpq, getTimeMap, isLooping, patternTicks, setMidiView, updateClip, updateNote, type MidiClip, type Note, type TimeMap } from '@mobdaw/shared'
+import { addNote, getPpq, getTimeMap, isLooping, newId, patternTicks, setMidiView, updateClip, type MidiClip, type Moving, type Note, type TimeMap } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'
+import { commitMoving } from '../project/draft'
+import type { ProjectStore } from '../project/store'
 import { clamp, dragPointer } from './blocks'
 import { lift } from './lift'
 import { segmented } from './segmented'
@@ -13,7 +15,7 @@ import { HEADER } from './layout'
 import { noteName } from './noteName'
 import { clipGeom, gridLayout, gridSvg, type ClipGeom } from './gridLines'
 import {
-  DEFAULT_GRID, GRIDS, PITCH_MAX as PMAX, PITCH_MIN as PMIN, applyPatches, barsToTicks, cancelNoteDrag, centrePitch, clampVelocity, gridTicks, inMarquee, localSnap,
+  DEFAULT_GRID, GRIDS, PITCH_MAX as PMAX, PITCH_MIN as PMIN, applyPatches, barsToTicks, centrePitch, clampVelocity, gridTicks, inMarquee, localSnap,
   moveGroup, nudgeVelocity, quantize, removeNotes, resizeGroup, shift, ticksToBars, transpose, velocityAt, type Grid,
 } from './noteOps'
 
@@ -26,12 +28,14 @@ const BLACK = [1, 3, 6, 8, 10]
 export type NoteEditorDeps = {
   doc: Y.Doc
   undo: Y.UndoManager
+  /** Where a drag's live values go (shown at once, sent to the peers) until its drop writes them. */
+  store: Pick<ProjectStore, 'setDraft' | 'clearDraft'>
   selectNote(id: string | null): void
   /** Gate a key on the clip's track's instruments (on) or let it go: the sound while a note is drawn or dragged. */
   noteLive?(trackId: string, pitch: number, velocity: number, on: boolean): void
 }
 
-export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) {
+export function noteEditor({ doc, undo, store, selectNote, noteLive }: NoteEditorDeps) {
   let clip: MidiClip | null = null
   let notes = new Map<string, Note>()
   let centered = false
@@ -212,15 +216,13 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
     const resize = e.clientX > noteEl.getBoundingClientRect().right - EDGE
     const copying = e.altKey && !resize
     const x0 = e.clientX, y0 = e.clientY
+    let copies: string[] = []
     let group = selected().map((g) => ({ ...g })) // the notes as they were when pressed
     const lead = group.find((g) => g.id === id)!
     let moved = false
     let release: (() => void) | null = resize ? null : audition(n.pitch, n.velocity)
     let sounding = n.pitch
-    undo.stopCapturing()
-    const depth = undo.undoStack.length // (the drag's first write is the next step)
-    const original = group.map((g) => ({ ...g }))
-    let copies: string[] = []
+    let draft: Moving | null = null // the last one shown: the drop writes it, a cancel drops it
     let last: PointerEvent | null = null
     let pending = 0
     const apply = () => {
@@ -230,12 +232,9 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
       if (!moved) {
         if (Math.hypot(m.clientX - x0, m.clientY - y0) < SLOP) return
         moved = true
-        if (copying) { // drag the copies; the originals stay
-          const ids: string[] = []
-          doc.transact(() => group.forEach(({ id: _id, ...g }) => ids.push(addNote(doc, g))))
-          group = group.map((g, i) => ({ ...g, id: ids[i] }))
-          copies = ids
-          setSel(ids)
+        if (copying) { // drag the copies (draft notes under new ids, written on the drop); the originals stay
+          group = group.map((g) => ({ ...g, id: newId() }))
+          copies = group.map((g) => g.id)
         }
       }
       const snap = snapper(snapOff(copying ? { ctrlKey: m.ctrlKey, altKey: false } : m))
@@ -257,8 +256,11 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
         }
       }
     }
-    const patch = (ps: { id: string; tick?: number; durTicks?: number; pitch?: number }[]) =>
-      doc.transact(() => ps.forEach(({ id: pid, ...p }) => updateNote(doc, pid, p)))
+    const patch = (ps: { id: string; tick?: number; durTicks?: number; pitch?: number }[]) => {
+      const byId = new Map(group.map((g) => [g.id, g]))
+      store.setDraft((draft = { notes: Object.fromEntries(ps.map(({ id: pid, ...p }) => [pid, copying ? { ...byId.get(pid), ...p } : p])) }))
+      if (copying && copies.length && !sel.has(copies[0])) setSel(copies) // (the copies are what is held now)
+    }
     const move = (m: PointerEvent) => { last = m; if (!pending) pending = requestAnimationFrame(apply) }
     const stop = () => {
       active = null
@@ -271,8 +273,7 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
       last = null
       stop()
       release?.()
-      if (moved) cancelNoteDrag(doc, undo, original, copies, depth)
-      undo.stopCapturing()
+      store.clearDraft() // (nothing was written: the notes are as they were)
       setSel(before)
     } }
     const up = () => {
@@ -280,9 +281,10 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
       cancelAnimationFrame(pending)
       apply()
       release?.()
+      if (moved && draft) commitMoving(doc, undo, draft)
+      store.clearDraft()
       if (!moved && wasIn && toggle) setSel([...sel].filter((s) => s !== id)) // shift-click a selected note: deselect
       else if (!moved && wasIn && !toggle && sel.size > 1) setSel([id]) // a plain click inside a group narrows to that note
-      undo.stopCapturing()
     }
     addEventListener('pointermove', move)
     addEventListener('pointerup', up)
@@ -351,14 +353,17 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
     const group = sel.has(hit.id) && sel.size > 1 ? selected().map((n) => ({ ...n })) : null
     if (!group) setSel([hit.id])
     const v0 = hit.velocity, id = hit.id
-    undo.stopCapturing()
+    let draft: Moving | null = null
     dragPointer(e, {
       onDrag: (m) => {
         const v = velocityAt(m.clientY - r.top, r.height)
-        if (group) doc.transact(() => nudgeVelocity(group, v - v0).forEach((p) => updateNote(doc, p.id, { velocity: p.velocity })))
-        else updateNote(doc, id, { velocity: v })
+        const ps = group ? nudgeVelocity(group, v - v0) : [{ id, velocity: v }]
+        store.setDraft((draft = { notes: Object.fromEntries(ps.map((p) => [p.id, { velocity: p.velocity }])) }))
       },
-      onEnd: () => undo.stopCapturing(),
+      onEnd: () => {
+        if (draft) commitMoving(doc, undo, draft)
+        store.clearDraft()
+      },
     })
   }
 
@@ -368,14 +373,17 @@ export function noteEditor({ doc, undo, selectNote, noteLive }: NoteEditorDeps) 
     const c = clip
     const loop0 = patternTicks(c)
     e.preventDefault()
-    undo.stopCapturing()
     const st = () => step() || ppq / 4
+    let draft: Moving | null = null
     dragPointer(e, {
       onDrag: (m) => {
         const to = snapper(snapOff(m))(geom.tick(geom.x(loop0) + (m.clientX - e.clientX)))
-        updateClip(doc, c.id, { loopTicks: clamp(to, st(), c.lengthTicks) })
+        store.setDraft((draft = { clips: { [c.id]: { loopTicks: clamp(to, st(), c.lengthTicks) } } }))
       },
-      onEnd: () => undo.stopCapturing(),
+      onEnd: () => {
+        if (draft) commitMoving(doc, undo, draft)
+        store.clearDraft()
+      },
     })
   }
 

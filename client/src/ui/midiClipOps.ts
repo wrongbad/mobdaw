@@ -1,8 +1,7 @@
 // MIDI clips on the shared timeline: their position and extent are ticks, so a drag turns the pointer's sample into a tick
 // (snapped to the bar grid of the zoom in a metered region, to 1/16 notes in a free one) and writes ticks. Pure given the map
-// except the functions that take the doc.
-import { isLooping, updateClip, updateNote, type MidiClip, type Note, type TimeMap } from '@mobdaw/shared'
-import type * as Y from 'yjs'
+// The edits return a draft (`Moving`) for the store to show while the pointer is down; the drop writes it (commitMoving).
+import { isLooping, type MidiClip, type Moving, type Note, type TimeMap } from '@mobdaw/shared'
 import { rotateTick, clamp } from './blocks'
 import { gridSnapTick } from './gridSnap'
 
@@ -35,9 +34,11 @@ export function trimLeft(map: TimeMap, c: Pick<MidiClip, 'startTick' | 'lengthTi
   return { startTick, lengthTicks: end - startTick, d: startTick - c.startTick }
 }
 
+const ofClip = (c: Pick<MidiClip, 'id'>, patch: Partial<MidiClip>): Moving => ({ clips: { [c.id]: patch } })
+
 /** Move a clip to start at `sample` (and onto `trackId`). */
-export function moveMidi(doc: Y.Doc, map: TimeMap, c: MidiClip, sample: number, pps: number, snap: boolean, trackId?: string) {
-  updateClip(doc, c.id, { startTick: moveTick(map, sample, pps, snap), ...(trackId && trackId !== c.trackId ? { trackId } : {}) })
+export function moveMidi(map: TimeMap, c: MidiClip, sample: number, pps: number, snap: boolean, trackId?: string): Moving {
+  return ofClip(c, { startTick: moveTick(map, sample, pps, snap), ...(trackId && trackId !== c.trackId ? { trackId } : {}) })
 }
 
 /**
@@ -45,19 +46,19 @@ export function moveMidi(doc: Y.Doc, map: TimeMap, c: MidiClip, sample: number, 
  * every note back by the ticks it moved so the music stays put (notes before the new start go silent but are kept); a looping
  * clip's pattern turns instead, so every repeat stays where it was. The right edge clears a stale pass.
  */
-export function trimMidi(doc: Y.Doc, map: TimeMap, c: MidiClip, mode: 'l' | 'r', sample: number, pps: number, snap: boolean, notes0: Pick<Note, 'id' | 'tick'>[]) {
-  if (mode === 'r') return updateClip(doc, c.id, { lengthTicks: lengthForEnd(map, c.startTick, sample, pps, snap), loopTicks: 0 })
+export function trimMidi(map: TimeMap, c: MidiClip, mode: 'l' | 'r', sample: number, pps: number, snap: boolean, notes0: Pick<Note, 'id' | 'tick'>[]): Moving {
+  if (mode === 'r') return ofClip(c, { lengthTicks: lengthForEnd(map, c.startTick, sample, pps, snap), loopTicks: 0 })
   const t = trimLeft(map, c, sample, pps, snap)
   const loop = isLooping(c) ? c.loopTicks! : 0
-  doc.transact(() => {
-    updateClip(doc, c.id, { startTick: t.startTick, lengthTicks: t.lengthTicks })
-    for (const n of notes0) updateNote(doc, n.id, { tick: loop && n.tick < loop ? rotateTick(n.tick, t.d, loop) : n.tick - t.d })
-  })
+  return {
+    ...ofClip(c, { startTick: t.startTick, lengthTicks: t.lengthTicks }),
+    notes: Object.fromEntries(notes0.map((n) => [n.id, { tick: loop && n.tick < loop ? rotateTick(n.tick, t.d, loop) : n.tick - t.d }])),
+  }
 }
 
 /** The right edge as the loop handle: the extent becomes `endSample`; a clip that wasn't looping starts to, its length as the pass. */
-export function loopMidi(doc: Y.Doc, map: TimeMap, c: MidiClip, endSample: number, pps: number, snap: boolean) {
-  updateClip(doc, c.id, {
+export function loopMidi(map: TimeMap, c: MidiClip, endSample: number, pps: number, snap: boolean): Moving {
+  return ofClip(c, {
     lengthTicks: lengthForEnd(map, c.startTick, endSample, pps, snap),
     ...(isLooping(c) ? {} : { loopTicks: c.lengthTicks }),
     ...(c.forever ? { forever: false } : {}),
@@ -65,7 +66,7 @@ export function loopMidi(doc: Y.Doc, map: TimeMap, c: MidiClip, endSample: numbe
 }
 
 /** The first seam of a looping clip dragged to `seamSample`: the pass becomes that long. */
-export function passMidi(doc: Y.Doc, map: TimeMap, c: MidiClip, seamSample: number, pps: number, snap: boolean) {
+export function passMidi(map: TimeMap, c: MidiClip, seamSample: number, pps: number, snap: boolean): Moving {
   const loopTicks = clamp(tickAt(map, seamSample, pps, snap) - c.startTick, minTicks(map), c.lengthTicks)
-  updateClip(doc, c.id, { loopTicks })
+  return ofClip(c, { loopTicks })
 }

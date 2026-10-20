@@ -337,6 +337,21 @@ export class Bridge {
     if (h != null) this.sink.call('engine_param_set', h, paramId, value)
     this.followKnob(deviceId, String(paramId), value)
   }
+  /** A looper slider mid-drag (not in the doc): the engine takes the values now. */
+  liveLooper(id: string, patch: Partial<Looper>) {
+    const l = loopersMap(this.doc).get(id)?.toJSON() as Looper | undefined
+    if (l) this.upsertLooper({ ...l, ...patch })
+  }
+  /** An LFO lane's slider mid-drag. */
+  liveLane(id: string, patch: Partial<Lane>) {
+    const l = lanesMap(this.doc).get(id)?.toJSON() as Lane | undefined
+    if (l) this.sendLfo({ ...l, ...patch })
+  }
+  /** An automation point mid-drag. */
+  livePoint(id: string, patch: Partial<Point>) {
+    const p = pointsMap(this.doc).get(id)?.toJSON() as Point | undefined
+    if (p) this.upsertPoint({ ...p, ...patch })
+  }
   /** Replace the set of remote drag overrides; params whose override ended revert to the doc value. */
   setOverrides(drags: Drag[]) {
     const next = new Map(drags.map((d) => [key(d.deviceId, d.paramId), d]))

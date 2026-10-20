@@ -6,7 +6,7 @@ import {
   evalPoints, getPoints, laneOf, laneState, paramToValue, resolveTarget, setLaneEnabled, 
   deleteDevice, deleteLooper, isDrum, isForever, deleteNote, getDevices, getSampleRate, getSamples, metaMap,
   getLoopers, getTracks, padsMap, getTimeMap, getMarkers, getKey, setKey, isFutureDoc, markersMap, regionsMap, migrateToV2, notesMap, splitClip, stashLaneRanges, sweepOrphans, tracksMap, 
-  updateDevice, updateLooper, updateTrack, type AwarenessState, type Lane as AutoLane, type ParamTarget,
+  updateDevice, updateLooper, updateTrack, type AwarenessState, type Lane as AutoLane, type Looper, type Moving, type ParamTarget,
   type Point, type SampleMeta, type Track, type Marker, type TimeMap,
   type Role, nextTrackColor, trackColor, 
 } from '@mobdaw/shared'
@@ -53,6 +53,7 @@ import { INSTRUMENT_PRESETS, addInstrument } from '../content/presets'
 import { exportProjectMidi, importSmf, isMidiFile, parseSmf } from '../content/midifile'
 import { applyRegionEdits, tempoFromLoop } from '../audio/loopPedal'
 import { createRecorder } from '../project/recorder'
+import { sliderDraft } from '../project/draft'
 import { createProjectStore } from '../project/store'
 import { createAutoValues, createDrawers, createMixDrive, createSelection, createTabAvailability, type TabName } from '../project/viewState'
 
@@ -294,7 +295,10 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const totalPx = inRoot(() => createMemo(() => xs(total()))) // (the automation rows are drawn at both)
   // the peers' knob drags go to our engine as overrides (and show on the cards, which follow `store.drags`)
   const applyOverrides = () => pb?.setOverrides(store.overrides())
-  const headCtx: HeadCtx = { doc, undo, store, rec, drawers, avail, drive, toggleTab, autoMenu }
+  const headCtx: HeadCtx = {
+    doc, undo, store, rec, drawers, avail, drive, toggleTab, autoMenu,
+    live: (d, p, v) => cardDeps.live(d, p, v), drag: (d) => cardDeps.drag(d), commit: (d, p, v) => cardDeps.commit(d, p, v),
+  }
   disposers.push(
     mountBar(bar, { store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, chatOpen, notice: () => (future() ? 'made with a newer version: read-only. reload the page for the latest.' : null),
       onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: (f) => zoom.button(f), onExport: exportProject, onChat: toggleChat,
@@ -308,11 +312,11 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     createRoot((dispose) => (createEffect(() => (store.overrides(), applyOverrides())), dispose)),
   )
   const ne = noteEditor({
-    doc, undo,
+    doc, undo, store,
     selectNote: (id) => sel.selectNote(id),
     noteLive: (trackId, pitch, velocity, on) => liveNote(trackId, pitch, velocity, on),
   })
-  const dg = drumGrid({ doc, undo })
+  const dg = drumGrid({ doc, undo, store })
 
   // --- transport
   // Auto-stop (audio/autoStop.ts): the master reports and the live notes it needs; decided in `tick`.
@@ -472,12 +476,14 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     reorderEnd: () => setReordering(false),
     reorderDrop: (d: string, before: string | null) => reorderDevice(doc, undo, d, before),
   }
+  const slide = sliderDraft(store, doc, undo) // the sliders' live values: shown and sent to the peers at once, written when one lets go
   const loopDeps = {
-    grab: () => undo.stopCapturing(),
-    commit: (id: string, speed: number) => updateLooper(doc, id, { speed }),
+    live: (id: string, patch: Partial<Looper>) => {
+      slide.set({ loopers: { [id]: patch } })
+      pb?.liveLooper(id, patch) // (the engine applies it now, smoothed)
+    },
+    release: slide.release,
     setMuted: (id: string, muted: boolean) => updateLooper(doc, id, { muted }),
-    setGain: (id: string, gain: number) => updateLooper(doc, id, { gain }),
-    setTape: (id: string, patch: { sat?: number; cutoff?: number; warble?: number }) => updateLooper(doc, id, patch),
     autoMenu: (label: HTMLElement, t: ParamTarget) => autoMenu(label, () => t),
     toggleArm: (id: string) => sel.toggleArm(id),
     clear: (id: string) => updateLooper(doc, id, { start: 0, length: 0 }),
@@ -486,7 +492,13 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
 
   // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
   const rowDeps = {
-    doc, grab: () => undo.stopCapturing(), x, fromX, get rate() { return getSampleRate(doc) },
+    doc, x, fromX,
+    live: (d: Moving) => {
+      slide.set(d)
+      for (const [id, p] of Object.entries(d.lanes ?? {})) p && pb?.liveLane(id, p)
+      for (const [id, p] of Object.entries(d.points ?? {})) p && pb?.livePoint(id, p)
+    },
+    release: slide.release, get rate() { return getSampleRate(doc) },
     snap: (smp: number) => gridSnap(tmap(), smp, pps()) ?? smp, // (automation points snap to the bar grid; in a free region they stay where they are)
   }
   const drawCtx: DrawCtx = { ...headCtx, auto: autoValues, deps: cardDeps, reordering, loops: loopDeps, rows: rowDeps, armed: () => sel.armedLooper, width: totalPx, scale }
@@ -867,7 +879,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     createEffect(() => sel.pruneEditing((id) => (void store.clipById[id], clipsMap(doc).get(id)?.get('kind') === 'midi')))
     createEffect(() => sel.pruneClips((id) => (void store.clipById[id], clipsMap(doc).has(id))))
     createEffect(() => sel.prunePad((id) => (void store.padById[id], padsMap(doc).has(id))))
-    createEffect(() => sel.pruneNote((id) => (void store.noteById[id], notesMap(doc).has(id))))
+    createEffect(() => sel.pruneNote((id) => (void store.noteById[id], notesMap(doc).has(id) || !!store.noteById[id])))
     disposers.push(mountRuler(rulerBody, {
       map: tmap, markers, keyText, pps, scrollX, viewW, after: rulerHeads,
       onMenu: (t, at, el) => rulerMenu(t, at, el),

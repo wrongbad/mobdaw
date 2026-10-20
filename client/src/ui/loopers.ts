@@ -10,15 +10,14 @@ import { valueTip } from './valueTip'
 export const LOOP_COLORS = ['#ff6b6b', '#ffd166', '#06d6a0', '#4cc9f0']
 
 export type LooperDeps = {
-  /** A slider drag begins (so it undoes as one step). */
-  grab(): void
-  /** Write the speed to the doc as the slider moves: the engine applies it live, smoothed. */
-  commit(id: string, speed: number): void
+  /**
+   * A slider moved: its value (speed, volume 0..1, or a tape control: saturation, low-pass cutoff in Hz, warble depth) is shown and
+   * sounded at once and sent to the peers, but not written to the doc until `release`.
+   */
+  live(id: string, patch: Partial<Pick<Looper, 'speed' | 'gain' | 'sat' | 'cutoff' | 'warble'>>): void
+  /** The slider let go: write its value (one undo step). */
+  release(): void
   setMuted(id: string, muted: boolean): void
-  /** Write the volume (0..1) to the doc as the slider moves. */
-  setGain(id: string, gain: number): void
-  /** Write a tape control (saturation, low-pass cutoff in Hz, warble depth) to the doc as its slider moves. */
-  setTape(id: string, patch: { sat?: number; cutoff?: number; warble?: number }): void
   /** Arm / disarm drawing this looper's region on the lane. */
   toggleArm(id: string): void
   clear(id: string): void
@@ -49,20 +48,20 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   let muted = false
   const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, title: 'volume' })
   valueTip(vol, () => fmtDb(Number(vol.value)))
-  vol.onpointerdown = () => deps.grab()
-  vol.oninput = () => deps.setGain(id, Number(vol.value))
+  vol.oninput = () => deps.live(id, { gain: Number(vol.value) })
+  vol.onchange = () => deps.release()
   const speed = h('input', { type: 'range', min: 0, max: 1, step: 'any', title: 'speed' })
   const out = h('span', { className: 'dim out' })
   valueTip(speed, out)
-  speed.onpointerdown = () => deps.grab()
   speed.oninput = () => {
     const v = toSpeed(Number(speed.value))
     out.textContent = fmtSpeed(v)
-    deps.commit(id, v)
+    deps.live(id, { speed: v })
   }
+  speed.onchange = () => deps.release()
   const tapeSlider = (title: string) => {
     const el = h('input', { type: 'range', min: 0, max: 1, step: 'any', title })
-    el.onpointerdown = () => deps.grab()
+    el.onchange = () => deps.release()
     return el
   }
   const sat = tapeSlider('saturation')
@@ -70,7 +69,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   valueTip(sat, satOut)
   sat.oninput = () => {
     satOut.textContent = fmtPct(Number(sat.value))
-    deps.setTape(id, { sat: Number(sat.value) })
+    deps.live(id, { sat: Number(sat.value) })
   }
   const filter = tapeSlider('low-pass filter')
   const filterOut = h('span', { className: 'dim out' })
@@ -78,14 +77,14 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   filter.oninput = () => {
     const hz = toCutoff(Number(filter.value))
     filterOut.textContent = fmtCutoff(hz)
-    deps.setTape(id, { cutoff: hz })
+    deps.live(id, { cutoff: hz })
   }
   const warble = tapeSlider('tape wow & flutter')
   const warbleOut = h('span', { className: 'dim out' })
   valueTip(warble, warbleOut)
   warble.oninput = () => {
     warbleOut.textContent = fmtPct(Number(warble.value))
-    deps.setTape(id, { warble: Number(warble.value) })
+    deps.live(id, { warble: Number(warble.value) })
   }
   // a param's name is its automation menu; `names` lets update() mark the ones a lane drives
   const names: Record<string, HTMLElement> = {}

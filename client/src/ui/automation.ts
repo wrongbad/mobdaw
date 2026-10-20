@@ -7,8 +7,8 @@
 // header shows the wave's shape, rate and depth, and the surface draws the wave around the param's own value.
 import * as Y from 'yjs'
 import {
-  LFO_DEFAULTS, LFO_RATE_MAX, LFO_RATE_MIN, LFO_SHAPES, addPoint, deleteLane, deletePoint, laneState, lfoWave, pointsMap, setLaneState, updateLaneLfo, updatePoint,
-  type AutoCurve, type Lane, type LaneState, type ParamDef, type Point,
+  LFO_DEFAULTS, LFO_RATE_MAX, LFO_RATE_MIN, LFO_SHAPES, deleteLane, deletePoint, laneState, lfoWave, newId, pointsMap, setLaneState, updateLaneLfo, updatePoint,
+  type AutoCurve, type Lane, type LaneState, type Moving, type ParamDef, type Point,
 } from '@mobdaw/shared'
 import { h } from '../dom'
 import { clamp, dragPointer } from './blocks'
@@ -65,8 +65,10 @@ export function automateMenu(label: HTMLElement, m: AutoMenu, clickToo = true) {
 // --- one lane
 export type RowDeps = {
   doc: Y.Doc
-  /** A drag begins or ends (so it undoes as one step). */
-  grab(): void
+  /** A drag's live values (an LFO slider, a point): shown at once and sent to the peers, not written to the doc until `release`. */
+  live(d: Moving): void
+  /** The drag ended: write what `live` showed (one undo step). */
+  release(): void
   /** Timeline sample <-> surface pixel, at the current zoom. */
   x(smp: number): number
   fromX(px: number): number
@@ -106,15 +108,15 @@ export function autoRow(deps: RowDeps) {
   const posToRate = (t: number) => LFO_RATE_MIN * (LFO_RATE_MAX / LFO_RATE_MIN) ** t
   const slider = (title: string, fmtTip: (t: number) => string, onInput: (t: number) => void) => {
     const el = h('input', { type: 'range', min: '0', max: '1', step: 'any', title })
-    el.addEventListener('pointerdown', () => deps.grab()) // one drag, one undo step
     el.addEventListener('input', () => onInput(el.valueAsNumber))
+    el.addEventListener('change', () => deps.release()) // one drag, one write, one undo step
     valueTip(el, () => fmtTip(el.valueAsNumber))
     return el
   }
   const shape = h('select', { className: 'auto-shape', title: 'wave shape', hidden: true, onchange: () => updateLaneLfo(doc, lane.id, { shape: Number(shape.value) }) },
     ...LFO_SHAPES.map((t, i) => h('option', { value: String(i) }, t)))
-  const rate = slider('rate', (t) => `${posToRate(t).toFixed(2)} Hz`, (t) => updateLaneLfo(doc, lane.id, { rate: posToRate(t) }))
-  const depth = slider('depth', (t) => `${Math.round(t * 100)}%`, (t) => updateLaneLfo(doc, lane.id, { depth: t }))
+  const rate = slider('rate', (t) => `${posToRate(t).toFixed(2)} Hz`, (t) => deps.live({ lanes: { [lane.id]: { rate: posToRate(t) } } }))
+  const depth = slider('depth', (t) => `${Math.round(t * 100)}%`, (t) => deps.live({ lanes: { [lane.id]: { depth: t } } }))
   const lfoRow = (label: string, input: HTMLElement) => h('div', { className: 'ctl lfo-ctl', hidden: true }, h('span', { className: 'lfo-label' }, label), input)
   const lfoRows = [lfoRow('rate', rate), lfoRow('depth', depth)]
 
@@ -139,44 +141,54 @@ export function autoRow(deps: RowDeps) {
   const newCurve = (): AutoCurve => (view.def.options ? 'hold' : 'linear')
   const livePoints = () => [...pointsMap(doc).values()].map((p) => p.toJSON() as Point).filter((p) => p.laneId === lane.id)
 
-  /** Press on empty space: add a point there and carry on dragging it. Shift: draw a line freehand. */
+  /** Press on empty space: add a point there and carry on dragging it. Shift: draw a line freehand. The points are a draft until the pointer comes up. */
   surface.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || e.target !== surface || laneState(lane) === 'lfo') return
     lift(e, () => addAt(e)) // (a finger long-presses to add a point; until then it scrolls)
   })
+  /** A point as `addPoint` would store it. */
+  const newPoint = (id: string, q: { pos: number; value: number }, curve: AutoCurve): Point =>
+    ({ id, laneId: lane.id, pos: Math.max(0, Math.round(q.pos)), value: clamp(q.value, 0, 1), curve })
   function addAt(e: PointerEvent) {
     e.preventDefault()
-    deps.grab()
     const first = at(e)
     if (e.shiftKey) {
       let prev = first
-      addPoint(doc, lane.id, first.pos, first.value, 'linear')
+      const drawn = new Map<string, Point>() // the stroke's points so far (new)
+      const covered = new Set<string>() // the points already in the doc that it drew over (hidden now, deleted on the drop)
+      const add = (q: typeof first) => { const id = newId(); drawn.set(id, newPoint(id, q, 'linear')) }
+      const show = () => deps.live({ points: { ...Object.fromEntries([...covered].map((id) => [id, null])), ...Object.fromEntries(drawn) } })
+      add(first)
+      show()
       dragPointer(e, {
         onDrag: (m) => {
           const q = at(m)
           if (Math.abs(deps.x(q.pos) - deps.x(prev.pos)) < FREEHAND_PX) return
           const [lo, hi] = [Math.min(prev.pos, q.pos), Math.max(prev.pos, q.pos)]
-          doc.transact(() => {
-            for (const p of livePoints()) if (p.pos > lo && p.pos < hi) deletePoint(doc, p.id) // drawing over a stretch replaces it
-            addPoint(doc, lane.id, q.pos, q.value, 'linear')
-          })
+          for (const p of livePoints()) if (p.pos > lo && p.pos < hi) covered.add(p.id) // drawing over a stretch replaces it
+          for (const [id, p] of drawn) if (p.pos > lo && p.pos < hi) drawn.delete(id)
+          add(q)
           prev = q
+          show()
         },
-        onEnd: () => deps.grab(),
+        onEnd: () => deps.release(),
       })
       return
     }
-    dragPoint(e, addPoint(doc, lane.id, first.pos, first.value, newCurve()))
+    const id = newId()
+    deps.live({ points: { [id]: newPoint(id, first, newCurve()) } })
+    dragPoint(e, id, newPoint(id, first, newCurve()))
   }
 
-  function dragPoint(e: PointerEvent, id: string) {
+  /** `fresh`: the point is new (only in the draft until the drop). */
+  function dragPoint(e: PointerEvent, id: string, fresh?: Point) {
     dragPointer(e, {
       onDrag: (m) => {
-        if (!pointsMap(doc).has(id)) return
+        if (!fresh && !pointsMap(doc).has(id)) return
         const q = at(m)
-        updatePoint(doc, id, { pos: q.pos, value: q.value })
+        deps.live({ points: { [id]: fresh ? newPoint(id, q, fresh.curve) : { pos: q.pos, value: q.value } } })
       },
-      onEnd: () => deps.grab(),
+      onEnd: () => deps.release(),
     })
   }
 
@@ -269,7 +281,6 @@ export function autoRow(deps: RowDeps) {
         if (e.button !== 0) return
         e.preventDefault()
         e.stopPropagation()
-        deps.grab()
         dragPoint(e, p.id)
       })
       dot.addEventListener('contextmenu', (e) => pointMenu(e, p))

@@ -1,5 +1,6 @@
 // Glue for one open project: the wasm engine host + the doc bridge + transport.
 import type * as Y from 'yjs'
+import type { Lane, Looper, Point } from '@mobdaw/shared'
 import { Bridge, type Drag, type LiveClip, type Meters, type PreviewMode, type PreviewTransport } from './bridge'
 import { getCtx, holdPlayback } from './context'
 import { EngineHost } from './engine-host'
@@ -156,6 +157,9 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     clearScheduled: () => void hostP.then((h) => h.clearScheduled(), () => {}),
     live: (deviceId: string, paramId: number, v: number) => bridge.live(deviceId, paramId, v),
     setOverrides: (d: Drag[]) => bridge.setOverrides(d),
+    liveLooper: (id: string, patch: Partial<Looper>) => bridge.liveLooper(id, patch),
+    liveLane: (id: string, patch: Partial<Lane>) => bridge.liveLane(id, patch),
+    livePoint: (id: string, patch: Partial<Point>) => bridge.livePoint(id, patch),
     destroy() {
       clearInterval(settleTimer)
       releasePlayback?.()

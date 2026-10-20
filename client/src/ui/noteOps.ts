@@ -2,7 +2,7 @@
 // ticks at the project's ppq; the grid they snap to is the project's time map (bars and beats follow the meter, docs/engine.md §2),
 // found at the clip's place on the timeline. In a free (unmetered) region there is no grid: positions only round to whole ticks.
 // Nothing here touches the DOM.
-import { updateNote, addNote, deleteNote, notesMap, type Note, type TimeMap } from '@mobdaw/shared'
+import { updateNote, addNote, deleteNote, type Note, type TimeMap } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 
 export type NotePatch = { id: string; tick?: number; durTicks?: number; pitch?: number; velocity?: number }
@@ -159,19 +159,6 @@ export function applyPatches(doc: Y.Doc, undo: Y.UndoManager, patches: NotePatch
   if (!patches.length) return
   undo.stopCapturing()
   doc.transact(() => patches.forEach(({ id, ...p }) => updateNote(doc, id, p)))
-  undo.stopCapturing()
-}
-/**
- * Roll a note drag back without touching the undo history: the notes go back to `before` (as they were when pressed), copies the
- * drag made (`added`) are deleted, all untracked. The drag's own undo step is dropped only if it is still the top one
- * (`depth` is the undo stack's length when the drag began); a step the user added meanwhile stays where it is.
- */
-export function cancelNoteDrag(doc: Y.Doc, undo: Y.UndoManager, before: Note[], added: string[], depth: number) {
-  doc.transact(() => {
-    for (const id of added) deleteNote(doc, id)
-    for (const { id, tick, durTicks, pitch } of before) if (!added.length && notesMap(doc).has(id)) updateNote(doc, id, { tick, durTicks, pitch })
-  }, 'note-cancel')
-  if (undo.undoStack.length === depth + 1) undo.undoStack.pop()
   undo.stopCapturing()
 }
 /** Copy notes (offset by `dTicks`) into a clip as one undo step; returns the new ids. */
