@@ -14,6 +14,7 @@
 //   points  Y.Map  id -> Y.Map Point (a lane's keyframes: pos = timeline samples, value = normalised 0..1 of the param's range)
 //   samples Y.Map  hash -> plain object SampleMeta
 //   chat    Y.Array of plain ChatMessage, append-only; outside the undo scope
+import { parseMentions } from './mentions.ts'
 import * as Y from 'yjs'
 import { DEVICES, LOFI_DRUM, MIX, MIX_GAIN, MIX_PAN } from './devices.ts'
 import type { ParamTarget } from './params.ts'
@@ -130,7 +131,9 @@ export const laneState = (l: Pick<Lane, 'enabled' | 'mode'>): LaneState => (!l.e
 export type AutoCurve = 'linear' | 'hold'
 export type Point = { id: string; laneId: string; pos: number; value: number; curve: AutoCurve }
 /** `system: true` marks a message the app wrote (a migration note), not a person: render it as a notice. `username` is then SYSTEM_USER. */
-export type ChatMessage = { id: string; username: string; color: string; text: string; ts: number; system?: boolean }
+export type ChatMessage = { id: string; username: string; color: string; text: string; ts: number; system?: boolean
+  /** Display names mentioned (`@name`, `@name(api)`), set when the message was sent. Absent on older messages: parse the text then. */
+  mentions?: string[] }
 export const SYSTEM_USER = 'mobdaw'
 /**
  * `status`: absent means the audio is in storage and anyone in the project can load it. 'incoming' is a take still only on
@@ -691,11 +694,13 @@ export const deletePoint = (doc: Y.Doc, id: string) => doc.transact(() => points
 
 // --- chat
 export const CHAT_MAX = 2000
-export function addChatMessage(doc: Y.Doc, user: AwarenessState['user'], text: string): string | null {
+/** `handles`: the known mention handles (project members and who is here); the mentions in the text are stored with the message. */
+export function addChatMessage(doc: Y.Doc, user: AwarenessState['user'], text: string, handles: string[] = []): string | null {
   const t = text.trim().slice(0, CHAT_MAX)
   if (!t) return null
   const id = newId()
-  chatLog(doc).push([{ id, username: user.username, color: user.color, text: t, ts: Date.now() }])
+  const mentions = parseMentions(t, handles)
+  chatLog(doc).push([{ id, username: user.username, color: user.color, text: t, ts: Date.now(), ...(mentions.length ? { mentions } : {}) }])
   return id
 }
 
