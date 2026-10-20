@@ -18,6 +18,10 @@
 
     badmidi song.mid grid                any view of a MIDI or MusicXML file directly
                                          (--quantize, --key as for import)
+    badmidi pull PROJECT -o piece.py     a mobdaw project as a piece (+ piece.mobdaw.json); see bridge.py
+    badmidi push piece.py [--apply]      the piece's note edits back to the project, as ONE history entry
+    badmidi projects                     (MOBDAW_URL, MOBDAW_TOKEN in the environment)
+
     badmidi import song.mid [-o song.py] import MIDI or MusicXML as a badmidi piece to edit
             [--quantize auto|none|s|e3] [--key "D minor"] [--phrase 4]
 """
@@ -119,6 +123,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["import"]:
         return import_main(argv[1:])
+    if argv[:1] in (["pull"], ["push"], ["projects"]):
+        from .bridge import main as bridge_main
+        return bridge_main(argv[0], argv[1:])
     ap = argparse.ArgumentParser(prog="badmidi", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("piece", help="python file that builds a Score")

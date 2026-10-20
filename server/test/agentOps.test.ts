@@ -99,4 +99,13 @@ describe('agent ops', () => {
     console.log(`20k notes applied in ${Date.now() - t0} ms`)
     expect(() => parseOps([{ op: 'addNotes', clipId: 'x', notes: new Array(100_001).fill({ p: 'C4', t: 0, d: 1 }) }])).toThrow('at most 100000 notes')
   })
+
+  it('setRegion on the implied default region of a fresh project writes it out', () => {
+    const doc = new Y.Doc()
+    run(doc, [{ op: 'setRegion', bar: 1, meter: '3/4', bpm: 60 }])
+    expect(getRegions(doc)).toMatchObject([{ bar: 1, kind: 'metered', bpm: 60, num: 3, den: 4 }])
+    run(doc, [{ op: 'setRegion', bar: 1, meter: '7/8 2+2+3' }, { op: 'setRegion', bar: 1, meter: '4/4' }])
+    expect(getRegions(doc)[0]).toMatchObject({ bpm: 60, num: 4, den: 4 })
+    expect(getRegions(doc)[0]).not.toHaveProperty('groups')
+  })
 })

@@ -1,0 +1,658 @@
+"""The mobdaw bridge: pull a project into a Score, push the edits back as ONE batch of ops.
+
+    badmidi projects                          the projects you can work in
+    badmidi pull <project> -o piece.py        the project as a piece (+ piece.mobdaw.json, the snapshot)
+    badmidi push piece.py                     dry run: the ops that make the project match the piece
+    badmidi push piece.py --apply             send them as one labelled history entry
+
+No model sits between the two: a script reads the project's JSON state, so every real track is in the Score
+(`grid`, `lens` and `form` see the whole ensemble) and what is sent is computed, not retyped. Settings come from
+the environment, never from a file that could be committed: MOBDAW_URL (default http://localhost:5173, or the
+site root such as https://wrongbad.com/mobdaw) and MOBDAW_TOKEN (an API token from the account page).
+
+What is read: regions -> meter / tempo / rit. / accel. / free bars, markers -> sections, `meta.key`, every MIDI
+clip's notes at exact positions (`clip.startTick + note.t`, in ticks of `meta.ppq`). Drum-view and audio clips
+are left out (said in the report); notes in looped clips are shown as stored and cannot be changed from here.
+
+What is pushed: only notes. A note is identified by (track, onset, pitch): new ones become `addNotes` (into the
+clip that covers them, else a new clip), missing ones `removeNotes`, a changed length `updateNotes`; a part the
+snapshot doesn't know becomes a new track (`--like <track>` copies another track's whole device chain). Meter,
+tempo, markers and the key are the project's: if the piece's timeline differs, push refuses. It also refuses
+when the project moved since the pull (someone else edited), so pull again.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import statistics
+import sys
+import urllib.error
+import urllib.request
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from fractions import Fraction
+
+from .core import Motif, Note, Pitch
+from .ingest import (_Item, _N, _clean_name, _lines, _pitch, _place, _unique, estimate_key,
+                     instrument_for, SourceNote)
+from .scale import Scale, key as parse_key
+from .score import INSTRUMENTS, Meter, Score
+
+DEFAULT_URL = "http://localhost:5173"
+MAX_OPS, MAX_NOTES = 5000, 100_000     # the server's batch limits (docs/agent-api.md)
+
+
+class BridgeError(Exception):
+    pass
+
+
+# --- the API ---------------------------------------------------------------------
+
+
+class Client:
+    """The mobdaw agent API over HTTP (stdlib only)."""
+
+    def __init__(self, base: str | None = None, token: str | None = None):
+        self.base = (base or os.environ.get("MOBDAW_URL") or DEFAULT_URL).rstrip("/")
+        self.token = token or os.environ.get("MOBDAW_TOKEN")
+        if not self.token:
+            raise BridgeError("set MOBDAW_TOKEN to an API token (account page -> api tokens); it is read from the "
+                              "environment so it never lands in a piece or a snapshot")
+
+    def _call(self, method: str, path: str, body=None):
+        req = urllib.request.Request(f"{self.base}/api/agent{path}", method=method,
+                                     data=None if body is None else json.dumps(body).encode(),
+                                     headers={"authorization": f"Bearer {self.token}", "content-type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read() or b"null")
+        except urllib.error.HTTPError as e:
+            try:
+                err = json.loads(e.read())
+            except Exception:
+                err = {}
+            raise BridgeError(f"{method} {path}: {e.code} {err.get('message') or err.get('error') or e.reason}"
+                              + (f" (op {err['op']})" if err.get("op") is not None else "")) from None
+        except urllib.error.URLError as e:
+            raise BridgeError(f"cannot reach {self.base}: {e.reason}") from None
+
+    def projects(self) -> list[dict]:
+        return self._call("GET", "/projects")
+
+    def project_id(self, ref: str) -> str:
+        """A project's id from an id or a (unique, case-insensitive) name."""
+        ps = self.projects()
+        for p in ps:
+            if p["id"] == ref:
+                return ref
+        hits = [p for p in ps if p["name"].lower() == ref.lower()]
+        if len(hits) != 1:
+            raise BridgeError(f"{'no' if not hits else 'several'} project named {ref!r}; "
+                              "yours: " + (", ".join("%s (%s)" % (q["name"], q["id"]) for q in ps) or "none"))
+        return hits[0]["id"]
+
+    def state(self, pid: str, tracks: list[str] | None = None, bars: tuple[int, int] | None = None) -> dict:
+        q = []
+        if tracks:
+            q.append("tracks=" + urllib.request.quote(",".join(tracks)))
+        if bars:
+            q.append(f"fromBar={bars[0]}&toBar={bars[1]}")
+        return self._call("GET", f"/projects/{pid}/state?format=json" + "".join("&" + x for x in q))
+
+    def history_since(self, pid: str, seq: int) -> list[dict]:
+        return self._call("GET", f"/projects/{pid}/history?since={seq}&limit=5")
+
+    def ops(self, pid: str, ops: list[dict], label: str) -> dict:
+        return self._call("POST", f"/projects/{pid}/ops", {"label": label[:40], "ops": ops})
+
+
+# --- the project's timeline, in ticks ------------------------------------------------
+
+
+def _frac(x) -> Fraction:
+    """A tick count from the state (JSON numbers, rounded to 3 decimals by the server) as an exact Fraction."""
+    return Fraction(x).limit_denominator(1000)
+
+
+class Timeline:
+    """Bar starts in ticks from the regions of a state (the same arithmetic as shared/src/timemap.ts at constant tempo;
+    ramps change time, not ticks, so ticks need no tempo except for a free bar's nominal length)."""
+
+    def __init__(self, state: dict):
+        self.ppq = state["meta"]["ppq"]
+        self.regions = sorted(state["regions"], key=lambda r: r["bar"])
+        self.bar_ticks: list[tuple[int, Fraction]] = []      # (first bar, ticks per bar) per region
+        bpm = Fraction(120)
+        for r in self.regions:
+            if r["kind"] == "free":
+                self.bar_ticks.append((r["bar"], Fraction(r["seconds"]).limit_denominator(1000) * bpm / 60 * self.ppq))
+            else:
+                bpm = Fraction(r["bpm"]).limit_denominator(1000)
+                self.bar_ticks.append((r["bar"], _frac(r["barTicks"])))
+        if not self.bar_ticks or self.bar_ticks[0][0] != 1:
+            raise BridgeError("the project has no region at bar 1")
+
+    def bar_start(self, bar: int) -> Fraction:
+        t = Fraction(0)
+        for i, (b0, bt) in enumerate(self.bar_ticks):
+            b1 = self.bar_ticks[i + 1][0] if i + 1 < len(self.bar_ticks) else None
+            if b1 is None or bar <= b1:
+                return t + (bar - b0) * bt
+            t += (b1 - b0) * bt
+        return t
+
+    def bar_of(self, tick: Fraction) -> int:
+        """The bar a tick is in (1-based)."""
+        t0 = Fraction(0)
+        for i, (b0, bt) in enumerate(self.bar_ticks):
+            b1 = self.bar_ticks[i + 1][0] if i + 1 < len(self.bar_ticks) else None
+            if b1 is None or tick < t0 + (b1 - b0) * bt:
+                return b0 + int((tick - t0) // bt)
+            t0 += (b1 - b0) * bt
+        return 1
+
+
+def _meter_text(r: dict) -> str:
+    return r["meter"] + (" " + "+".join(map(str, r["groups"])) if r.get("groups") else "")
+
+
+def _score_meter(r: dict) -> str:
+    """badmidi's spelling of a region's meter: '7/8' or '2+2+3/8'."""
+    num, den = r["meter"].split("/")
+    return f"{'+'.join(map(str, r['groups']))}/{den}" if r.get("groups") else f"{num}/{den}"
+
+
+# --- pull: state -> Score -----------------------------------------------------------
+
+
+@dataclass
+class Pulled:
+    score: Score
+    snapshot: dict
+    report: list[str] = field(default_factory=list)
+
+
+def _timeline_into(score: Score, state: dict, report: list[str]) -> None:
+    rs = sorted(state["regions"], key=lambda r: r["bar"])
+    tl = Timeline(state)
+    bpm = None
+    for i, r in enumerate(rs):
+        nxt = rs[i + 1] if i + 1 < len(rs) else None
+        if r["kind"] == "free":
+            q = tl.bar_ticks[i][1] / tl.ppq
+            score.free_bar(r["bar"], q)
+            continue
+        if r["bar"] > 1 and (i == 0 or rs[i - 1]["kind"] == "free" or _score_meter(rs[i - 1]) != _score_meter(r)):
+            score.meter_change(r["bar"], _score_meter(r))
+        if bpm is not None and abs(r["bpm"] - bpm) > 1e-9:
+            score.tempo_mark(r["bar"], bpm=r["bpm"])
+        bpm = r["bpm"]
+        if r.get("rampTo") is not None and nxt and abs(r["rampTo"] - r["bpm"]) > 1e-9:
+            (score.rit if r["rampTo"] < r["bpm"] else score.accel)(r["bar"], nxt["bar"], to=r["rampTo"])
+            bpm = r["rampTo"]
+    for m in state.get("markers", []):
+        if not any(s.bar == m["bar"] for s in score.sections):
+            score.section(m["bar"], m["label"], m.get("text"))
+
+
+def _start_score(state: dict) -> Score:
+    rs = sorted(state["regions"], key=lambda r: r["bar"])
+    first = next((r for r in rs if r["kind"] == "metered"), None)
+    key = state["meta"].get("key")
+    try:
+        scale = parse_key(key) if key else None
+    except Exception:
+        scale = None
+    return Score(state.get("name") or "Untitled", meter=Meter.parse(_score_meter(rs[0]) if rs[0]["kind"] == "metered" else "4/4"),
+                 key=scale or "C major", tempo=first["bpm"] if first else 120), scale is not None
+
+
+def suggest_meter(state: dict) -> str | None:
+    """A hint when the map is the 4/4 default but the clips say otherwise (migrated projects default to 4/4): the
+    candidate meter whose bars the clips' starts and lengths land on, if 4/4's bars don't fit and one does."""
+    rs = state["regions"]
+    if len(rs) != 1 or rs[0]["kind"] != "metered" or rs[0]["meter"] != "4/4":
+        return None
+    ppq = state["meta"]["ppq"]
+    spans = [Fraction(v).limit_denominator(1000) for t in state["tracks"] for c in t["clips"] if c["kind"] == "midi"
+             for v in (c["startTick"], c["lengthTicks"])]
+    for n in (n for t in state["tracks"] for c in t["clips"] if c["kind"] == "midi" for n in c["notes"]):
+        spans.append(Fraction(n["d"]).limit_denominator(1000))
+    spans = [s for s in spans if s]
+    if len(spans) < 4:
+        return None
+    fits = lambda bar: sum(1 for s in spans if s % bar == 0) / len(spans)
+    four = fits(4 * ppq)
+    best = max(((fits(Fraction(num * 4 * ppq, den)), f"{num}/{den}") for num, den in ((3, 4), (6, 8), (2, 4), (5, 4), (6, 4), (3, 8))),
+               key=lambda x: x[0], default=(0, ""))
+    return best[1] if best[0] >= 0.9 and best[0] > four + 0.2 else None
+
+
+def pull(state: dict, project: str = "", filter_info: dict | None = None) -> Pulled:
+    """A Score and a snapshot from a project state (see the module docstring)."""
+    ppq = state["meta"]["ppq"]
+    tl = Timeline(state)
+    report: list[str] = []
+    score, keyed = _start_score(state)
+    _timeline_into(score, state, report)
+
+    # notes per track at exact positions
+    tracks = []
+    skipped = []
+    for t in state["tracks"]:
+        if t["kind"] != "midi":
+            if t["clips"]:
+                skipped.append(f"{t['kind']} track {t['name']!r} ({len(t['clips'])} clips)")
+            continue
+        notes: list[dict] = []
+        clips: list[dict] = []
+        for c in t["clips"]:
+            if c["kind"] != "midi":
+                continue
+            if c.get("view") == "drums":
+                skipped.append(f"drum clip at {c['start']} on {t['name']!r} ({len(c['notes'])} notes)")
+                continue
+            looped = bool(c.get("loopTicks") or c.get("forever"))
+            clips.append({"id": c["id"], "startTick": c["startTick"], "lengthTicks": c["lengthTicks"], "looped": looped})
+            if looped:
+                report.append(f"{t['name']!r} clip at {c['start']} loops: its notes are shown as stored (one pass) and are read-only here")
+            for n in c["notes"]:
+                on = (_frac(c["startTick"]) + _frac(n["t"])) / ppq
+                notes.append({"id": n["id"], "clip": c["id"], "on": on, "dur": _frac(n["d"]) / ppq, "midi": n["pitch"], "vel": n["v"], "looped": looped})
+        tracks.append((t, clips, notes))
+    for s in skipped:
+        report.append(f"left out: {s}")
+
+    # key
+    if not keyed:
+        weights = [0.0] * 12
+        for _, _, ns in tracks:
+            for n in ns:
+                weights[n["midi"] % 12] += float(n["dur"])
+        if any(weights):
+            score.key = estimate_key(weights)
+            report.append(f"key: {score.key.name} (estimated: the project has none; setKey to fix)")
+    hint = suggest_meter(state)
+    if hint:
+        report.append(f"meter: the project is on the default 4/4 but its clips fit {hint} bars; if that is the music, "
+                      f'apply_ops [{{"op": "setRegion", "bar": 1, "meter": "{hint}"}}] and pull again')
+
+    taken: set[str] = set()
+    snap_tracks, baseline = [], []
+    for i, (t, clips, notes) in enumerate(tracks, 1):
+        if not notes:
+            # still a part, so a push can tell "unchanged" from "removed"; an empty one has nothing to place
+            name = _unique(_clean_name(t["name"]) or f"track {i}", taken)
+            score.part(name, instrument_for(None, t["name"]))
+            snap_tracks.append({"id": t["id"], "name": t["name"], "parts": [name], "clips": clips})
+            continue
+        # exact notes -> items -> lines, like the importer does (but nothing is quantized)
+        ns = []
+        for n in notes:
+            s = SourceNote(n["on"], n["dur"], n["midi"])
+            ns.append(_N(s))
+        by_pitch = defaultdict(list)
+        for n in sorted(ns, key=lambda n: (n.onset, -n.end)):
+            by_pitch[n.midi].append(n)
+        dup = 0
+        for same in by_pitch.values():                    # a note can't overlap itself in a part
+            prev = None
+            for n in same:
+                if prev and n.onset < prev.end:
+                    if n.onset == prev.onset:
+                        n.end = n.onset
+                        dup += 1
+                        continue
+                    prev.end = n.onset
+                prev = n
+        if dup:
+            report.append(f"{t['name']!r}: {dup} duplicate notes (same pitch, same onset) are not shown")
+        ns = [n for n in ns if n.end > n.onset]
+        chords = defaultdict(list)
+        for n in ns:
+            chords[(n.onset, n.end)].append(n)
+        items = [_Item(on, end, sorted(g, key=lambda n: n.midi), None) for (on, end), g in chords.items()]
+        lines = _lines(items)
+        end_t = max(it.end for l in lines for it in l)
+        bar, beat = score.position(end_t)
+        nbars = max(1, bar - 1 if beat == 1 else bar)
+        name = _unique(_clean_name(t["name"]) or f"track {i}", taken)
+        dev = " ".join(d.get("name") or d["type"] for d in t["devices"] if d["type"] != "mix")
+        inst = instrument_for(None, f"{t['name']} {dev}")
+        main_pitches = [n.midi for line in lines for it in line for n in it.notes]
+        _, lo, hi = INSTRUMENTS[inst]
+        rng = (Pitch(min(lo, *main_pitches)), Pitch(max(hi, *main_pitches)))
+        main = score.part(name, inst, range=rng)
+        parts = [main] + [main.voice(_unique(f"{name} {k}", taken)) for k in range(2, len(lines) + 1)]
+        for part, line in zip(parts, lines):
+            _place(score, part, line, [], nbars, 4)
+        snap_tracks.append({"id": t["id"], "name": t["name"], "parts": [p.name for p in parts], "clips": clips})
+        # the baseline: what the built part says, with the id of the project's note at that (onset, pitch)
+        ids = {(n["on"], n["midi"]): n for n in notes}
+        for part in parts:
+            for on, note in part.events():
+                for p in note.pitches:
+                    src = ids.get((on, p.midi))
+                    if src:
+                        baseline.append({"track": t["id"], "id": src["id"], "clip": src["clip"], "on": str(on), "dur": str(note.dur),
+                                         "midi": p.midi, "looped": src["looped"]})
+    snap = {
+        "project": project, "rev": state.get("rev"), "ppq": ppq, "tracks": snap_tracks, "notes": baseline,
+        "regions": state["regions"], "filter": filter_info or {},
+        "bars": score.bars if score.parts else 0,
+    }
+    return Pulled(score, snap, report)
+
+
+# --- push: Score + snapshot -> ops ---------------------------------------------------
+
+
+@dataclass
+class PushPlan:
+    ops: list[dict] = field(default_factory=list)
+    summary: list[str] = field(default_factory=list)
+    adds: int = 0
+    removes: int = 0
+    updates: int = 0
+    new_tracks: int = 0
+    new_parts: dict[int, list[str]] = field(default_factory=dict)    # addTrack op index -> the piece's part names for it
+
+    @property
+    def empty(self) -> bool:
+        return not self.ops
+
+
+def _events(score: Score, part_names: list[str]) -> list[tuple[Fraction, int, Fraction]]:
+    out = []
+    for name in part_names:
+        for on, note in score[name].events():
+            for p in note.pitches:
+                out.append((on, p.midi, note.dur))
+    return out
+
+
+def _tick(q: Fraction, ppq: int):
+    t = q * ppq
+    return int(t) if t.denominator == 1 else round(float(t), 4)
+
+
+def check_timeline(score: Score, snap: dict) -> None:
+    """Refuse when the piece's bars are not the project's: notes would land in the wrong places."""
+    tl = Timeline({"meta": {"ppq": snap["ppq"]}, "regions": snap["regions"]})
+    for bar in range(1, max(snap.get("bars", 0), score.bars) + 2):
+        want, got = tl.bar_start(bar), score.bar_start(bar) * snap["ppq"]
+        if want != got:
+            raise BridgeError(
+                f"the piece's bar {bar} starts at tick {float(got):g} but the project's at {float(want):g}: its meter or tempo "
+                "map differs from the project's. Push only sends notes; change the timeline with apply_ops "
+                "(addRegion / setRegion), then pull again")
+
+
+def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, preset: str | None = None) -> PushPlan:
+    """The ops that turn the snapshot's project into the piece."""
+    check_timeline(score, snap)
+    ppq = snap["ppq"]
+    tl = Timeline({"meta": {"ppq": ppq}, "regions": snap["regions"]})
+    pl = PushPlan()
+    known = {n for t in snap["tracks"] for n in t["parts"]}
+    # a voice line added to a known part's staff (part.voice(...)) belongs to that part's track
+    extra: dict[str, list[str]] = defaultdict(list)
+    for p in score.parts:
+        if p.name not in known and p.staff in known:
+            extra[next(t["id"] for t in snap["tracks"] if p.staff in t["parts"])].append(p.name)
+    lo, hi = _window(snap, tl)
+    base = defaultdict(list)
+    for n in snap["notes"]:
+        base[n["track"]].append(n)
+    clips_of = {t["id"]: t["clips"] for t in snap["tracks"]}
+    new_notes_total = 0
+
+    def window_ok(on: Fraction, what: str):
+        if not (lo <= on * ppq < hi):
+            raise BridgeError(f"{what}: a note at tick {float(on * ppq):g} is outside the pulled bars "
+                              f"({snap['filter'].get('fromBar')}-{snap['filter'].get('toBar')}); pull the whole project or widen --bars")
+
+    def clip_ops(track_ref: str, track_id: str | None, notes: list[tuple[Fraction, int, Fraction]], name: str):
+        """addNotes into covering clips; leftovers into new clips (one per run of nearby notes)."""
+        nonlocal new_notes_total
+        clips = [c for c in (clips_of.get(track_id) or []) if not c["looped"]] if track_id else []
+        rest = []
+        into: dict[str, list] = defaultdict(list)
+        for on, midi, dur in sorted(notes):
+            for c in clips:
+                a, b = _frac(c["startTick"]), _frac(c["startTick"]) + _frac(c["lengthTicks"])
+                if a <= on * ppq < b:
+                    into[c["id"]].append((on, midi, dur, a))
+                    break
+            else:
+                loops = [c for c in (clips_of.get(track_id) or []) if c["looped"] and _frac(c["startTick"]) <= on * ppq < _frac(c["startTick"]) + _frac(c["lengthTicks"])] if track_id else []
+                if loops:
+                    raise BridgeError(f"{name}: a new note at tick {float(on * ppq):g} falls inside a looped clip, which is read-only here")
+                rest.append((on, midi, dur))
+        for cid, ns in into.items():
+            pl.ops.append({"op": "addNotes", "clipId": cid, "notes": [{"p": m, "t": _tick(on - a / ppq, ppq), "d": _tick(d, ppq)} for on, m, d, a in ns]})
+        # new clips: from the first bar a run starts in to the bar its last note ends in; a gap of 8+ empty bars splits a run
+        runs: list[list] = []
+        for n in rest:
+            if runs and tl.bar_of(n[0] * ppq) - tl.bar_of(max(x[0] + x[2] for x in runs[-1]) * ppq) <= 8:
+                runs[-1].append(n)
+            else:
+                runs.append([n])
+        for run in runs:
+            b0 = tl.bar_of(run[0][0] * ppq)
+            end = max(on + d for on, _, d in run) * ppq
+            b1 = tl.bar_of(end) if end != tl.bar_start(tl.bar_of(end)) else tl.bar_of(end) - 1
+            start, stop = tl.bar_start(b0), tl.bar_start(max(b1, b0) + 1)
+            pl.ops.append({"op": "addMidiClip", "trackId": track_ref, "start": _tick(start / ppq, ppq), "length": _tick((stop - start) / ppq, ppq)})
+            cref = f"${len(pl.ops) - 1}"
+            pl.ops.append({"op": "addNotes", "clipId": cref, "notes": [{"p": m, "t": _tick(on - start / ppq, ppq), "d": _tick(d, ppq)} for on, m, d in run]})
+
+    # existing tracks: diff
+    for t in snap["tracks"]:
+        parts = [p for p in t["parts"] if any(p == x.name for x in score.parts)] + extra.get(t["id"], [])
+        new = _events(score, parts)
+        old = base.get(t["id"], [])
+        for on, _, _ in new:
+            window_ok(on, t["name"])
+        have = defaultdict(list)
+        for n in old:
+            have[(Fraction(n["on"]), n["midi"])].append(n)
+        added = []
+        for on, midi, dur in sorted(new):
+            hit = have.get((on, midi))
+            if hit:
+                n = hit.pop(0)
+                if Fraction(n["dur"]) != dur:
+                    if n["looped"]:
+                        raise BridgeError(f"{t['name']}: a note in a looped clip changed length; those are read-only here")
+                    pl.ops.append({"op": "updateNotes", "notes": [{"id": n["id"], "d": _tick(dur, ppq)}]})
+                    pl.updates += 1
+            else:
+                added.append((on, midi, dur))
+        gone = [n for ns in have.values() for n in ns]
+        if gone and not parts:
+            pl.summary.append(f"{t['name']}: all {len(gone)} notes removed (the part is gone from the piece)")
+        if any(n["looped"] for n in gone):
+            raise BridgeError(f"{t['name']}: notes in a looped clip were removed; those are read-only here")
+        if gone:
+            pl.ops.append({"op": "removeNotes", "ids": [n["id"] for n in gone]})
+            pl.removes += len(gone)
+        if added:
+            clip_ops(t["id"], t["id"], added, t["name"])
+            pl.adds += len(added)
+            new_notes_total += len(added)
+        if gone or added:
+            pl.summary.append(f"{t['name']}: +{len(added)} -{len(gone)} notes")
+
+    # new parts -> new tracks (voice lines "x 2" of a new part share its track)
+    groups: dict[str, list[str]] = {}
+    for p in score.parts:
+        if p.name in known or p.staff in known:
+            continue
+        groups.setdefault(p.staff, []).append(p.name)
+    for root, names in groups.items():
+        ev = _events(score, names)
+        if not ev:
+            continue
+        for on, _, _ in ev:
+            window_ok(on, root)
+        op = {"op": "addTrack", "name": root}
+        src = (like.get(root) or like.get("*")) if isinstance(like, dict) else like
+        if src:
+            op["like"] = src
+        elif preset:
+            op["preset"] = preset
+        pl.ops.append(op)
+        ref = f"${len(pl.ops) - 1}"
+        pl.new_parts[len(pl.ops) - 1] = names
+        clip_ops(ref, None, ev, root)
+        pl.new_tracks += 1
+        pl.adds += len(ev)
+        new_notes_total += len(ev)
+        pl.summary.append(f"new track {root!r}: {len(ev)} notes" + (f", like {src!r}" if src else (f", preset {preset!r}" if preset else ", default instrument (finnwave); --like <track> copies a track's sound")))
+    if len(pl.ops) > MAX_OPS or new_notes_total > MAX_NOTES:
+        raise BridgeError(f"too big for one batch ({len(pl.ops)} ops, {new_notes_total} notes; limits {MAX_OPS} / {MAX_NOTES})")
+    return pl
+
+
+def _window(snap: dict, tl: Timeline) -> tuple[Fraction, Fraction]:
+    f = snap.get("filter") or {}
+    lo = tl.bar_start(f["fromBar"]) if f.get("fromBar") else Fraction(0)
+    hi = tl.bar_start(f["toBar"] + 1) if f.get("toBar") else Fraction(10 ** 15)
+    return lo, hi
+
+
+# --- files -------------------------------------------------------------------------
+
+
+def snapshot_path(piece: str) -> str:
+    return os.path.splitext(piece)[0] + ".mobdaw.json"
+
+
+def _jsonable(o):
+    if isinstance(o, Fraction):
+        return str(o)
+    raise TypeError(type(o))
+
+
+def write_snapshot(path: str, snap: dict) -> None:
+    with open(path, "w") as f:
+        json.dump(snap, f, default=_jsonable, indent=1)
+
+
+def read_snapshot(path: str) -> dict:
+    if not os.path.exists(path):
+        raise BridgeError(f"no snapshot {path}: pull the project first (badmidi pull <project> -o piece.py)")
+    with open(path) as f:
+        return json.load(f)
+
+
+def _bars(text: str | None):
+    if not text:
+        return None
+    a, _, b = text.partition("-")
+    return int(a), int(b or a)
+
+
+# --- commands ----------------------------------------------------------------------
+
+
+def projects_main(argv: list[str]) -> int:
+    for p in Client().projects():
+        print(f"{p['id']}  {p['name']}  ({p['role']}{'' if p['canEdit'] else ', read-only now'})")
+    return 0
+
+
+def pull_main(argv: list[str]) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="badmidi pull", description="Pull a mobdaw project into a badmidi piece and a snapshot.")
+    ap.add_argument("project", help="project id or name")
+    ap.add_argument("-o", "--out", help="piece to write (default: <project name>.py)")
+    ap.add_argument("--tracks", help="comma-separated track names or ids: pull only these (push then touches only these)")
+    ap.add_argument("--bars", help="bar range such as 17-32: only notes touching them (push then only edits those bars)")
+    ap.add_argument("--phrase", type=int, default=4, help="bars per at() call (default 4)")
+    args = ap.parse_args(argv)
+    from .source import write_source
+    from .views import has_errors
+    c = Client()
+    pid = c.project_id(args.project)
+    tracks = [x for x in (args.tracks or "").split(",") if x] or None
+    bars = _bars(args.bars)
+    state = c.state(pid, tracks, bars)
+    name = next((p["name"] for p in c.projects() if p["id"] == pid), "project")
+    state["name"] = name
+    pulled = pull(state, pid, {k: v for k, v in (("tracks", tracks), ("fromBar", bars and bars[0]), ("toBar", bars and bars[1])) if v})
+    out = args.out or re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_").lower() + ".py"
+    write_source(pulled.score, out, "\n".join([f"pulled from mobdaw project {name!r} ({pid}) at rev {state.get('rev')}", *pulled.report]), phrase=args.phrase)
+    write_snapshot(snapshot_path(out), pulled.snapshot)
+    n = len(pulled.snapshot["notes"])
+    print(f"{name}: {len(pulled.score.parts)} parts, {n} notes, rev {state.get('rev')}")
+    for line in pulled.report:
+        print(line)
+    print(f"wrote {out} and {snapshot_path(out)}" + ("; check reports errors" if has_errors(pulled.score) else ""))
+    return 0
+
+
+def push_main(argv: list[str]) -> int:
+    import argparse
+    from .cli import load_score
+    ap = argparse.ArgumentParser(prog="badmidi push", description="Send a piece's edits back to its mobdaw project as one batch of ops.")
+    ap.add_argument("piece")
+    ap.add_argument("--apply", action="store_true", help="send the ops (default: print them)")
+    ap.add_argument("--label", default="badmidi push", help="the history entry's name (40 characters)")
+    ap.add_argument("--like", action="append", default=[], metavar="[PART=]TRACK",
+                    help="new tracks copy this track's devices (a bare TRACK applies to every new part); repeatable")
+    ap.add_argument("--preset", help="new tracks get this instrument device type (default finnwave)")
+    ap.add_argument("--json", action="store_true", help="print the ops as JSON")
+    args = ap.parse_args(argv)
+    from .views import has_errors
+    snap = read_snapshot(snapshot_path(args.piece))
+    score = load_score(args.piece)
+    if has_errors(score):
+        print(score.check())
+        raise BridgeError("the piece has errors: fix them (badmidi piece.py check) before pushing")
+    like: dict[str, str] = {}
+    for x in args.like:
+        k, eq, v = x.partition("=")
+        like[k if eq else "*"] = v if eq else k
+    p = plan(score, snap, like or None, args.preset)
+    if p.empty:
+        print("nothing to push: the piece matches the project as pulled")
+        return 0
+    print(f"{len(p.ops)} ops: +{p.adds} -{p.removes} ~{p.updates} notes, {p.new_tracks} new tracks")
+    for line in p.summary:
+        print("  " + line)
+    if args.json:
+        print(json.dumps(p.ops, indent=1))
+    if not args.apply:
+        print("dry run; --apply sends it as one history entry")
+        return 0
+    c = Client()
+    pid = snap["project"]
+    moved = c.history_since(pid, snap["rev"])
+    if moved:
+        raise BridgeError(f"the project moved since the pull (rev {snap['rev']}; {moved[-1]['username']}: {moved[-1]['text']!r}): pull again, "
+                          "merge your edits into the new piece, and push")
+    res = c.ops(pid, p.ops, args.label)
+    print(f"pushed as history entry {res['seq']} ({args.label!r}); revert it from the History panel or with the revert tool")
+    # refresh the snapshot (new ids, new rev) so the next push diffs against what the project is now
+    f = snap.get("filter") or {}
+    state = c.state(pid, f.get("tracks"), (f["fromBar"], f["toBar"]) if f.get("fromBar") else None)
+    state["name"] = score.title
+    # the piece is the reference for part names: rebuild the baseline against it
+    snap2 = pull(state, pid, f).snapshot
+    old_parts = {t["id"]: t["parts"] for t in snap["tracks"]}
+    for i, names in p.new_parts.items():
+        old_parts[res["ids"][i]] = names
+    for t in snap2["tracks"]:
+        t["parts"] = old_parts.get(t["id"], t["parts"])
+    write_snapshot(snapshot_path(args.piece), snap2)
+    return 0
+
+
+def main(cmd: str, argv: list[str]) -> int:
+    try:
+        return {"projects": projects_main, "pull": pull_main, "push": push_main}[cmd](argv)
+    except BridgeError as e:
+        sys.exit(f"badmidi {cmd}: {e}")

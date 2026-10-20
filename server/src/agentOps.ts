@@ -419,7 +419,13 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
         if (opt<string>('meter')) Object.assign(patch, parseMeter(i, op.meter as string), { groups: parseMeter(i, op.meter as string).groups })
         if ('rampTo' in op) patch.rampTo = op.rampTo == null ? undefined : bpmOf(i, op.rampTo as number)
       }
-      setRegion(doc, reg.id, patch)
+      if (!setRegion(doc, reg.id, patch)) {
+        // the default region of a project that never had its timeline edited is implied, not stored: write it out with the change
+        const next = { ...reg, ...patch } as Region
+        if (next.kind === 'metered' && patch.num != null && patch.groups === undefined && !('groups' in patch)) delete (next as { groups?: number[] }).groups
+        const { id: _id, ...fields } = next
+        return addRegion(doc, fields as Parameters<typeof addRegion>[1])
+      }
       return reg.id
     }
     case 'removeRegion': {

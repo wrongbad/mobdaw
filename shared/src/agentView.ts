@@ -113,7 +113,7 @@ export type AgentTrack = {
   devices: AgentDevice[]; clips: (AgentMidiClip | AgentAudioClip)[]
 }
 export type AgentRegion =
-  | { id: string; bar: number; kind: 'metered'; bpm: number; meter: string; rampTo?: number; beatTicks: number; barTicks: number }
+  | { id: string; bar: number; kind: 'metered'; bpm: number; meter: string; groups?: number[]; rampTo?: number; beatTicks: number; barTicks: number }
   | { id: string; bar: number; kind: 'free'; seconds: number }
 export type AgentView = {
   /** The latest history seq (set by the server). */
@@ -196,7 +196,7 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
     if (r.kind === 'free') return { id: r.id, bar: r.bar, kind: 'free', seconds: r3(r.length / rate) }
     const m = map.meterAt(r.bar)
     return {
-      id: r.id, bar: r.bar, kind: 'metered', bpm: r3(r.bpm), meter: `${r.num}/${r.den}`, ...(r.rampTo != null ? { rampTo: r3(r.rampTo) } : {}),
+      id: r.id, bar: r.bar, kind: 'metered', bpm: r3(r.bpm), meter: `${r.num}/${r.den}`, ...(r.groups ? { groups: r.groups } : {}), ...(r.rampTo != null ? { rampTo: r3(r.rampTo) } : {}),
       beatTicks: r3(m.beatTicks), barTicks: r3(m.barTicks),
     }
   })
@@ -232,7 +232,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
   for (const r of v.regions) {
     out.push(
       r.kind === 'free' ? `  bar ${r.bar}: free bar, ${r.seconds} s [${r.id}]`
-      : `  bar ${r.bar}: ${r.bpm} bpm ${r.meter}${r.rampTo != null ? ` ramping to ${r.rampTo}` : ''} (beat ${r.beatTicks} ticks, bar ${r.barTicks} ticks) [${r.id}]`)
+      : `  bar ${r.bar}: ${r.bpm} bpm ${r.meter}${r.groups ? ` (${r.groups.join('+')})` : ''}${r.rampTo != null ? ` ramping to ${r.rampTo}` : ''} (beat ${r.beatTicks} ticks, bar ${r.barTicks} ticks) [${r.id}]`)
   }
   if (v.markers.length) out.push(`markers: ${v.markers.map((m) => `bar ${m.bar} "${m.label}" [${m.id}]`).join(', ')}`)
   for (const t of v.tracks) {

@@ -550,6 +550,32 @@ the other parts are untouched (`melody --parts` the rest, before and after).
   `check` can no longer catch a miscount in what was already there (what you
   place afterwards is checked as usual).
 
+## Working in a mobdaw project
+
+When the music lives in a mobdaw project (a collaborative DAW with an agent API), the source of truth is the project and
+the piece is a scratch copy. Set `MOBDAW_TOKEN` (an API token from the account page; the model never needs to see it) and
+`MOBDAW_URL` (the site root; default `http://localhost:5173`):
+
+```
+badmidi projects                          # ids and names
+badmidi pull "My Song" -o song.py         # the project as a piece, plus song.mobdaw.json (the snapshot; keep it beside the piece)
+badmidi song.py form                      # every real track is in the score: use grid / lens on the whole ensemble
+badmidi push song.py                      # dry run: the ops, in words
+badmidi push song.py --apply --label "violin 3 descant" --like Violin   # one history entry
+```
+
+- `pull --tracks Cello,Viola --bars 17-32` reads a slice; the push then only touches that slice.
+- A part the project doesn't have becomes a new track. It gets the default synth unless you say `--like <track>` (copies that
+  track's whole device chain, fader and colour) or `--preset <device type>`.
+- Push sends **notes only**. A note is its track, onset and pitch: edits to length become `updateNotes`, moved notes are a remove
+  plus an add. Tempo, meter, markers and key belong to the project: if your piece's bars differ from the project's, push
+  refuses and says where. Change those with the mobdaw `apply_ops` tool (`setRegion`, `addMarker`), then pull again.
+- Push refuses if the project moved since the pull (someone else edited): pull again, redo your edit in the new piece.
+- New notes get the default velocity; dynamics marks are not translated. Drum-view and audio clips are left out of the pull,
+  and notes in looped clips are read-only. `pull` prints what it left out, and a meter hint when the project looks mis-metered.
+- One push is one history entry, so a person can revert it from the History panel. Say which checks you ran, and that the
+  audio is unheard.
+
 ## Adding an example
 
 Examples in `examples/` are part of the test suite. Each must define
@@ -595,6 +621,7 @@ badmidi/source.py    to_source: any Score -> piece source (what `badmidi import`
 badmidi/lilypond.py  LilyPond export, rendering, and verification against LilyPond's MIDI
 badmidi/loops.py     which Part.loop() spans can be engraved as repeats
 badmidi/render.py    wav through fluidsynth
+badmidi/bridge.py    pull/push against a mobdaw project (state -> Score, Score diff -> one batch of ops)
 badmidi/cli.py       the badmidi command
 ```
 

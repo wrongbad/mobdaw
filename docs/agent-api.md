@@ -134,6 +134,12 @@ password change), and acts as "<user> (api)" like any token. There are no refres
 client run the flow again. Redirect URIs must be https, loopback http (any port) or an app scheme, and match what the client
 registered.
 
+## Composing with badmidi
+`agent/badmidi/bridge.py` is a client for this API: `badmidi pull <project> -o piece.py` turns the state into a badmidi piece
+(every track, the timeline, markers) and `badmidi push piece.py --apply` sends the piece's note edits back as one batch, so a
+whole composing session is one history entry. See `agent/BRIDGE-PLAN.md` and `agent/AGENTS.md`; `agent/tests/e2e_live.py`
+runs the whole round trip against a local server.
+
 ## A suggested agent loop
 1. `list_projects`; pick the project. `wait_for_events` (no `since`) to get a cursor.
 2. Loop: `wait_for_events {since, wait: 25}`. For a chat event with `mentionsMe`, read the request.
