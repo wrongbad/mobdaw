@@ -26,6 +26,7 @@ export function createApp(ctx: Ctx, storage: Storage, collab: Collab, hub: Agent
   api.route('/projects/:id/samples', sampleRoutes(ctx, storage))
   api.route('/projects/:id/history', historyRoutes(ctx, collab))
   api.route('/agent', agentRoutes(ctx, agent))
+  api.route('/oauth', oauthRoutes(ctx))
   api.route('/uploads', uploadRoutes(ctx, storage, collab))
   if (storage.routes) api.route('/storage', storage.routes) // local driver; signature-authorized
   api.notFound((c) => c.json({ error: 'not_found' }, 404))
@@ -33,5 +34,5 @@ export function createApp(ctx: Ctx, storage: Storage, collab: Collab, hub: Agent
     console.error(e)
     return c.json({ error: 'internal' }, 500)
   })
-  return new Hono().route('/api', api).route('/mcp', mcpRoutes(ctx, agent)).route('/', oauthRoutes(ctx))
+  return new Hono().route('/api', api).route('/mcp', mcpRoutes(ctx, agent))
 }

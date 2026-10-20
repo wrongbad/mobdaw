@@ -9,6 +9,7 @@ import { OPS_HELP } from './agentOps.ts'
 import type { AgentUser } from './agentHub.ts'
 import { AgentError, type AgentService } from './agentService.ts'
 import { agentAuth, type AgentEnv } from './routes/agent.ts'
+import { oauthIssuer } from './oauth.ts'
 import type { Ctx } from './auth.ts'
 
 type Result = { content: { type: 'text'; text: string }[]; isError?: boolean }
@@ -84,7 +85,7 @@ export function mcpServerFor(svc: AgentService, user: AgentUser): McpServer {
 export function mcpRoutes(ctx: Ctx, svc: AgentService) {
   const r = new Hono<AgentEnv>()
   // (the challenge points OAuth-capable clients at the metadata in oauth.ts)
-  r.use('*', agentAuth(ctx, `Bearer resource_metadata="${ctx.config.publicUrl}/.well-known/oauth-protected-resource"`))
+  r.use('*', agentAuth(ctx, `Bearer resource_metadata="${oauthIssuer(ctx.config.publicUrl)}/.well-known/oauth-protected-resource"`))
   r.post('/', async (c) => {
     const server = mcpServerFor(svc, c.var.agent)
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })

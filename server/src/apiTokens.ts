@@ -37,8 +37,9 @@ export function revokeApiToken(ctx: Ctx, userId: number, id: number): string | n
   return row.token_hash
 }
 
-/** Revoke every token of the user (password change, account deletion). Returns their hashes. */
+/** Revoke every token of the user (password change, account deletion), and any OAuth code not yet exchanged for one. Returns their hashes. */
 export function revokeAllApiTokens(db: Db, userId: number): string[] {
+  db.prepare('DELETE FROM oauth_codes WHERE user_id = ?').run(userId)
   const hashes = (db.prepare('SELECT token_hash FROM api_tokens WHERE user_id = ?').all(userId) as { token_hash: string }[]).map((r) => r.token_hash)
   db.prepare('DELETE FROM api_tokens WHERE user_id = ?').run(userId)
   return hashes

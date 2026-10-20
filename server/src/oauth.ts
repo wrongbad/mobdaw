@@ -1,19 +1,29 @@
 // OAuth 2.1 for MCP clients (docs/agent-api.md): discovery metadata, dynamic client registration, authorization code + PKCE (S256).
 // Clients are public (no secret). The consent page runs on the browser's normal cookie session; what an exchange yields is an
 // ordinary API token (apiTokens.ts), named after the client, so revoking it on the account page works as it does for any token.
+//
+// Mounted at /api/oauth, which is also the issuer: in production only /mobdaw/api/*, /mobdaw/collab* and /mobdaw/mcp reach this
+// server (the rest of /mobdaw/* is the client's index.html), and the origin root is another site. With a path in the issuer, the
+// one metadata URL a client derives that lands under that prefix is "<issuer>/.well-known/openid-configuration", which clients
+// validate as an OpenID provider document; hence the OIDC fields below, though no ID tokens are issued.
 import { createHash, randomBytes } from 'node:crypto'
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
 import { getCookie } from 'hono/cookie'
 import { SESSION_COOKIE, hashToken, safeEqual, sessionUser, type Ctx } from './auth.ts'
-import { createApiToken } from './apiTokens.ts'
+import { NAME_MAX as TOKEN_NAME_MAX, createApiToken } from './apiTokens.ts'
 
 const CODE_MS = 5 * 60_000
 const CLIENTS_MAX = 2000
 const NAME_MAX = 60
 const REDIRECTS_MAX = 5
+const STATE_MAX = 500
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 const UNSAFE_SCHEMES = new Set(['javascript:', 'data:', 'file:', 'vbscript:', 'blob:', 'about:'])
+/** RFC 7636: an S256 challenge is the 43-character base64url SHA-256 of a 43–128 character verifier. */
+const CHALLENGE_RE = /^[A-Za-z0-9_-]{43}$/
+const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/
+const OAUTH_SUFFIX = ' (OAuth)'
 
 type ClientRow = { client_id: string; name: string; redirect_uris: string }
 
@@ -41,6 +51,17 @@ export function redirectAllowed(registered: string[], uri: string): boolean {
   })
 }
 
+/**
+ * Where approving sends the user, for the consent page. Anyone can register a client under any name, so the name proves nothing;
+ * the destination is what tells "Claude" from a lookalike that would receive the code itself.
+ */
+export function destination(uri: string): string {
+  const u = new URL(uri)
+  if (u.protocol === 'https:') return u.host
+  if (u.protocol === 'http:') return 'an app on this computer'
+  return `the app that opens "${u.protocol.slice(0, -1)}:" links`
+}
+
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`)
 const s256 = (verifier: string) => createHash('sha256').update(verifier).digest('base64url')
 
@@ -52,41 +73,48 @@ const page = (c: Context, title: string, body: string, status: 200 | 400 | 403 =
     'cache-control': 'no-store',
     'x-frame-options': 'DENY',
     'content-security-policy': "frame-ancestors 'none'",
+    'referrer-policy': 'no-referrer',
   })
+const errorPage = (c: Context, message: string, status: 400 | 403 = 400) => page(c, 'mobdaw', `<h1>mobdaw</h1><p class="err">${esc(message)}</p>`, status)
 
 type AuthParams = { client_id: string; redirect_uri: string; code_challenge: string; state: string }
 const PARAM_KEYS = ['client_id', 'redirect_uri', 'code_challenge', 'state'] as const
 
+/** The issuer (and base of every OAuth URL) for a server whose public URL is `publicUrl`. */
+export const oauthIssuer = (publicUrl: string) => `${publicUrl}/api/oauth`
+
 export function oauthRoutes(ctx: Ctx) {
   const { config, db } = ctx
   const r = new Hono()
-  const issuer = config.publicUrl
-  const oauthError = (c: Context, error: string, status: 400 | 401 = 400) => c.json({ error }, status, { 'cache-control': 'no-store' })
+  const issuer = oauthIssuer(config.publicUrl)
+  const oauthError = (c: Context, error: string) => c.json({ error }, 400, { 'cache-control': 'no-store' })
   const getClient = (id: string) => db.prepare('SELECT * FROM oauth_clients WHERE client_id = ?').get(id) as ClientRow | undefined
+  const fields = async (c: Context) => Object.fromEntries(Object.entries(await c.req.parseBody()).map(([k, v]) => [k, String(v)]))
 
-  // Discovery. Served under the app's base path; the 401 from /mcp names the protected-resource URL exactly, and clients that
-  // look for the authorization server's metadata by appending to the issuer find the OIDC-style path.
+  // Discovery. The 401 from /mcp names the protected-resource URL exactly.
   const open = cors({ origin: '*' })
   r.use('/.well-known/*', open)
-  r.use('/oauth/register', open)
-  r.use('/oauth/token', open)
+  r.use('/jwks', open)
+  r.use('/register', open)
+  r.use('/token', open)
   r.get('/.well-known/oauth-protected-resource', (c) =>
-    c.json({ resource: `${issuer}/mcp`, authorization_servers: [issuer], bearer_methods_supported: ['header'] }))
-  const metadata = (c: Context) =>
-    c.json({
-      issuer,
-      authorization_endpoint: `${issuer}/oauth/authorize`,
-      token_endpoint: `${issuer}/oauth/token`,
-      registration_endpoint: `${issuer}/oauth/register`,
-      response_types_supported: ['code'],
-      grant_types_supported: ['authorization_code'],
-      code_challenge_methods_supported: ['S256'],
-      token_endpoint_auth_methods_supported: ['none'],
-    })
-  r.get('/.well-known/oauth-authorization-server', metadata)
-  r.get('/.well-known/openid-configuration', metadata)
+    c.json({ resource: `${config.publicUrl}/mcp`, authorization_servers: [issuer], bearer_methods_supported: ['header'] }))
+  const metadata = {
+    issuer,
+    authorization_endpoint: `${issuer}/authorize`,
+    token_endpoint: `${issuer}/token`,
+    registration_endpoint: `${issuer}/register`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code'],
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['none'],
+  }
+  r.get('/.well-known/oauth-authorization-server', (c) => c.json(metadata))
+  r.get('/.well-known/openid-configuration', (c) =>
+    c.json({ ...metadata, jwks_uri: `${issuer}/jwks`, subject_types_supported: ['public'], id_token_signing_alg_values_supported: ['RS256'] }))
+  r.get('/jwks', (c) => c.json({ keys: [] }))
 
-  r.post('/oauth/register', async (c) => {
+  r.post('/register', async (c) => {
     const body = await c.req.json().catch(() => null)
     const uris = body?.redirect_uris
     if (!Array.isArray(uris) || !uris.length || uris.length > REDIRECTS_MAX || !uris.every(validRedirect)) {
@@ -106,11 +134,12 @@ export function oauthRoutes(ctx: Ctx) {
   /** The request's parameters, checked. A bad client or redirect is shown to the user, never redirected to. */
   const checkAuthorize = (q: Record<string, string>): { error: string } | { client: ClientRow; p: AuthParams; redirect: URL } => {
     const client = getClient(q.client_id ?? '')
-    if (!client) return { error: 'Unknown client.' }
+    if (!client) return { error: 'Unknown client. Start the connection again from the app.' }
     if (!redirectAllowed(JSON.parse(client.redirect_uris), q.redirect_uri ?? '')) return { error: 'This redirect address is not registered for the client.' }
     const p = Object.fromEntries(PARAM_KEYS.map((k) => [k, q[k] ?? ''])) as AuthParams
     return { client, p, redirect: new URL(p.redirect_uri) }
   }
+  const validParams = (p: AuthParams) => CHALLENGE_RE.test(p.code_challenge) && p.state.length <= STATE_MAX
   const back = (redirect: URL, state: string, params: Record<string, string>) => {
     for (const [k, v] of Object.entries(params)) redirect.searchParams.set(k, v)
     if (state) redirect.searchParams.set('state', state)
@@ -118,13 +147,13 @@ export function oauthRoutes(ctx: Ctx) {
   }
   const hidden = (p: AuthParams) => PARAM_KEYS.map((k) => `<input type="hidden" name="${k}" value="${esc(p[k])}">`).join('')
 
-  r.get('/oauth/authorize', (c) => {
+  r.get('/authorize', (c) => {
     const q = c.req.query()
     const checked = checkAuthorize(q)
-    if ('error' in checked) return page(c, 'mobdaw', `<h1>mobdaw</h1><p class="err">${esc(checked.error)}</p>`, 400)
+    if ('error' in checked) return errorPage(c, checked.error)
     const { client, p, redirect } = checked
-    if (q.response_type !== 'code' || q.code_challenge_method !== 'S256' || !p.code_challenge) {
-      return c.redirect(back(redirect, p.state, { error: 'invalid_request' }))
+    if (q.response_type !== 'code' || q.code_challenge_method !== 'S256' || !validParams(p)) {
+      return c.redirect(back(redirect, p.state.slice(0, STATE_MAX), { error: 'invalid_request' }))
     }
     const user = sessionUser(ctx, getCookie(c, SESSION_COOKIE))
     if (!user) {
@@ -134,20 +163,22 @@ export function oauthRoutes(ctx: Ctx) {
 <script>f.onsubmit=async(ev)=>{ev.preventDefault();const r=await fetch(${JSON.stringify(config.basePath + '/api/auth/login')},{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:f.username.value,password:f.password.value})});
 if(r.ok)location.reload();else e.textContent=r.status===429?'Too many attempts, try again later.':'Wrong username or password.'}</script>`)
     }
-    return page(c, 'Allow access to mobdaw', `<h1>Allow access?</h1><p><b>${esc(client.name)}</b> wants to read and edit your mobdaw projects as <b>${esc(user.username)} (api)</b>.</p>
+    return page(c, 'Allow access to mobdaw', `<h1>Allow access?</h1><p>An app calling itself <b>${esc(client.name)}</b> wants to read and edit all your mobdaw projects as <b>${esc(user.username)} (api)</b>.</p>
+<p>Allowing sends you to <b>${esc(destination(p.redirect_uri))}</b>. Only allow if you just started this there.</p>
 <form method="post">${hidden(p)}<div class="row"><button name="decision" value="allow">Allow</button><button name="decision" value="deny">Deny</button></div></form>
 <small>You can revoke the access on your account page under API tokens.</small>`)
   })
 
-  r.post('/oauth/authorize', async (c) => {
+  r.post('/authorize', async (c) => {
     // The cookie is SameSite=Lax, which already keeps a cross-site form from carrying it; this checks the origin as well.
-    if (c.req.header('origin') !== new URL(config.publicUrl).origin) return page(c, 'mobdaw', '<p class="err">Request refused.</p>', 403)
-    const form = Object.fromEntries(Object.entries(await c.req.parseBody()).map(([k, v]) => [k, String(v)]))
+    if (c.req.header('origin') !== new URL(config.publicUrl).origin) return errorPage(c, 'Request refused.', 403)
+    const form = await fields(c)
     const checked = checkAuthorize(form)
-    if ('error' in checked) return page(c, 'mobdaw', `<h1>mobdaw</h1><p class="err">${esc(checked.error)}</p>`, 400)
+    if ('error' in checked) return errorPage(c, checked.error)
     const { client, p, redirect } = checked
+    if (!validParams(p)) return errorPage(c, 'Bad request.')
     const user = sessionUser(ctx, getCookie(c, SESSION_COOKIE))
-    if (!user) return page(c, 'mobdaw', '<p class="err">Your session ended. Go back and sign in again.</p>', 403)
+    if (!user) return errorPage(c, 'Your session ended. Go back and sign in again.', 403)
     if (form.decision !== 'allow') return c.redirect(back(redirect, p.state, { error: 'access_denied' }), 303)
     const code = randomBytes(32).toString('base64url')
     const now = Date.now()
@@ -157,19 +188,17 @@ if(r.ok)location.reload();else e.textContent=r.status===429?'Too many attempts, 
     return c.redirect(back(redirect, p.state, { code }), 303)
   })
 
-  r.post('/oauth/token', async (c) => {
-    const form = Object.fromEntries(Object.entries(await c.req.parseBody()).map(([k, v]) => [k, String(v)]))
+  r.post('/token', async (c) => {
+    const form = await fields(c)
     if (form.grant_type !== 'authorization_code') return oauthError(c, 'unsupported_grant_type')
     // Single use: the code is gone whether or not the rest checks out.
-    const hash = hashToken(form.code ?? '')
-    const row = db.prepare('SELECT * FROM oauth_codes WHERE code_hash = ?').get(hash) as
+    const row = db.prepare('DELETE FROM oauth_codes WHERE code_hash = ? RETURNING *').get(hashToken(form.code ?? '')) as
       { client_id: string; user_id: number; redirect_uri: string; code_challenge: string; expires_at: number } | undefined
-    db.prepare('DELETE FROM oauth_codes WHERE code_hash = ?').run(hash)
     const client = row && getClient(row.client_id)
     if (!row || !client || row.expires_at <= Date.now()) return oauthError(c, 'invalid_grant')
     if (form.client_id !== row.client_id || form.redirect_uri !== row.redirect_uri) return oauthError(c, 'invalid_grant')
-    if (!form.code_verifier || form.code_verifier.length > 200 || !safeEqual(s256(form.code_verifier), row.code_challenge)) return oauthError(c, 'invalid_grant')
-    const made = createApiToken(ctx, row.user_id, `${client.name} (OAuth)`)
+    if (!VERIFIER_RE.test(form.code_verifier ?? '') || !safeEqual(s256(form.code_verifier), row.code_challenge)) return oauthError(c, 'invalid_grant')
+    const made = createApiToken(ctx, row.user_id, client.name.slice(0, TOKEN_NAME_MAX - OAUTH_SUFFIX.length) + OAUTH_SUFFIX)
     return c.json({ access_token: made.token, token_type: 'Bearer' }, 200, { 'cache-control': 'no-store' })
   })
 
