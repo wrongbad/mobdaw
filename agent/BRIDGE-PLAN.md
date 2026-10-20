@@ -61,9 +61,19 @@ Each friction point above now has an answer; `tests/e2e_live.py` drives all of i
 6. **Batch limits** were raised (5000 ops, 100000 notes, 32 MB body) so a whole piece is one history entry.
    Session mechanics are unchanged (restart after `claude mcp add`); scripts read the token from the environment.
 
+## Dynamics, drums and loops
+- **Velocity <-> dynamics.** `pull` infers `dyn` marks from stored velocities; the snapshot keeps each note's project velocity (`vel`) and
+  the velocity the pulled piece performs (`pv`). `push` sends `v` only for notes whose performed velocity differs from `pv` and for
+  new notes, so untouched notes keep their human velocities. After a push the baseline is rebuilt from the piece that was pushed.
+- **Drums.** badmidi has a `drums` instrument (MIDI channel 10, not in grid/lens/form by default). A drum track is a part with the
+  keys named in the pull report; new drum parts are pushed as drum-view clips and need `--like`.
+- **Loops.** A clip with `loopTicks` is unrolled for the views and registered as a badmidi loop; ids belong to pass 1, later passes are
+  ghosts that push checks are identical.
+
 ## Not done
-- Velocity and dynamics: new notes get the default velocity; badmidi's dynamics marks are not translated.
-- Drum-view and audio clips are left out of a pull (reported); looped clips are read-only (their stored pass is shown).
+- Hairpins, articulations (except a drum accent) and ghost-note velocities are not inferred; per-hit drum velocity variation
+  survives in the project but is flattened to level + accent in the piece.
+- Audio clips are left out of a pull (reported). `forever` and partial-pass loops are read-only.
 - A track's clip boundaries are not editable from a piece: new notes outside every clip get a new clip.
 - Free regions round-trip through the nominal-tick bijection (`free_bar` of seconds at the previous tempo).
 - The migration's meter guess is only reported, not fixed; mobdaw's UI could offer the same suggestion.

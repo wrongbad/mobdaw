@@ -68,7 +68,7 @@ class Bridge(unittest.TestCase):
             self.assertEqual(clip["start"], 2 * 2880)          # bar 3 in 3/4
             self.assertEqual(clip["length"], 2 * 2880)
             adds = next(o for o in pl.ops if o["op"] == "addNotes" and o["clipId"].startswith("$"))["notes"]
-            self.assertIn({"op": "addNotes", "clipId": "c1", "notes": [{"p": 65, "t": 8640, "d": 2880}]}, pl.ops)
+            self.assertIn({"op": "addNotes", "clipId": "c1", "notes": [{"p": 65, "t": 8640, "d": 2880, "v": 98}]}, pl.ops)
             self.assertEqual(pl.removes, 1)                          # the cello's old last note
             self.assertEqual([(n["p"], n["t"], n["d"]) for n in adds], [(69, 0, 2880), (67, 2880, 2880)])
 
@@ -117,21 +117,85 @@ class Bridge(unittest.TestCase):
         self.assertEqual(suggest_meter(st), "3/4")
         self.assertIsNone(suggest_meter(state()))
 
-    def test_looped_and_drum_clips(self):
+    def test_dynamics_round_trip_and_edit(self):
         st = state()
-        st["tracks"][0]["clips"].append({"id": "c2", "kind": "midi", "start": "5.1.0", "startTick": 11520, "lengthTicks": 5760, "length": "x", "end": "x",
-                                         "loopTicks": 2880, "notes": [note(9, 36, 0, 480)]})
-        st["tracks"][0]["clips"].append({"id": "c3", "kind": "midi", "view": "drums", "start": "9.1.0", "startTick": 23040, "lengthTicks": 2880, "length": "x", "end": "x",
-                                         "notes": [note(10, 36, 0, 480)]})
+        vels = [40, 40, 100, 100]
+        for n, v in zip(st["tracks"][0]["clips"][0]["notes"], vels):
+            n["v"] = v
         p = pull(st, "P")
-        self.assertTrue(any("loops" in r for r in p.report) and any("drum" in r for r in p.report))
+        self.assertEqual([str(m.value) for _, m in p.score["cello"].marks() if hasattr(m, "value")], ["pp", "f"])
         with tempfile.TemporaryDirectory() as tmp:
             path = piece(p, tmp)
             score = load_score(path)
-            self.assertTrue(plan(score, read_snapshot(snapshot_path(path))).empty)
-            score["cello"].clear(5, 5)
+            snap = read_snapshot(snapshot_path(path))
+            self.assertTrue(plan(score, snap).empty, "unchanged dynamics must not rewrite velocities")
+            # ff from bar 2 only reaches bar 3, where the project's own f takes over: just that bar's note changes
+            score["cello"].mark(2, "ff")
+            pl = plan(score, snap)
+            upd = [o for o in pl.ops if o["op"] == "updateNotes"]
+            self.assertTrue(upd and all("v" in n and "d" not in n for o in upd for n in o["notes"]))
+            self.assertEqual({n["id"] for o in upd for n in o["notes"]}, {"n1"})
+            self.assertTrue(all(n["v"] >= 108 for o in upd for n in o["notes"]))
+
+    def test_drums_and_loops(self):
+        st = state()
+        drum = {"id": "t2", "name": "Drums", "kind": "midi", "muted": False, "soloed": False,
+                "devices": [{"id": "k", "type": "lofi drum", "typeId": 5, "name": "Kick", "key": 36, "params": {}},
+                            {"id": "h", "type": "lofi drum", "typeId": 5, "name": "Hat", "key": 42, "params": {}},
+                            {"id": "m", "type": "mix", "typeId": 9, "params": {}}],
+                "clips": [{"id": "d1", "kind": "midi", "view": "drums", "start": "1.1.0", "startTick": 0, "lengthTicks": 2880 * 4, "length": "4 bars", "end": "5.1.0",
+                           "loopTicks": 2880, "notes": [note(20, 36, 0, 240, 120), note(21, 42, 960, 120, 70), note(22, 42, 1920, 120, 70)]}]}
+        st["tracks"].append(drum)
+        p = pull(st, "P")
+        self.assertFalse(has_errors(p.score), p.score.check())
+        self.assertTrue(p.score["drums"].drums)
+        self.assertEqual(len(p.score.loops), 1)
+        self.assertEqual(p.score.loops[0].times, 4)
+        self.assertEqual(len([n for n in p.snapshot["notes"] if n["track"] == "t2"]), 3, "only pass 1 has ids")
+        self.assertTrue(any("drums" in r and "C2 = Kick" in r for r in p.report))
+        self.assertNotIn("drums", p.score.grid(bars=(1, 2)))          # harmony views skip drum kits
+        self.assertNotIn("drums", p.score.form())
+        self.assertIn("drums", p.score.melody())
+        self.assertIn("drums", p.score.grid(bars=(1, 2), parts=["drums"]))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = piece(p, tmp)
+            with open(path) as f:
+                self.assertIn(".loop(", f.read())
+            score = load_score(path)
+            snap = read_snapshot(snapshot_path(path))
+            self.assertTrue(plan(score, snap).empty)
+            mid = os.path.join(tmp, "x.mid")
+            score.write_midi(mid)
+            with open(mid, "rb") as f:
+                self.assertIn(b"\x99", f.read())                     # note-on on channel 10 (index 9)
+            # a hit added to the loop pattern (pass 1): one addNotes into the looped clip, local time
+            score2 = load_score(path)
+            d = score2["drums"]
+            d.clear(1, 4)
+            d.loop(1, "C2.e R.e D2.q R.q |", times=4)
+            pl = plan(score2, snap)
+            add = [o for o in pl.ops if o["op"] == "addNotes"]
+            self.assertEqual(len(add), 1)
+            self.assertEqual(add[0]["clipId"], "d1")
+            self.assertEqual({(n["p"], n["t"]) for n in add[0]["notes"]}, {(38, 960)})
+            self.assertEqual(pl.removes, 2)                           # the two hats are gone from the pattern
+            # an edit to one pass alone is refused
+            score3 = load_score(path)
+            score3["drums"].clear(3, 3)
+            with self.assertRaises(BridgeError) as e:
+                plan(score3, snap)
+            self.assertIn("differs from pass 1", str(e.exception))
+            # a new drum part needs --like; with it: a looped drum-view clip on a copied track
+            score4 = load_score(path)
+            d2 = score4.part("perc", "drums")
+            d2.loop(2, "E2.q R.q R.q |", times=2)
             with self.assertRaises(BridgeError):
-                plan(score, read_snapshot(snapshot_path(path)))
+                plan(score4, snap)
+            pl = plan(score4, snap, like="Drums")
+            clip = next(o for o in pl.ops if o["op"] == "addMidiClip")
+            self.assertEqual((clip["view"], clip["loop"], clip["length"], clip["start"]), ("drums", 2880, 5760, 2880))
+            notes = next(o for o in pl.ops if o["op"] == "addNotes" and o["clipId"].startswith("$"))["notes"]
+            self.assertEqual([(n["p"], n["t"]) for n in notes], [(40, 0)])
 
 
 if __name__ == "__main__":

@@ -22,6 +22,9 @@ INSTRUMENTS: dict[str, tuple[int, int, int]] = {
     "horn": (60, 35, 77), "oboe": (68, 58, 93), "english horn": (69, 52, 81),
     "bassoon": (70, 34, 76), "clarinet": (71, 50, 94), "piccolo": (72, 74, 108),
     "flute": (73, 60, 96), "recorder": (74, 72, 98),
+    # a drum kit: pitches are drum keys (GM: C2 = 36 kick, D2 = 38 snare, F#2 = 42 closed hat), played on MIDI channel 9;
+    # left out of grid / lens / form unless named with parts=
+    "drums": (0, 0, 127),
 }
 
 
@@ -170,6 +173,11 @@ class Part:
         self.pan = pan
         self.placements: list[tuple[Fraction, Motif]] = []
         self._last_end = Fraction(0)
+
+    @property
+    def drums(self) -> bool:
+        """A drum kit: its pitches name drums, not notes (see INSTRUMENTS)."""
+        return self.instrument == "drums"
 
     def at(self, bar: int, *material, beat=1) -> "Part":
         return self._place(self.score.time(bar, beat), material)
@@ -450,6 +458,10 @@ class Score:
         first appearance; parts sharing a staff stay in creation order."""
         staves = list(dict.fromkeys(p.staff for p in self.parts))
         return [p for st in staves for p in self.parts if p.staff == st]
+
+    def pitched_parts(self) -> list[Part]:
+        """ordered_parts() without drum kits: what harmony and counterpoint are read from."""
+        return [p for p in self.ordered_parts() if not p.drums]
 
     def piano(self, upper: str = "rh", lower: str = "lh", name: str = "Piano") -> tuple[Part, Part]:
         """A grand staff: right hand (treble) and left hand (bass), one MIDI channel."""

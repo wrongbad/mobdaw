@@ -160,6 +160,7 @@ Instruments:
 - **voices:** choir, soprano, alto, tenor, bass
 - **brass:** trumpet, trombone, tuba, horn
 - **woodwinds:** oboe, english horn, bassoon, clarinet, piccolo, flute, recorder
+- **drums:** `drums`, a kit whose pitches are drum keys (GM: `C2` kick, `D2` snare, `F#2` closed hat, `A#2` open hat), played on MIDI channel 10. `grid`, `lens` and `form` leave it out (it has no harmony); name it in `--parts` to include it. `melody` and `check` always show it.
 
 For anything else, use the nearest sound and set `range=` (the fantasia's
 free-bass accordion is a reed organ with accordion ranges).
@@ -571,8 +572,20 @@ badmidi push song.py --apply --label "violin 3 descant" --like Violin   # one hi
   plus an add. Tempo, meter, markers and key belong to the project: if your piece's bars differ from the project's, push
   refuses and says where. Change those with the mobdaw `apply_ops` tool (`setRegion`, `addMarker`), then pull again.
 - Push refuses if the project moved since the pull (someone else edited): pull again, redo your edit in the new piece.
-- New notes get the default velocity; dynamics marks are not translated. Drum-view and audio clips are left out of the pull,
-  and notes in looped clips are read-only. `pull` prints what it left out, and a meter hint when the project looks mis-metered.
+- **Dynamics.** `pull` reads each part's velocities back as dynamics (the velocity less the metric accent, smoothed over three notes,
+  as the nearest of `ppp`..`fff`; a mark where it changes), so `p`, `f` and friends in the piece mean what the project plays.
+  `push` computes every note's performed velocity from the piece's markings and sends a velocity only for a note whose performed
+  velocity changed since the pull: untouched notes keep their human velocities, new notes get the performed one. Change a part's
+  loudness by editing its marks (`cello.mark(5, "pp")`); note that `part.clear(a, b)` also removes the marks in those bars, which
+  rewrites the velocities there. Hairpins and articulations other than drum accents are not inferred.
+- **Drums.** A track with drum-view clips (or only one-key drum devices) is a `drums` part. `pull` prints its key legend
+  (`C2 = Kick, F#2 = Hat`), writes a hit above the part's level as an accent `>` (a louder hit), and keeps the part's level as one dynamic.
+  A new drum part needs `--like <drum track>` (a kit is one keyed device per drum, which a piece cannot describe) and becomes a
+  drum-view clip.
+- **Loops.** A looped clip (whole passes) is `part.loop(bar, pattern, times=n)` in the piece. The project stores one pass, so push edits
+  the pattern: change pass 1, keep the passes identical, or it refuses and says which pass differs. A new `p.loop()` on a new part
+  becomes a looped clip. Partial-pass loops and `forever` clips are shown and read-only.
+- Audio clips are left out of the pull. `pull` prints what it left out, and a meter hint when the project looks mis-metered.
 - One push is one history entry, so a person can revert it from the History panel. Say which checks you ran, and that the
   audio is unheard.
 

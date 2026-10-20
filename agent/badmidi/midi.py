@@ -63,8 +63,11 @@ def midi_bytes(score: Score) -> bytes:
 
     # one MIDI channel per part.channel (a piano's hands share one), skipping GM percussion
     free = [c for c in range(16) if c != 9]
-    keys = list(dict.fromkeys(p.channel for p in score.parts))
+    keys = list(dict.fromkeys(p.channel for p in score.parts if not p.drums))
     channel_of = {k: free[i % len(free)] for i, k in enumerate(keys)}
+    drum_keys = [p.channel for p in score.parts if p.drums]
+    channel_of.update({k: 9 for k in drum_keys})
+    keys += [k for k in dict.fromkeys(drum_keys)]
     n = len(keys)
 
     for part in score.parts:
@@ -72,7 +75,9 @@ def midi_bytes(score: Score) -> bytes:
         first_in_channel = next(p for p in score.parts if p.channel == part.channel) is part
         at = perform.warp(part)           # this part's playback clock (drift)
         evs = [(0, 0, _meta(0x03, part.name.encode()))]
-        if first_in_channel:
+        if first_in_channel and part.drums:
+            pass                          # the GM kit: no program change, fixed channel
+        elif first_in_channel:
             i = keys.index(part.channel)
             pan = part.pan if part.pan is not None else (64 if n == 1 else round(34 + 60 * i / (n - 1)))
             evs += [(0, 0, bytes([0xC0 | ch, part.program])), (0, 0, bytes([0xB0 | ch, 10, pan]))]

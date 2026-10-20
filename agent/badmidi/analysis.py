@@ -168,7 +168,7 @@ def observe(score, parts=None) -> list[Observation]:
     of each part and the bottom of each part below it: parallel fifths and
     octaves, and voices crossing."""
     from .core import Pitch, spelling
-    sel = [score[n] for n in parts] if parts else score.ordered_parts()
+    sel = [score[n] for n in parts] if parts else score.pitched_parts()
     evs = {p.name: p.events() for p in sel}
     starts = {k: [s for s, _ in e] for k, e in evs.items()}
     times = sorted({s for e in evs.values() for s, _ in e})

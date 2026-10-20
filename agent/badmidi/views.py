@@ -48,9 +48,10 @@ def _rest_tokens(d: Fraction) -> list[str]:
     return out
 
 
-def _select(score: Score, parts) -> list[Part]:
+def _select(score: Score, parts, pitched: bool = False) -> list[Part]:
+    """The named parts, else all of them (all but drum kits when `pitched`: harmony and counterpoint views)."""
     if not parts:
-        return score.ordered_parts()
+        return score.pitched_parts() if pitched else score.ordered_parts()
     names = [parts] if isinstance(parts, str) else list(parts)
     return [score[n] for n in names]
 
@@ -266,7 +267,7 @@ def grid(score: Score, bars=None, parts=None, step=None, chords: bool = True,
     """With collapse, a bar whose rows (onsets, notes, chords) repeat the bar
     before is folded into one line, 'bars 12-19: same as 11'."""
     first, last = _bar_range(score, bars, section)
-    sel = _select(score, parts)
+    sel = _select(score, parts, pitched=True)
     t0, t1 = score.time(first), score.time(last + 1)
     evs = {p.name: p.events() for p in score.parts}
     starts = {name: [s for s, _ in e] for name, e in evs.items()}
@@ -295,7 +296,7 @@ def grid(score: Score, bars=None, parts=None, step=None, chords: bool = True,
             label = ("", "", "")
             if chords:
                 midis = []
-                for p in score.parts:
+                for p in score.pitched_parts():
                     hit = _sounding(evs[p.name], starts[p.name], t)
                     if hit and not hit[1].is_rest:
                         midis.extend(x.midi for x in hit[1].pitches)
@@ -563,7 +564,7 @@ def form(score: Score, bars=None, section: str | None = None, every: int | None 
     before. Descriptive only."""
     from .analysis import set_label
     first, last = _bar_range(score, bars, section)
-    sel = _select(score, parts)
+    sel = _select(score, parts, pitched=True)
     names = [p.name for p in sel]
     evs = {p.name: [(t, n) for t, n in p.events() if not n.is_rest] for p in sel}
     data = []
