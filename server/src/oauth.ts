@@ -73,7 +73,8 @@ const page = (c: Context, title: string, body: string, status: 200 | 400 | 403 =
     'cache-control': 'no-store',
     'x-frame-options': 'DENY',
     'content-security-policy': "frame-ancestors 'none'",
-    'referrer-policy': 'no-referrer',
+    // Not 'no-referrer': with it, browsers send "Origin: null" on the consent form's POST and the origin check refuses it.
+    'referrer-policy': 'same-origin',
   })
 const errorPage = (c: Context, message: string, status: 400 | 403 = 400) => page(c, 'mobdaw', `<h1>mobdaw</h1><p class="err">${esc(message)}</p>`, status)
 

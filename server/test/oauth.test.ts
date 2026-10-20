@@ -104,7 +104,10 @@ describe('authorization', () => {
     const { client_id } = await (await register()).json()
     const url = `${t.base}${O}/authorize?${form(authParams(client_id, pkce().challenge))}`
     expect(await (await fetch(url)).text()).toContain('Sign in')
-    const consent = await (await fetch(url, { headers: { cookie } })).text()
+    const res = await fetch(url, { headers: { cookie } })
+    // 'no-referrer' makes browsers send "Origin: null" on the form's POST, which the origin check refuses
+    expect(res.headers.get('referrer-policy')).toBe('same-origin')
+    const consent = await res.text()
     expect(consent).toContain('admin (api)')
     expect(consent).toContain('an app on this computer')
   })
