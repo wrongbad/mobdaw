@@ -29,6 +29,7 @@ import { discardTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes
 import type { Session } from '../project/session'
 import { shouldAutoStop, type MeterSample } from '../audio/autoStop'
 import { chatPanel } from './chat'
+import { historyPanel } from './history'
 import { api } from '../api'
 import { automateMenu, type AutoInfo } from './automation'
 import { mountLaneDrawers, mountMasterDrawers, type DrawCtx } from './drawers'
@@ -119,6 +120,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const [memberNames, setMemberNames] = createSignal<string[]>([])
   if (!s.local && !s.snapshot) api.project(s.projectId).then((d) => setMemberNames(d.members.map((m) => m.username)), () => {})
   const [chatOpen, setChatOpen] = createSignal(false)
+  const [historyOpen, setHistoryOpen] = createSignal(false)
   // pixels per second and the sample rate, for the bindings that place things on the timeline (the remote playheads)
   const [rate, setRate] = createSignal(DEFAULT_SAMPLE_RATE)
   const [pps, setPps] = createSignal(80)
@@ -148,6 +150,13 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     onMentions: setUnreadMentions,
     names: () => [...memberNames(), ...store.remote().map((r) => r.user.username)],
   })
+  // the shared change log: only for a live cloud session (snapshots and local projects have no server to log or revert)
+  const hist = s.provider ? historyPanel({
+    doc,
+    revert: (seq) => api.revertHistory(s.projectId, seq),
+    restore: (seq) => api.restoreHistory(s.projectId, seq),
+    say,
+  }) : null
   /** The project's name in the bar: a button that opens the project settings (rename, sharing, audio input). */
   function projectTitle() {
     const el = h('button', { className: 'project-name', title: 'project settings', onpointerdown: (e) => e.stopPropagation(), onclick: () => {
@@ -208,10 +217,19 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     if (t) updateTrack(doc, t.id, { muted: !t.muted })
     else addClickTrack(doc)
   }
+  // (chat and history share the sidebar: opening one closes the other)
   const toggleChat = () => {
+    if (!chat.open && hist) (hist.setOpen(false), setHistoryOpen(false))
     chat.setOpen(!chat.open)
     setChatOpen(chat.open)
     measure() // the timeline's width changed
+  }
+  const toggleHistory = () => {
+    if (!hist) return
+    if (!hist.open) (chat.setOpen(false), setChatOpen(false))
+    hist.setOpen(!hist.open)
+    setHistoryOpen(hist.open)
+    measure()
   }
   // Where the project lives: a phone for this device's browser storage, a cloud for the server.
   const where = h('span', { className: 'dim where', onpointerdown: (e) => e.stopPropagation(), title: s.local ? 'saved in this browser, on this device' : s.snapshot ? 'a snapshot of a cloud project: your changes are not saved' : 'saved in the cloud' })
@@ -271,7 +289,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const masterHead = h('div', { className: 'head' }) // (filled by `MasterHead`)
   let masterGain: HTMLInputElement | null = null // its fader, which doubles as its level meter
   master.append(h('div', { className: 'lane-row master-row' }, masterHead)) // (the drawers follow: `MasterDrawers`)
-  const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
+  const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el, ...(hist ? [hist.el] : [])))
 
   const x = (smp: number) => (smp / rate()) * pps()
   const fromX = (px: number) => Math.max(0, Math.round((px / pps()) * rate()))
@@ -306,7 +324,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     live: (d, p, v) => cardDeps.live(d, p, v), drag: (d) => cardDeps.drag(d), commit: (d, p, v) => cardDeps.commit(d, p, v),
   }
   disposers.push(
-    mountBar(bar, { store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, mentions: unreadMentions, chatOpen, notice: () => (future() ? 'made with a newer version: read-only. reload the page for the latest.' : null),
+    mountBar(bar, { store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, mentions: unreadMentions, chatOpen, history: hist ? { open: historyOpen, onToggle: toggleHistory } : undefined, notice: () => (future() ? 'made with a newer version: read-only. reload the page for the latest.' : null),
       onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: (f) => zoom.button(f), onExport: exportProject, onChat: toggleChat,
       saveCopy: cloud?.saveCopy && { shown: edited, onSave: () => {
         say('saving a copy on this device…')
@@ -1130,6 +1148,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       s.provider?.off('status', onStatus)
       s.provider?.off('authenticationFailed', onDenied)
       chat.destroy()
+      hist?.destroy()
       pb?.destroy()
       disposers.forEach((d) => d())
       store.dispose()

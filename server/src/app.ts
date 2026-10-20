@@ -3,6 +3,7 @@ import type { Collab } from './collab.ts'
 import { sessionMiddleware, type Ctx, type Env } from './auth.ts'
 import { accountRoutes } from './routes/account.ts'
 import { authRoutes } from './routes/auth.ts'
+import { historyRoutes } from './routes/history.ts'
 import { inviteRoutes } from './routes/invites.ts'
 import { projectRoutes } from './routes/projects.ts'
 import { sampleRoutes } from './routes/samples.ts'
@@ -17,6 +18,7 @@ export function createApp(ctx: Ctx, storage: Storage, collab: Collab) {
   api.route('/', accountRoutes(ctx, storage, collab))
   api.route('/projects', projectRoutes(ctx, collab))
   api.route('/projects/:id/samples', sampleRoutes(ctx, storage))
+  api.route('/projects/:id/history', historyRoutes(ctx, collab))
   api.route('/uploads', uploadRoutes(ctx, storage, collab))
   if (storage.routes) api.route('/storage', storage.routes) // local driver; signature-authorized
   api.notFound((c) => c.json({ error: 'not_found' }, 404))

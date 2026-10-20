@@ -1,6 +1,6 @@
 import type {
   AddMemberRequest, CreateInviteRequest, CreateInviteResponse, CreateProjectRequest, InviteInfo,
-  LibrarySample, LoginRequest, LoginResponse, Me, ProjectDetail, ProjectPreview, ProjectSummary, RegisterRequest, UploadAnalysis, UploadInfo, UploadUrlRequest,
+  HistoryItem, HistoryResult, LibrarySample, LoginRequest, LoginResponse, Me, ProjectDetail, ProjectPreview, ProjectSummary, RegisterRequest, UploadAnalysis, UploadInfo, UploadUrlRequest,
   UploadUrlResponse, UrlResponse, UserInfo,
 } from '@mobdaw/shared'
 
@@ -69,6 +69,9 @@ export const api = {
   leaveProject: (id: string) => post(`/projects/${id}/leave`),
   addMember: (id: string, b: AddMemberRequest) => post<ProjectDetail>(`/projects/${id}/members`, b),
   removeMember: (id: string, username: string) => del<ProjectDetail>(`/projects/${id}/members/${encodeURIComponent(username)}`),
+  history: (id: string, since = 0) => get<HistoryItem[]>(`/projects/${id}/history?since=${since}`),
+  revertHistory: (id: string, seq: number) => post<HistoryResult>(`/projects/${id}/history/${seq}/revert`),
+  restoreHistory: (id: string, seq: number) => post<HistoryResult>(`/projects/${id}/history/${seq}/restore`),
   library: (id: string) => get<LibrarySample[]>(`/projects/${id}/samples`),
   uploadUrl: (id: string, b: UploadUrlRequest) => post<UploadUrlResponse>(`/projects/${id}/samples/upload-url`, b),
   completeSample: (id: string, hash: string) => post(`/projects/${id}/samples/${hash}/complete`),

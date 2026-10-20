@@ -150,6 +150,11 @@ const migrations: (string | ((db: Db) => void))[] = [
    CREATE INDEX sessions_user ON sessions(user_id);
    CREATE INDEX sessions_expires ON sessions(expires_at);
    CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+  // The shared change log (server/src/history.ts): one row per attributed transaction, `label` its 40-character description,
+  // `patch` the JSON before/after of each entity it changed. Pruned to the last HISTORY_MAX rows per project.
+  `CREATE TABLE history(
+     project_id TEXT NOT NULL, seq INTEGER NOT NULL, ts INTEGER NOT NULL, user_id INTEGER, username TEXT NOT NULL,
+     via TEXT NOT NULL, label TEXT NOT NULL, patch TEXT NOT NULL, PRIMARY KEY(project_id, seq));`,
 ]
 
 export function openDb(path: string): Db {

@@ -2,6 +2,7 @@ import { Database } from '@hocuspocus/extension-database'
 import { Server } from '@hocuspocus/server'
 import { docName, samplesMap } from '@mobdaw/shared'
 import { memberRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
+import { attachHistory } from './history.ts'
 import type { Link } from './uploads.ts'
 
 export type Collab = ReturnType<typeof createCollab>
@@ -75,6 +76,8 @@ export function createCollab(ctx: Ctx) {
           }
         },
       },
+      // The shared change log: every loaded project document is mirrored and its transactions become history entries.
+      { afterLoadDocument: async ({ document, documentName }) => attachHistory(ctx, document, documentName) },
       new Database({
         async fetch({ documentName }) {
           const row = db.prepare('SELECT data FROM documents WHERE name = ?').get(documentName) as { data: Uint8Array } | undefined

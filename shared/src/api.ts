@@ -99,3 +99,10 @@ export type UploadUrlResponse =
   | { exists: false; url: string; method: 'PUT'; headers: Record<string, string> }
 export type UrlResponse = { url: string }
 export type OkResponse = { ok: true }
+
+/** One row of a project's change log (`GET /projects/:id/history`), oldest first. */
+export type HistoryItem = { seq: number; ts: number; username: string; text: string; via: string; api: boolean }
+/** A field (or a whole entity, `field: '*'`) a revert left alone because it changed since. */
+export type HistorySkip = { coll: string; id: string; field: string }
+/** `seq` is the entry the revert / restore itself was logged as (null when it changed nothing). */
+export type HistoryResult = { applied: number; skipped: HistorySkip[]; seq: number | null }

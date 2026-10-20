@@ -155,6 +155,7 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
       db.prepare('DELETE FROM project_members WHERE project_id = ?').run(id)
       db.prepare('DELETE FROM projects WHERE id = ?').run(id)
       db.prepare('DELETE FROM documents WHERE name = ?').run(docName(id))
+      db.prepare('DELETE FROM history WHERE project_id = ?').run(id)
       // Only the library links go: uploads stay with their owners (and keep counting toward their quota).
       db.prepare('DELETE FROM project_samples WHERE project_id = ?').run(id)
     })
