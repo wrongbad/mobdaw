@@ -83,7 +83,8 @@ export function mcpServerFor(svc: AgentService, user: AgentUser): McpServer {
 /** `/mcp`: POST only (stateless; no server-initiated stream). */
 export function mcpRoutes(ctx: Ctx, svc: AgentService) {
   const r = new Hono<AgentEnv>()
-  r.use('*', agentAuth(ctx))
+  // (the challenge points OAuth-capable clients at the metadata in oauth.ts)
+  r.use('*', agentAuth(ctx, `Bearer resource_metadata="${ctx.config.publicUrl}/.well-known/oauth-protected-resource"`))
   r.post('/', async (c) => {
     const server = mcpServerFor(svc, c.var.agent)
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })

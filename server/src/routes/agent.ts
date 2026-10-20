@@ -10,14 +10,14 @@ export type AgentEnv = { Variables: { agent: AgentUser } }
  * Who is calling: an API token, or (for scripts that have one) a session token; both as `Authorization: Bearer`. The cookie is not
  * accepted here, so a page in the user's browser can't make these calls for them.
  */
-export const agentAuth = (ctx: Ctx): MiddlewareHandler<AgentEnv> => async (c, next) => {
+export const agentAuth = (ctx: Ctx, challenge = 'Bearer'): MiddlewareHandler<AgentEnv> => async (c, next) => {
   const bearer = c.req.header('authorization')?.match(/^Bearer (.+)$/)?.[1]
   const api = apiTokenUser(ctx, bearer)
   const user = api ? { id: api.id, username: api.username, key: api.tokenHash } : (() => {
     const s = sessionUser(ctx, bearer)
     return s && { id: s.id, username: s.username, key: `s:${s.id}` }
   })()
-  if (!user) return c.json({ error: 'not_signed_in', message: 'send an API token as "Authorization: Bearer <token>" (create one on the account page)' }, 401, { 'www-authenticate': 'Bearer' })
+  if (!user) return c.json({ error: 'not_signed_in', message: 'send an API token as "Authorization: Bearer <token>" (create one on the account page)' }, 401, { 'www-authenticate': challenge })
   c.set('agent', user)
   await next()
 }

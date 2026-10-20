@@ -114,6 +114,21 @@ claude mcp add --transport http mobdaw https://<host>/mcp --header "Authorizatio
 (In production under a path prefix: `https://wrongbad.com/mobdaw/mcp`. In dev: `http://localhost:5173/mcp`, proxied by Vite, or
 `http://localhost:8787/mcp`.)
 
+### OAuth login
+Clients that log in through OAuth (the Claude desktop app) need no pasted token: add `https://<host>/mcp` as a remote MCP server.
+`/mcp` answers `401` with `WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource"`, and the client
+follows the metadata (`server/src/oauth.ts`): dynamic client registration (`POST /oauth/register`, public clients, no
+secret), then `GET /oauth/authorize` (authorization code with PKCE S256 only), then `POST /oauth/token`.
+
+The authorize page uses the browser's normal session cookie (it has its own sign-in form if there isn't one) and asks "Allow?".
+Approving gives a single-use code (5 minutes); exchanging it creates an ordinary API token named "<client> (OAuth)". So it shows
+on the account page, is revoked there, and acts as "<user> (api)" like any token. There are no refresh tokens and no expiry: a
+revoked token makes the client run the flow again. Redirect URIs must be https, loopback http (any port) or an app scheme, and
+match what the client registered.
+
+The metadata is served under the app's own path (`/mobdaw/.well-known/...`, including the OIDC-style `openid-configuration`), not at the
+origin root, so nothing outside the app's prefix has to be routed to it.
+
 ## A suggested agent loop
 1. `list_projects`; pick the project. `wait_for_events` (no `since`) to get a cursor.
 2. Loop: `wait_for_events {since, wait: 25}`. For a chat event with `mentionsMe`, read the request.

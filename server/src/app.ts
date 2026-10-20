@@ -3,6 +3,7 @@ import type { AgentHub } from './agentHub.ts'
 import { createAgentService } from './agentService.ts'
 import type { Collab } from './collab.ts'
 import { mcpRoutes } from './mcp.ts'
+import { oauthRoutes } from './oauth.ts'
 import { sessionMiddleware, type Ctx, type Env } from './auth.ts'
 import { agentRoutes } from './routes/agent.ts'
 import { accountRoutes } from './routes/account.ts'
@@ -32,5 +33,5 @@ export function createApp(ctx: Ctx, storage: Storage, collab: Collab, hub: Agent
     console.error(e)
     return c.json({ error: 'internal' }, 500)
   })
-  return new Hono().route('/api', api).route('/mcp', mcpRoutes(ctx, agent))
+  return new Hono().route('/api', api).route('/mcp', mcpRoutes(ctx, agent)).route('/', oauthRoutes(ctx))
 }
