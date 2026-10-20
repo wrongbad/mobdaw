@@ -403,7 +403,14 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .msg-meta { padding-top: 8px; font-size: 10px; color: var(--dim); }
 .msg-meta.them { align-self: flex-start; }
 .msg-meta.me { align-self: flex-end; }
-.chat-in { display: flex; border-top: 1px solid var(--line); }
+.msg.mentions-me { box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--raise)); }
+.mention { color: var(--accent); font-weight: 600; }
+.mention-me { background: color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 3px; padding: 0 2px; }
+.at-badge { margin-left: 4px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--bg); font-weight: 700; }
+.chat-in { position: relative; display: flex; border-top: 1px solid var(--line); }
+.mention-pop { position: absolute; left: 0; right: 0; bottom: 100%; max-height: 40vh; overflow-y: auto; background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -4px 12px rgba(0, 0, 0, .3); }
+.mention-opt { display: block; width: 100%; min-height: 36px; padding: 0 12px; text-align: left; border: 0; background: none; font-size: 13px; }
+.mention-opt.on { background: var(--raise); color: var(--accent); }
 .chat-in input { flex: 1; min-width: 0; border: 0; background: var(--bg); }
 .chat-in button { border: 0; border-left: 1px solid var(--line); }
 

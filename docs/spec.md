@@ -483,3 +483,12 @@ reload for the latest version. Nothing is migrated or written.
 ## Chat
 Messages from the app itself (for example "migrated to a shared timeline at 96 bpm 4/4 ...") appear in the chat as a muted notice
 between the conversation, not as someone's bubble.
+
+**Mentions.** `@name` mentions a project member or whoever is present; an API participant ("name (api)") is `@name(api)`
+(`(` can't occur in a username, so the two never collide). Only known handles count, matched case-insensitively at a word
+boundary (not inside an email address); a trailing `.`, `,` or `!` ends the handle. A sent message stores the display names
+it mentions (`ChatMessage.mentions`; older messages lack it and are parsed when shown). Mentions are highlighted, yours
+more strongly, and a message that mentions you gets an accent. Typing `@` opens a list of members and present participants,
+filtered as you type (up/down, enter or tab, esc, or tap), which inserts the handle and a space. Unread mentions of you show as
+an "@" badge on the chat button besides the count, cleared when the chat is seen. You can delete messages from your own
+"(api)" identity as well as your own.

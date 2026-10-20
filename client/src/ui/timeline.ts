@@ -29,6 +29,7 @@ import { discardTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes
 import type { Session } from '../project/session'
 import { shouldAutoStop, type MeterSample } from '../audio/autoStop'
 import { chatPanel } from './chat'
+import { api } from '../api'
 import { automateMenu, type AutoInfo } from './automation'
 import { mountLaneDrawers, mountMasterDrawers, type DrawCtx } from './drawers'
 import { drawLiveWave } from './clipWave'
@@ -114,6 +115,9 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const showCpu = (m: { load: number; peak: number }) => setCpu({ text: `cpu ${Math.round(m.load * 100)}%`, hot: m.peak >= 0.8 })
   const [loopText, setLoopText] = createSignal<string | null>(null) // (set every frame while a loop records, so only the leaf text changes)
   const [unread, setUnread] = createSignal(0)
+  const [unreadMentions, setUnreadMentions] = createSignal(0)
+  const [memberNames, setMemberNames] = createSignal<string[]>([])
+  if (!s.local && !s.snapshot) api.project(s.projectId).then((d) => setMemberNames(d.members.map((m) => m.username)), () => {})
   const [chatOpen, setChatOpen] = createSignal(false)
   // pixels per second and the sample rate, for the bindings that place things on the timeline (the remote playheads)
   const [rate, setRate] = createSignal(DEFAULT_SAMPLE_RATE)
@@ -141,6 +145,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const chat = chatPanel({
     doc, user: s.user,
     onUnread: setUnread,
+    onMentions: setUnreadMentions,
+    names: () => [...memberNames(), ...store.remote().map((r) => r.user.username)],
   })
   /** The project's name in the bar: a button that opens the project settings (rename, sharing, audio input). */
   function projectTitle() {
@@ -300,7 +306,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     live: (d, p, v) => cardDeps.live(d, p, v), drag: (d) => cardDeps.drag(d), commit: (d, p, v) => cardDeps.commit(d, p, v),
   }
   disposers.push(
-    mountBar(bar, { store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, chatOpen, notice: () => (future() ? 'made with a newer version: read-only. reload the page for the latest.' : null),
+    mountBar(bar, { store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, mentions: unreadMentions, chatOpen, notice: () => (future() ? 'made with a newer version: read-only. reload the page for the latest.' : null),
       onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: (f) => zoom.button(f), onExport: exportProject, onChat: toggleChat,
       saveCopy: cloud?.saveCopy && { shown: edited, onSave: () => {
         say('saving a copy on this device…')

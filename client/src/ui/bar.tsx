@@ -23,6 +23,8 @@ export type BarProps = {
   /** The loop recording line; null while no loop records. */
   loopText: Accessor<string | null>
   unread: Accessor<number>
+  /** Unread chat messages that mention you. */
+  mentions?: Accessor<number>
   chatOpen: Accessor<boolean>
   /** A line of notice next to the logo (e.g. the project is read-only because a newer version wrote it); null: none. */
   notice?: Accessor<string | null>
@@ -70,7 +72,7 @@ export function Bar(p: BarProps) {
           <button class="bar-btn zoom" title="zoom in (ctrl + scroll)" on:click={() => p.onZoom(1.5)} innerHTML={iconHtml('zoomIn', 18)} />
           <button class="bar-btn" title="render the whole project to a file" on:click={p.onExport}>export</button>
           <Show when={p.live}>
-            <button class="chat-btn" classList={{ on: p.chatOpen() }} title="chat" on:click={p.onChat}>{p.unread() ? `chat (${p.unread()})` : 'chat'}</button>
+            <button class="chat-btn" classList={{ on: p.chatOpen() }} title="chat" on:click={p.onChat}>{p.unread() ? `chat (${p.unread()})` : 'chat'}<Show when={p.mentions?.()}><span class="at-badge" title="unread messages that mention you">@</span></Show></button>
           </Show>
         </div>
       </div>
