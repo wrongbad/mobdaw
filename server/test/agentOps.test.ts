@@ -69,4 +69,34 @@ describe('agent ops', () => {
     const [id] = applyAtomic(doc, parseOps([{ op: 'addTrack', name: 'New', kind: 'audio' }]))
     expect(getTracks(doc).map((x) => x.id)).toContain(id)
   })
+
+  it('addTrack like copies another track\'s chain, params, fader and colour', () => {
+    const doc = new Y.Doc()
+    const [src] = run(doc, [
+      { op: 'addTrack', name: 'GM Violin', preset: 'none' },
+      { op: 'addDevice', trackId: '$0', type: 'finnwave', name: 'GM Violin', params: { rolloff: 0.7 } },
+      { op: 'addDevice', trackId: '$0', type: 'reverb' },
+      { op: 'updateTrack', id: '$0', color: 3 },
+    ]) as string[]
+    run(doc, [{ op: 'addTrack', name: 'Violin 3', like: 'gm violin' }])
+    const [a, b] = getTracks(doc)
+    expect(b).toMatchObject({ name: 'Violin 3', color: 3 })
+    const chain = (id: string) => getDevices(doc).filter((d) => d.trackId === id).sort((x, y) => x.order - y.order).map(({ type, name, params }) => ({ type, name, params }))
+    expect(chain(b.id)).toEqual(chain(a.id))
+    expect(chain(b.id).length).toBeGreaterThanOrEqual(3)
+    expect(src).toBe(a.id)
+    const msg = (ops: unknown[]) => { try { run(doc, ops) } catch (e) { return (e as OpError).message } return '' }
+    expect(msg([{ op: 'addTrack', name: 'x', like: 'nobody' }])).toContain('no track "nobody"')
+    expect(msg([{ op: 'addTrack', name: 'x', like: a.id, preset: 'finnwave' }])).toContain('alternatives')
+  })
+
+  it('takes a whole piece in one batch', () => {
+    const doc = new Y.Doc()
+    const notes = Array.from({ length: 20_000 }, (_, i) => ({ p: 40 + (i % 40), t: (i % 960) * 4, d: 1, v: 90 }))
+    const t0 = Date.now()
+    applyAtomic(doc, parseOps([{ op: 'addTrack', name: 'Big' }, { op: 'addMidiClip', trackId: '$0', start: '1', length: '300 bars' }, { op: 'addNotes', clipId: '$1', notes }]))
+    expect(getNotes(doc)).toHaveLength(20_000)
+    console.log(`20k notes applied in ${Date.now() - t0} ms`)
+    expect(() => parseOps([{ op: 'addNotes', clipId: 'x', notes: new Array(100_001).fill({ p: 'C4', t: 0, d: 1 }) }])).toThrow('at most 100000 notes')
+  })
 })

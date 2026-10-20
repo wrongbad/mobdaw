@@ -6,8 +6,8 @@ import * as Y from 'yjs'
 import {
   DEVICES, FINNWAVE, MASTER_TRACK, MIX, PositionError, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, apiName,
   clipsMap, deleteClip, deleteDevice, deleteMarker, deleteNote, deleteRegion, deleteTrack, deviceType, devicesMap, getRegions, getTimeMap,
-  isFutureDoc, markersMap, notesMap, paramOf, parseDuration, parseNote, parsePosition, regionAtBar, regionsMap, setKey, setParam, setRegion,
-  tracksMap, updateClip, updateMarker, updateNote, updateTrack, type DeviceDef, type Region, type RegionPatch,
+  ensureMixDevice, getDevices, isFutureDoc, markersMap, notesMap, paramOf, parseDuration, parseNote, parsePosition, regionAtBar, regionsMap, setKey, setParam, setRegion,
+  getTracks, tracksMap, updateClip, updateDevice, updateMarker, updateNote, updateTrack, type DeviceDef, type Region, type RegionPatch,
 } from '@mobdaw/shared'
 import type { Ctx } from './auth.ts'
 import { writeAs, type Collab } from './history.ts'
@@ -19,13 +19,15 @@ export class OpError extends Error {
   }
 }
 
-export const MAX_OPS = 500
-export const MAX_NOTES = 5000
+// Abuse guards, not model limits: a batch is one synchronous transaction and one Yjs update broadcast to every client, so these cap the
+// worst case. A whole piece (tens of thousands of notes) must fit in ONE batch, or it would land as several history entries.
+export const MAX_OPS = 5000
+export const MAX_NOTES = 100_000
 
 type Spec = Record<string, string>
 /** Field types: str, num, bool, any, list (an array); a trailing ? makes it optional. Unknown fields are an error (a typo should not pass silently). */
 const SPECS: Record<string, Spec> = {
-  addTrack: { name: 'str', kind: 'str?', preset: 'any?' },
+  addTrack: { name: 'str', kind: 'str?', preset: 'any?', like: 'str?' },
   updateTrack: { id: 'str', name: 'str?', muted: 'bool?', soloed: 'bool?', color: 'num?' },
   removeTrack: { id: 'str' },
   addMidiClip: { trackId: 'str', start: 'any', length: 'any', loop: 'any?', view: 'str?' },
@@ -162,6 +164,26 @@ function paramValue(i: number, def: DeviceDef, param: unknown, value: unknown): 
   return { id: p.id, value: Math.min(p.max, Math.max(p.min, v)) }
 }
 
+/** The track a `like` names: an id, else a name (exact, then case-insensitive). */
+function likeTrack(doc: Y.Doc, ref: string) {
+  const ts = getTracks(doc)
+  return ts.find((t) => t.id === ref) ?? ts.find((t) => t.name === ref) ?? ts.find((t) => t.name.toLowerCase() === ref.trim().toLowerCase())
+}
+
+/** Give track `to` the devices of track `from`: type, name, key range, bypass and every param (the mix device's fader and pan too). */
+function copyDevices(doc: Y.Doc, from: string, to: string) {
+  const mine = getDevices(doc).filter((d) => d.trackId === from).sort((a, b) => a.order - b.order)
+  for (const d of mine) {
+    if (d.type === MIX) {
+      const mix = ensureMixDevice(doc, to)
+      for (const [k, v] of Object.entries(d.params)) setParam(doc, mix, Number(k), v)
+      continue
+    }
+    const id = addDevice(doc, to, d.type, { ...(d.name ? { name: d.name } : {}), ...(d.keyLo != null ? { keyLo: d.keyLo } : {}), ...(d.keyHi != null ? { keyHi: d.keyHi } : {}) }, d.params)
+    if (d.bypass) updateDevice(doc, id, { bypass: true })
+  }
+}
+
 function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
   const r = (v: unknown) => ref(i, v, results)
   const map = () => getTimeMap(doc)
@@ -183,6 +205,19 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
       const name = str('name').trim().slice(0, 80)
       if (!name) return bad(i, 'name is empty')
       let inst = kind === 'midi' ? DEVICES[FINNWAVE] : undefined
+      const likeRef = opt<string>('like')
+      if (likeRef != null) {
+        if (opt<unknown>('preset') != null) return bad(i, '"like" and "preset" are alternatives: give one')
+        const src = likeTrack(doc, likeRef)
+        if (!src) return bad(i, `like: no track "${likeRef}" (tracks: ${getTracks(doc).map((t) => `"${t.name}"`).join(', ') || 'none'}); use a track's id or name`)
+        if (src.kind !== kind) return bad(i, `like: "${src.name}" is a ${src.kind} track, this one is ${kind}`)
+        let id = ''
+        doc.transact(() => {
+          id = addTrack(doc, name, kind, undefined, undefined, src.color)
+          copyDevices(doc, src.id, id)
+        })
+        return id
+      }
       const preset = opt<unknown>('preset')
       if (preset != null) {
         if (preset === 'none' || preset === false) inst = undefined
@@ -455,7 +490,7 @@ Conventions
 - Every op returns an id (the one it made or changed); the batch result lists them in order.
 
 Ops
-- addTrack {name, kind?: "midi"|"audio" (default midi), preset?: instrument name or "none"}: a midi track gets the "finnwave" synth unless preset says otherwise.
+- addTrack {name, kind?: "midi"|"audio" (default midi), preset?: instrument name or "none", like?: a track's id or name}: a midi track gets the "finnwave" synth unless preset says otherwise. like copies another track's whole chain (instrument, effects, every param, fader and pan, colour): the way to make a second violin sound like the first. Presets are device TYPES (the instruments in the device list below), not the display names on devices.
 - updateTrack {id, name?, muted?, soloed?, color?}; removeTrack {id} (its clips, notes and devices go too).
 - addMidiClip {trackId, start, length, loop?, view?: "drums"|"piano"}: loop is the pattern length that repeats until length ends.
 - updateClip {id, start?, length?, trackId?, loop? (0 or null clears), view?}; removeClip {id}.

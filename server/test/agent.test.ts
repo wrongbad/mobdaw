@@ -83,6 +83,21 @@ describe('state', () => {
     expect(body).toContain('C2 0+480 v100')
     expect((await agent.get(`${base()}/state?format=xml`)).status).toBe(400)
   })
+
+  it('narrows to tracks and bars', async () => {
+    const tr = addTrack(a.doc, 'Lead', 'midi')
+    const clip = addMidiClip(a.doc, { trackId: tr, startTick: 0, lengthTicks: 3840 * 4 })
+    for (const bar of [0, 1, 2, 3]) addNote(a.doc, { clipId: clip, tick: bar * 3840, durTicks: 480, pitch: 60 + bar, velocity: 1 })
+    await until(() => historyLog(b.doc).length >= 4)
+    const j = (await agent.get(`${base()}/state?tracks=lead&fromBar=2&toBar=3`)).body
+    expect(j.tracks.map((x: any) => x.name)).toEqual(['Lead'])
+    expect(j.tracks[0].clips[0].notes.map((n: any) => n.pitch)).toEqual([61, 62])
+    const text = await (await fetch(t.base + `${base()}/state?format=text&tracks=Lead&fromBar=4`, { headers: { authorization: `Bearer ${token}` } })).text()
+    expect(text).toContain('(filtered:')
+    expect(text).toContain('D#4')
+    expect(text).not.toContain('C4 ')
+    expect((await agent.get(`${base()}/state?fromBar=0`)).status).toBe(400)
+  })
 })
 
 describe('ops', () => {

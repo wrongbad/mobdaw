@@ -155,14 +155,25 @@ const deviceView = (d: Device): AgentDevice => {
   }
 }
 
-export function agentView(doc: Y.Doc, rev?: number): AgentView {
+/** Narrow a read: only these tracks (ids or names, case-insensitive) and only the notes/clips that touch bars `fromBar`..`toBar` (inclusive). */
+export type ViewFilter = { tracks?: string[]; fromBar?: number; toBar?: number }
+
+export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): AgentView {
   const map = getTimeMap(doc)
+  const wanted = filter.tracks?.map((x) => x.trim().toLowerCase())
+  const lo = filter.fromBar != null ? map.barStart(Math.max(1, filter.fromBar)) : -Infinity
+  const hi = filter.toBar != null ? map.barStart(Math.max(1, filter.toBar) + 1) : Infinity
   const rate = getSampleRate(doc), ppq = getPpq(doc)
   const samples = getSamples(doc)
   const notes = new Map<string, ReturnType<typeof getNotes>>()
   for (const n of getNotes(doc)) (notes.get(n.clipId) ?? notes.set(n.clipId, []).get(n.clipId)!).push(n)
   const devices = getDevices(doc)
   const clips = getClips(doc).sort((a, b) => (a.kind === 'midi' ? a.startTick : (map.sampleToTick(a.start))) - (b.kind === 'midi' ? b.startTick : map.sampleToTick(b.start)))
+  const inWindow = (c: ReturnType<typeof getClips>[number]) => {
+    const a = c.kind === 'midi' ? c.startTick : map.sampleToTick(c.start)
+    const b = c.kind === 'midi' ? a + c.lengthTicks : map.sampleToTick(c.start + c.length)
+    return a < hi && b > lo
+  }
   const clipView = (c: ReturnType<typeof getClips>[number]): AgentMidiClip | AgentAudioClip => {
     if (c.kind === 'audio') {
       const startTick = map.sampleToTick(c.start)
@@ -176,7 +187,7 @@ export function agentView(doc: Y.Doc, rev?: number): AgentView {
       id: c.id, kind: 'midi', start: formatPosition(map, c.startTick), startTick: r3(c.startTick), lengthTicks: r3(c.lengthTicks),
       length: formatDuration(map, c.startTick, c.lengthTicks), end: formatPosition(map, c.startTick + c.lengthTicks),
       ...(c.loopTicks ? { loopTicks: r3(c.loopTicks) } : {}), ...(c.forever ? { forever: true } : {}), ...(c.view ? { view: c.view } : {}),
-      notes: (notes.get(c.id) ?? []).sort((a, b) => a.tick - b.tick || a.pitch - b.pitch).map((n) => ({
+      notes: (notes.get(c.id) ?? []).filter((n) => c.startTick + n.tick < hi && c.startTick + n.tick + n.durTicks > lo).sort((a, b) => a.tick - b.tick || a.pitch - b.pitch).map((n) => ({
         id: n.id, p: noteName(n.pitch).toUpperCase(), pitch: n.pitch, t: r3(n.tick), d: r3(n.durTicks), v: Math.round(n.velocity * 127),
       })),
     }
@@ -194,10 +205,10 @@ export function agentView(doc: Y.Doc, rev?: number): AgentView {
     meta: { ppq, sampleRate: rate, ...(getKey(doc) ? { key: getKey(doc) } : {}) },
     regions,
     markers: getMarkers(doc).map((m) => ({ id: m.id, bar: m.bar, label: m.label, ...(m.text ? { text: m.text } : {}) })),
-    tracks: getTracks(doc).map((t) => ({
+    tracks: getTracks(doc).filter((t) => !wanted || wanted.includes(t.id.toLowerCase()) || wanted.includes(t.name.toLowerCase())).map((t) => ({
       id: t.id, name: t.name, kind: t.kind, muted: t.muted, soloed: t.soloed, ...(t.color != null ? { color: t.color } : {}),
       devices: devices.filter((d) => d.trackId === t.id).map(deviceView),
-      clips: clips.filter((c) => c.trackId === t.id).map(clipView),
+      clips: clips.filter((c) => c.trackId === t.id && inWindow(c)).map(clipView),
     })),
     master: { devices: devices.filter((d) => d.trackId === MASTER_TRACK).map(deviceView) },
   }
@@ -210,10 +221,13 @@ const devLine = (d: AgentDevice) =>
   `${d.type}${d.name ? ` "${d.name}"` : ''} [${d.id}]${d.bypass ? ' (bypassed)' : ''}${d.key != null ? ` key ${d.key}` : ''}${d.keyLo != null ? ` keys ${d.keyLo}-${d.keyHi ?? 127}` : ''}: ${fmtParams(d.params)}`
 
 /** The view as a compact text outline: ids in [brackets], positions "bar.beat.tick", notes `PITCH tick+duration vVELOCITY` (clip-local ticks). */
-export function agentText(doc: Y.Doc, rev?: number): string {
-  const v = agentView(doc, rev)
+export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): string {
+  const v = agentView(doc, rev, filter)
   const out: string[] = []
   out.push(`project: ppq ${v.meta.ppq}, ${v.meta.sampleRate} Hz${v.meta.key ? `, key ${v.meta.key}` : ''}${v.rev != null ? `, rev ${v.rev}` : ''}`)
+  if (filter.tracks || filter.fromBar != null || filter.toBar != null) {
+    out.push(`(filtered: ${[filter.tracks ? `tracks ${filter.tracks.join(', ')}` : '', filter.fromBar != null || filter.toBar != null ? `bars ${filter.fromBar ?? 1}-${filter.toBar ?? 'end'}` : ''].filter(Boolean).join('; ')}; clips and notes outside are left out, note positions are still clip-local ticks)`)
+  }
   out.push('timeline:')
   for (const r of v.regions) {
     out.push(

@@ -30,7 +30,7 @@ Errors are `{error, message}` with 400 (`bad_request`, `bad_ops` with `op`: the 
 | Route | |
 |---|---|
 | `GET /projects` | `[{id, name, role, canEdit}]`: where you are owner or editor. |
-| `GET /projects/:id/state?format=json\|text` | The project (see "State"). `text` is `text/plain`. |
+| `GET /projects/:id/state?format=json\|text&tracks=a,b&fromBar=&toBar=` | The project (see "State"). `text` is `text/plain`. `tracks` (names or ids), `fromBar`/`toBar` narrow it to those tracks and the clips and notes touching those bars. |
 | `POST /projects/:id/ops {label?, ops}` | Validate, then apply all ops in one transaction -> `{ids: [...], seq}`. |
 | `GET /projects/:id/chat?since=<ts>&limit=` | `{messages: [{id, username, text, ts, mentions?, mentionsMe}], ts}`; messages with `ts` after `since`. |
 | `POST /projects/:id/chat {text}` | Post as "k (api)"; mentions are parsed against the members and who is present. Returns the message. |
@@ -61,7 +61,7 @@ compact outline (ids in brackets) for prompting.
 `POST .../ops {"label": "drum loop", "ops": [ {"op": "addTrack", ...}, ... ]}`. The batch is checked field by field (an unknown
 field or a wrong type names the op), then run on a scratch copy of the live document; only if every op works is its change applied
 to the live document, inside one transaction attributed to "k (api)". So a batch is **all or nothing and one history entry**, named
-`label` (cut to 40 characters; without one the usual description is used). At most 500 ops and 5000 notes per batch.
+`label` (cut to 40 characters; without one the usual description is used). At most 5000 ops and 100000 notes per batch and a 32 MB body (`413 too_large`): these are abuse guards, sized so a whole piece goes in ONE batch and lands as one history entry.
 
 Conventions: positions are `"5"`, `"5.3"`, `"9.3.240"` or a tick number. Lengths (clip length, loop, note `t`/`d`) are ticks or
 unit text: `"4 bars"`, `"1 bar 2 beats"`, `"3 beats"`, `"240 ticks"`. Pitches `"C4"` (middle C = 60), `"F#3"`, `"Bb2"` or a number
@@ -69,7 +69,7 @@ unit text: `"4 bars"`, `"1 bar 2 beats"`, `"3 beats"`, `"240 ticks"`. Pitches `"
 
 | Op | Fields |
 |---|---|
-| `addTrack` | `name`, `kind?` (`midi` default, `audio`), `preset?` (an instrument name, e.g. `"finnwave"`, or `"none"`; midi tracks get `finnwave` by default) |
+| `addTrack` | `name`, `kind?` (`midi` default, `audio`), `preset?` (an instrument device type, e.g. `"finnwave"`, or `"none"`; midi tracks get `finnwave` by default) or `like?` (a track's id or name: copy its whole device chain, params, fader/pan and colour) |
 | `updateTrack` / `removeTrack` | `id`, `name?`, `muted?`, `soloed?`, `color?` / `id` |
 | `addMidiClip` | `trackId`, `start`, `length`, `loop?` (pattern length), `view?` (`"drums"`) |
 | `updateClip` / `removeClip` | `id`, `start?`, `length?`, `trackId?`, `loop?` (0 or null clears), `view?` / `id` |
@@ -104,7 +104,7 @@ and project; the project's document is kept loaded for as long as an agent is pr
 
 ## MCP
 `POST /mcp` is a stateless streamable-HTTP MCP server (JSON responses; GET and DELETE answer 405), authenticated with the same
-Bearer token. Tools: `list_projects`, `get_state {projectId, format}`, `apply_ops {projectId, label?, ops}`, `send_chat`,
+Bearer token. Tools: `list_projects`, `get_state {projectId, format, tracks?, fromBar?, toBar?}`, `apply_ops {projectId, label?, ops}`, `send_chat`,
 `get_chat`, `wait_for_events {projectId, since?, wait?}`, `get_history`, `revert {projectId, seq}`, `restore`. The `apply_ops`
 description carries the ops reference. They are wrappers over the same functions as the routes.
 

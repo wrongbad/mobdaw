@@ -8,7 +8,8 @@ import { z } from 'zod'
 import { OPS_HELP } from './agentOps.ts'
 import type { AgentUser } from './agentHub.ts'
 import { AgentError, type AgentService } from './agentService.ts'
-import { agentAuth, type AgentEnv } from './routes/agent.ts'
+import { bodyLimit } from 'hono/body-limit'
+import { agentAuth, MAX_BODY_BYTES, type AgentEnv } from './routes/agent.ts'
 import { oauthIssuer } from './oauth.ts'
 import type { Ctx } from './auth.ts'
 
@@ -36,8 +37,13 @@ export function mcpServerFor(svc: AgentService, user: AgentUser): McpServer {
 
   server.registerTool('get_state', {
     description: `The project as JSON or a compact text outline: timeline (tempo / meter regions), markers, tracks with devices (params by name), clips with start as "bar.beat.tick" and ticks, and notes {p:"C4", t, d, v}. "rev" is the latest history seq. ${ME}`,
-    inputSchema: { projectId, format: z.enum(['json', 'text']).optional().describe('text is shorter, for reading; json for exact values (default json)') },
-  }, ({ projectId, format }) => run(async () => svc.state(user, projectId, format ?? 'json'))())
+    inputSchema: {
+      projectId, format: z.enum(['json', 'text']).optional().describe('text is shorter, for reading; json for exact values (default json)'),
+      tracks: z.array(z.string()).optional().describe('only these tracks (names or ids)'),
+      fromBar: z.number().int().min(1).optional().describe('only clips and notes that touch bars fromBar..toBar (inclusive)'),
+      toBar: z.number().int().min(1).optional(),
+    },
+  }, ({ projectId, format, tracks, fromBar, toBar }) => run(async () => svc.state(user, projectId, format ?? 'json', { ...(tracks?.length ? { tracks } : {}), fromBar, toBar }))())
 
   server.registerTool('apply_ops', {
     description: `Edit the project with a batch of ops: validated first, then applied all or nothing as ONE history entry attributed to you ("<user> (api)"). Returns {ids, seq}; an invalid op returns an error naming it and changes nothing.\n\n${OPS_HELP}`,
@@ -86,6 +92,7 @@ export function mcpRoutes(ctx: Ctx, svc: AgentService) {
   const r = new Hono<AgentEnv>()
   // (the challenge points OAuth-capable clients at the metadata in oauth.ts)
   r.use('*', agentAuth(ctx, `Bearer resource_metadata="${oauthIssuer(ctx.config.publicUrl)}/.well-known/oauth-protected-resource"`))
+  r.use('*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json({ jsonrpc: '2.0', error: { code: -32000, message: `request body over ${MAX_BODY_BYTES >> 20} MB: split the batch` }, id: null }, 413) }))
   r.post('/', async (c) => {
     const server = mcpServerFor(svc, c.var.agent)
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })

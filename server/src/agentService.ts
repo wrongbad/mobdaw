@@ -2,7 +2,7 @@
 // thin wrappers over these. Every call checks that the user may use the project (owner or editor: viewers don't take part live),
 // marks the agent as present, and acts as "<user> (api)".
 import {
-  addChatMessage, agentText, agentView, apiName, chatLog, deviceCatalogText, parseMentions, mentionHandle, userColor,
+  addChatMessage, agentText, agentView, apiName, type ViewFilter, chatLog, deviceCatalogText, parseMentions, mentionHandle, userColor,
   type ChatMessage, type HistoryItem, type HistoryResult,
 } from '@mobdaw/shared'
 import { isDevUser, memberRole, writeBlock, type Ctx } from './auth.ts'
@@ -49,11 +49,11 @@ export function createAgentService(ctx: Ctx, collab: Collab, hub: AgentHub) {
       return rows.map((r) => ({ ...r, canEdit: !writeBlock(ctx, r.id, user.id) }))
     },
 
-    async state(user: AgentUser, projectId: string, format: 'json' | 'text' = 'json') {
+    async state(user: AgentUser, projectId: string, format: 'json' | 'text' = 'json', filter: ViewFilter = {}) {
       access(user, projectId)
       const doc = await hub.touch(projectId, user)
       const rev = lastSeq(ctx, projectId)
-      return format === 'text' ? agentText(doc, rev) : agentView(doc, rev)
+      return format === 'text' ? agentText(doc, rev, filter) : agentView(doc, rev, filter)
     },
 
     /** Validate and apply a batch of ops in one transaction (all or nothing). */

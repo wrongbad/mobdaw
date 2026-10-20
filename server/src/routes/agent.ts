@@ -1,8 +1,12 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { sessionUser, type Ctx } from '../auth.ts'
 import { apiTokenUser } from '../apiTokens.ts'
 import type { AgentUser } from '../agentHub.ts'
 import { AgentError, type AgentService } from '../agentService.ts'
+
+/** Cap on a request body to the agent API and MCP: what really bounds the cost of a batch. */
+export const MAX_BODY_BYTES = 32 << 20
 
 export type AgentEnv = { Variables: { agent: AgentUser } }
 
@@ -32,6 +36,7 @@ export const failure = (c: Context, e: unknown) => {
 export function agentRoutes(ctx: Ctx, svc: AgentService) {
   const r = new Hono<AgentEnv>()
   r.use('*', agentAuth(ctx))
+  r.use('*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json({ error: 'too_large', message: `request body over ${MAX_BODY_BYTES >> 20} MB: split the batch` }, 413) }))
   const handle = (fn: (c: Context<AgentEnv>, user: AgentUser, id: string) => Promise<Response | unknown> | Response | unknown) => async (c: Context<AgentEnv>) => {
     try {
       const out = await fn(c, c.var.agent, c.req.param('id') ?? '')
@@ -46,7 +51,14 @@ export function agentRoutes(ctx: Ctx, svc: AgentService) {
   r.get('/projects/:id/state', handle(async (c, u, id) => {
     const format = c.req.query('format') ?? 'json'
     if (format !== 'json' && format !== 'text') throw new AgentError(400, 'bad_request', 'format is json or text')
-    const out = await svc.state(u, id, format)
+    const bar = (k: string) => {
+      const v = c.req.query(k)
+      if (v == null || v === '') return undefined
+      if (!/^\d+$/.test(v) || Number(v) < 1) throw new AgentError(400, 'bad_request', `${k} is a bar number from 1`)
+      return Number(v)
+    }
+    const tracks = c.req.query('tracks')?.split(',').map((x) => x.trim()).filter(Boolean)
+    const out = await svc.state(u, id, format, { ...(tracks?.length ? { tracks } : {}), fromBar: bar('fromBar'), toBar: bar('toBar') })
     return typeof out === 'string' ? c.text(out) : out
   }))
   r.post('/projects/:id/ops', handle(async (c, u, id) => svc.ops(u, id, await c.req.json().catch(() => ({})))))
