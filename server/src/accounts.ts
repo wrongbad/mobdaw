@@ -1,4 +1,6 @@
 import { addMonths, docName } from '@mobdaw/shared'
+import { hubOf } from './agentHub.ts'
+import { revokeAllApiTokens } from './apiTokens.ts'
 import { getUser, revokeSessions, type Ctx } from './auth.ts'
 import { kick, kickUser, markMissing, type Collab } from './collab.ts'
 import { tx } from './db.ts'
@@ -103,12 +105,14 @@ export function deleteAccount(ctx: Ctx, collab: Collab | null, userId: number): 
     const deleted = deleteCloudData(ctx, userId)
     db.prepare('DELETE FROM project_members WHERE user_id = ?').run(userId)
     revokeSessions(db, userId)
+    revokeAllApiTokens(db, userId)
     db.prepare('DELETE FROM users WHERE id = ?').run(userId)
     return deleted
   })
   if (collab) {
     for (const id of projects) kick(collab, id)
     kickUser(collab, userId)
+    void hubOf(collab)?.dropUser(userId)
     void markMissing(ctx, collab, links)
   }
   return projects

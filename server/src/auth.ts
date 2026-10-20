@@ -45,7 +45,7 @@ function devAccount(ctx: Ctx): Session {
 export const isAdmin = (ctx: Ctx, userId: number) => !!getUser(ctx.db, userId)?.is_admin
 
 /** Sessions are stored by the SHA-256 of the cookie value, so a leaked database can't be used to sign in. */
-const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
+export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
 
 /** Start a session for the user. Returns the raw token (the cookie value); only its hash is stored. */
 export function createSession(ctx: Ctx, userId: number, now = Date.now()): string {

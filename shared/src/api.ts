@@ -106,3 +106,8 @@ export type HistoryItem = { seq: number; ts: number; username: string; text: str
 export type HistorySkip = { coll: string; id: string; field: string }
 /** `seq` is the entry the revert / restore itself was logged as (null when it changed nothing). */
 export type HistoryResult = { applied: number; skipped: HistorySkip[]; seq: number | null }
+
+/** One of the caller's API tokens (`GET /me/api-tokens`); the token itself is shown once, when it is created. */
+export type ApiTokenInfo = { id: number; name: string; createdAt: number; lastUsedAt: number | null }
+export type CreateApiTokenRequest = { name?: string }
+export type CreateApiTokenResponse = ApiTokenInfo & { token: string }

@@ -522,3 +522,10 @@ the agent API are marked "(api)". The history is separate from Ctrl+Z, which sti
   asks first.
 - **Access**: owners and editors (viewers and anyone without a live session have no history). `GET /api/projects/:id/history?since=&limit=`
   lists the log as JSON (oldest first). The core functions (`revertEntry`, `restoreTo`) are exported for the agent API.
+
+## Agent API
+Programs such as Claude Code can join a cloud project through API tokens (made on the account page): they appear in presence as
+"name (api)" (a dot with a dashed ring), read the project as JSON or a text outline, edit it with validated all-or-nothing op
+batches (one history entry each, attributed "name (api)"), read and write chat (`@name(api)` mentions), wait for news with a long
+poll, and revert or restore history. The same functions are offered as MCP tools at `/mcp`. Tokens act with their owner's
+membership (owner or editor) and are accepted only on `/api/agent/*`, `/mcp` and the collab WebSocket. See `docs/agent-api.md`.

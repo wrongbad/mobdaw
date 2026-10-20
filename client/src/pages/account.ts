@@ -8,6 +8,7 @@ import { bytes, dateOf, daysLeft } from '../format'
 import { PROJECT_FILE_EXT, writeProjectFile } from '../projectFile'
 import { collectCloud } from '../transfer'
 import { nav } from '../ui/nav'
+import { apiTokensSection } from './apiTokens'
 
 /** Plan and storage, and the way to delete the account. */
 export function accountPage(me: Me) {
@@ -77,6 +78,10 @@ export function accountPage(me: Me) {
     h('p', { className: 'dim' }, 'your uploads come back as the original audio files. your projects come back as project files, each with its audio; open one with import on the local page.'),
     h('div', { className: 'row' }, ...buttons),
     progress,
+    apiTokensSection({
+      list: api.apiTokens, create: api.createApiToken, revoke: api.revokeApiToken,
+      mcpUrl: `${location.origin}${import.meta.env.BASE_URL}mcp`.replace(/([^:])\/\/+/g, '$1/'),
+    }),
     h('h3', {}, 'delete account'),
     h('p', { className: 'dim' }, 'deletes your account, your cloud audio and your projects immediately. this is the only way an account is ever deleted. download anything you want to keep first.'),
     h('div', { className: 'row' }, password, del),

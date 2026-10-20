@@ -8,6 +8,8 @@ import { homeLink } from '../router'
 import { iconHtml } from '../theme/icons'
 
 const initials = (n: string) => n.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()
+/** An agent's dot: "k (api)" shows `[k]`, so it reads as an API participant, not a person. */
+const dotText = (u: AwarenessState) => (u.api ? `[${initials(u.user.username.replace(/ \(api\)$/, '')).slice(0, 1)}]` : initials(u.user.username))
 
 export type BarProps = {
   store: ProjectStore
@@ -40,7 +42,7 @@ export type BarProps = {
 }
 
 export function Bar(p: BarProps) {
-  const users = createMemo(() => [p.user, ...p.store.remote().map((r) => r.user)])
+  const users = createMemo((): AwarenessState[] => [{ user: p.user }, ...p.store.remote()])
   const clicking = () => p.store.tracks().some((t) => t.role === 'click' && !t.muted) // lit: a click track exists and is unmuted
   // The metronome is an ordinary MIDI track (role 'click'): the button makes it, and then mutes / unmutes it.
   const metro = (
@@ -66,7 +68,7 @@ export function Bar(p: BarProps) {
         <span class={`status ${p.status().bad ? 'error' : 'dim'}`} on:click={p.onStatus}>{p.status().text}</span>
         <Show when={p.live}>
           <span class="presence">
-            <Index each={users()}>{(u) => <span class="dot" title={u().username} style={{ background: u().color }}>{initials(u().username)}</span>}</Index>
+            <Index each={users()}>{(u) => <span class="dot" classList={{ api: !!u().api }} title={u().api ? `${u().user.username} — via API` : u().user.username} style={{ background: u().user.color }}>{dotText(u())}</span>}</Index>
           </span>
         </Show>
         <div class="bar-btns">

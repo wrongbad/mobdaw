@@ -146,6 +146,8 @@ export type SampleMeta = { hash: string; name: string; duration: number; size: n
 
 export type AwarenessState = {
   user: { username: string; color: string }
+  /** A participant that is not a browser: the agent API's presence for a token ("name (api)"), published by the server. */
+  api?: boolean
   playhead?: number | null
   selection?: string[]
   /** In-progress parameter drag; collaborators apply it as a transient override. */

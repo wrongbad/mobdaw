@@ -1,5 +1,5 @@
 import type {
-  AddMemberRequest, CreateInviteRequest, CreateInviteResponse, CreateProjectRequest, InviteInfo,
+  AddMemberRequest, ApiTokenInfo, CreateApiTokenResponse, CreateInviteRequest, CreateInviteResponse, CreateProjectRequest, InviteInfo,
   HistoryItem, HistoryResult, LibrarySample, LoginRequest, LoginResponse, Me, ProjectDetail, ProjectPreview, ProjectSummary, RegisterRequest, UploadAnalysis, UploadInfo, UploadUrlRequest,
   UploadUrlResponse, UrlResponse, UserInfo,
 } from '@mobdaw/shared'
@@ -80,6 +80,9 @@ export const api = {
   saveAnalysis: (hash: string, a: UploadAnalysis) => req('PUT', `/uploads/${hash}/analysis`, a),
   deleteUpload: (hash: string) => del(`/uploads/${hash}`),
   uploadFileUrl: (hash: string) => get<UrlResponse>(`/uploads/${hash}/url`),
+  apiTokens: () => get<ApiTokenInfo[]>('/me/api-tokens'),
+  createApiToken: (name: string) => post<CreateApiTokenResponse>('/me/api-tokens', { name }),
+  revokeApiToken: (id: number) => del(`/me/api-tokens/${id}`),
   async deleteAccount(password: string) {
     await post('/me/delete', { password })
     localStorage.removeItem(TOKEN_KEY)

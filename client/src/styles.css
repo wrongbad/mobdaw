@@ -109,6 +109,11 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .metro::after { content: ''; position: absolute; left: calc(50% - 1px); top: calc(50% - 10px); width: 2px; height: 15px; background: currentColor; transform: rotate(22deg); transform-origin: 50% 100%; }
 .presence { display: flex; }
 .dot { width: 20px; height: 20px; font-size: 10px; color: var(--on-accent); display: grid; place-items: center; }
+/* an agent ("name (api)", from the agent API): a dashed inner ring and a bracketed initial, so it reads as not a person */
+.dot.api { outline: 1.5px dashed var(--on-accent); outline-offset: -3px; font-family: ui-monospace, monospace; font-weight: 600; }
+.api-tokens .token { align-items: center; justify-content: space-between; padding: 4px 0; }
+.api-tokens .token-value { font-family: ui-monospace, monospace; }
+.api-tokens .token-cmd { display: block; overflow-wrap: anywhere; user-select: all; padding: 6px 8px; background: var(--panel); }
 .body { display: flex; flex: 1; min-height: 0; }
 .scroll { flex: 1; min-width: 0; overflow: auto; min-height: 0; }
 .content { position: relative; min-width: 100%; }

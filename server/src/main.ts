@@ -1,4 +1,5 @@
 import { getRequestListener } from '@hono/node-server'
+import { createAgentHub } from './agentHub.ts'
 import { createApp } from './app.ts'
 import { sweepSessions, type Ctx } from './auth.ts'
 import { endExpiredSubscriptions, purgeExpiredData } from './accounts.ts'
@@ -16,9 +17,10 @@ export async function startServer(config: Config) {
     (db.prepare('SELECT mime FROM uploads WHERE owner_id = ? AND hash = ?').get(owner, hash) as { mime: string } | undefined)?.mime,
   )
   const collab = createCollab(ctx)
+  const hub = createAgentHub(db, collab, config.agentIdleMs)
   // Hocuspocus owns the http.Server; replace its placeholder handler with the Hono app.
   collab.httpServer.removeAllListeners('request')
-  collab.httpServer.on('request', getRequestListener(createApp(ctx, storage, collab).fetch))
+  collab.httpServer.on('request', getRequestListener(createApp(ctx, storage, collab, hub).fetch))
   await collab.listen()
   // Objects stored under an older layout move to u<owner id>/<hash>. In the background: with S3 this lists the
   // whole bucket, which would otherwise keep the port closed for the first seconds of every restart.
@@ -37,16 +39,17 @@ export async function startServer(config: Config) {
       .catch((e) => console.error('sweep failed', e))
   const sweeper = setInterval(sweep, 15 * 60 * 1000).unref()
   // Plan changes made outside this process (the admin CLI) reach open connections within a minute.
-  const enforcer = setInterval(() => enforceReadOnly(ctx, collab), 60 * 1000).unref()
+  const enforcer = setInterval(() => (enforceReadOnly(ctx, collab), void hub.sweepRevoked()), 60 * 1000).unref()
   let closing: Promise<void> | undefined
   const close = () => (closing ??= (async () => {
     clearInterval(sweeper)
     clearInterval(enforcer)
     collab.httpServer.closeAllConnections()
+    await hub.close() // (agent presence and its document connections)
     await collab.destroy() // flushes pending document stores
     db.close()
   })())
-  return { port: collab.address.port, close, ctx, storage, collab }
+  return { port: collab.address.port, close, ctx, storage, collab, hub }
 }
 
 if (import.meta.main) {

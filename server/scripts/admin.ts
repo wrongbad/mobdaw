@@ -1,5 +1,6 @@
 import { audit, isClean } from '../src/audit.ts'
 import { RETENTION_MS, endExpiredSubscriptions, endSubscription, giftMonths, purgeExpiredData, resumeSubscription } from '../src/accounts.ts'
+import { revokeAllApiTokens } from '../src/apiTokens.ts'
 import { createUser, findUser, getUser, revokeSessions } from '../src/auth.ts'
 import { loadConfig } from '../src/config.ts'
 import { openDb } from '../src/db.ts'
@@ -68,7 +69,7 @@ if (cmd === 'create-invite') {
 } else if (cmd === 'passwd') {
   const user = needUser(args[0])
   ctx.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await hashPassword(await askPassword()), user.id)
-  const ended = revokeSessions(ctx.db, user.id) // signed out everywhere (open collab connections last until they reconnect)
+  const ended = revokeSessions(ctx.db, user.id) + revokeAllApiTokens(ctx.db, user.id).length // signed out everywhere, API tokens revoked (open collab connections end within a minute: main.ts)
   console.log(`password updated for ${user.username}${ended ? `; ${ended} session${ended > 1 ? 's' : ''} ended` : ''}`)
 } else if (cmd === 'make-admin') {
   const user = needUser(args[0])

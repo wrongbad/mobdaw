@@ -1,7 +1,9 @@
 import { Database } from '@hocuspocus/extension-database'
 import { Server } from '@hocuspocus/server'
 import { docName, samplesMap } from '@mobdaw/shared'
+import { apiTokenUser } from './apiTokens.ts'
 import { memberRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
+import { apiName } from '@mobdaw/shared'
 import { attachHistory } from './history.ts'
 import type { Link } from './uploads.ts'
 
@@ -13,6 +15,12 @@ export function kick(collab: Collab, projectId: string, userId?: number) {
     if (userId === undefined || c.context.userId === userId) c.close({ code: 1000, reason: KICK_REASON })
 }
 export const KICK_REASON = 'access_changed'
+
+/** Close the document connections made with one API token (it was revoked). */
+export function kickToken(collab: Collab, tokenHash: string) {
+  for (const doc of collab.hocuspocus.documents.values())
+    for (const c of doc.getConnections()) if (c.context.tokenHash === tokenHash) c.close({ code: 1000, reason: KICK_REASON })
+}
 
 /** Close every open document connection a user has, across projects. */
 export function kickUser(collab: Collab, userId: number) {
@@ -26,8 +34,11 @@ export function kickUser(collab: Collab, userId: number) {
  */
 export function enforceReadOnly(ctx: Ctx, collab: Collab) {
   for (const [name, doc] of collab.hocuspocus.documents)
-    for (const c of doc.getConnections())
+    for (const c of doc.getConnections()) {
       if (writeBlock(ctx, name.slice('project:'.length), c.context.userId)) c.close({ code: 1000, reason: KICK_REASON })
+      // an API token revoked by another process (the admin CLI)
+      else if (c.context.tokenHash && !ctx.db.prepare('SELECT 1 FROM api_tokens WHERE token_hash = ?').get(c.context.tokenHash)) c.close({ code: 1000, reason: KICK_REASON })
+    }
 }
 
 /**
@@ -96,13 +107,15 @@ export function createCollab(ctx: Ctx) {
     // Only collaborators who can write take part live (edits, presence, chat). Everyone else with access (viewers,
     // public visitors, frozen projects and read-only accounts) gets a snapshot over HTTP and edits their own copy.
     async onAuthenticate({ token, documentName }) {
-      const user = sessionUser(ctx, token)
+      // An API token takes part as "<user> (api)" (via: 'api'); it is the same membership, only the name and attribution differ.
+      const api = apiTokenUser(ctx, token)
+      const user = api ?? sessionUser(ctx, token)
       if (!user) throw new Error('not_signed_in')
       const projectId = documentName.startsWith('project:') ? documentName.slice(8) : null
       const role = projectId && memberRole(ctx, projectId, user.id)
       if (role !== 'owner' && role !== 'editor') throw new Error('forbidden')
       if (writeBlock(ctx, projectId!, user.id)) throw new Error('forbidden')
-      return { userId: user.id, username: user.username, role }
+      return api ? { userId: user.id, username: apiName(user.username), role, via: 'api', tokenHash: api.tokenHash } : { userId: user.id, username: user.username, role }
     },
   })
 }

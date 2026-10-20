@@ -155,6 +155,12 @@ const migrations: (string | ((db: Db) => void))[] = [
   `CREATE TABLE history(
      project_id TEXT NOT NULL, seq INTEGER NOT NULL, ts INTEGER NOT NULL, user_id INTEGER, username TEXT NOT NULL,
      via TEXT NOT NULL, label TEXT NOT NULL, patch TEXT NOT NULL, PRIMARY KEY(project_id, seq));`,
+  // Long-lived tokens for the agent API (server/src/apiTokens.ts), stored as the SHA-256 (hex) of the token like sessions. `id` is what
+  // the account page lists and revokes by. Deleted with the user (accounts.ts deleteAccount, admin passwd).
+  `CREATE TABLE api_tokens(
+     id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, user_id INTEGER NOT NULL, name TEXT NOT NULL,
+     created_at INTEGER NOT NULL, last_used_at INTEGER);
+   CREATE INDEX api_tokens_user ON api_tokens(user_id);`,
 ]
 
 export function openDb(path: string): Db {

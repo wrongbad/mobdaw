@@ -16,6 +16,8 @@ export type Config = {
   userQuotaBytes: number
   /** Dev only (DEV_NO_AUTH): every request is signed in as the account with role 'dev'; no login. Localhost only. */
   devNoAuth: boolean
+  /** How long an agent (API token) stays shown as present after its last request (AGENT_IDLE_MS; the agent API, docs/agent-api.md). */
+  agentIdleMs: number
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -38,5 +40,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     maxUploadBytes: Number(env.MAX_UPLOAD_BYTES ?? 4294967296),
     userQuotaBytes: Number(env.USER_QUOTA_BYTES ?? 42949672960),
     devNoAuth,
+    agentIdleMs: Number(env.AGENT_IDLE_MS ?? 60_000),
   }
 }

@@ -156,9 +156,9 @@ const patchOf = (ctx: Ctx, projectId: string, seq: number) => {
   return r && { label: r.label, patch: JSON.parse(r.patch) as Patch }
 }
 
-type Collab = { hocuspocus: Hocuspocus }
+export type Collab = { hocuspocus: Hocuspocus }
 /** Run `fn` on the live document as `who`, in one transaction (so one history entry). Returns what `fn` returned and the entry's seq. */
-async function write<T>(collab: Collab, projectId: string, who: Who, label: string, fn: (doc: Y.Doc) => T): Promise<{ value: T; seq: number | null }> {
+export async function writeAs<T>(collab: Collab, projectId: string, who: Who, label: string, fn: (doc: Y.Doc) => T): Promise<{ value: T; seq: number | null }> {
   const conn = await collab.hocuspocus.openDirectConnection(docName(projectId), { userId: who.userId, username: who.username, via: who.via, label: cut(label) })
   try {
     let value!: T, st: State | undefined
@@ -183,7 +183,7 @@ async function write<T>(collab: Collab, projectId: string, who: Who, label: stri
 export async function revertEntry(ctx: Ctx, collab: Collab, projectId: string, seq: number, who: Who): Promise<HistoryResult | null> {
   const row = patchOf(ctx, projectId, seq)
   if (!row) return null
-  const { value, seq: made } = await write(collab, projectId, who, `reverted: ${row.label}`, (doc) => {
+  const { value, seq: made } = await writeAs(collab, projectId, who, `reverted: ${row.label}`, (doc) => {
     let applied = 0
     const skipped: HistorySkip[] = []
     for (const it of row.patch) {
@@ -227,7 +227,7 @@ export async function restoreTo(ctx: Ctx, collab: Collab, projectId: string, seq
     if (!target.has(k)) target.set(k, { coll: it.coll, id: it.id, before: it.before })
   }
   const time = new Date(at.ts).toISOString().slice(11, 16)
-  const { value, seq: made } = await write(collab, projectId, who, `restored to ${time} UTC`, (doc) => {
+  const { value, seq: made } = await writeAs(collab, projectId, who, `restored to ${time} UTC`, (doc) => {
     let applied = 0
     // (children first when deleting, parents first when creating isn't needed: entities are independent maps)
     for (const t of target.values()) if (setEntity(doc, t.coll, t.id, t.before)) applied++
@@ -235,3 +235,7 @@ export async function restoreTo(ctx: Ctx, collab: Collab, projectId: string, seq
   })
   return { ...value, seq: made }
 }
+
+/** The seq of the newest history entry of a project (0: none). */
+export const lastSeq = (ctx: Ctx, projectId: string): number =>
+  (ctx.db.prepare('SELECT MAX(seq) AS m FROM history WHERE project_id = ?').get(projectId) as { m: number | null }).m ?? 0

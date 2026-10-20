@@ -19,10 +19,13 @@
     "@hocuspocus/server": "latest",
     "@hono/node-server": "^1.13.0",
     "@mobdaw/shared": "*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "hono": "^4.6.0",
     "tsx": "^4.19.0",
     "ws": "^8.18.0",
-    "yjs": "^13.6.0"
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.0",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@hocuspocus/provider": "latest",

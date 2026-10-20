@@ -12,6 +12,7 @@ export default defineConfig(({ command }) => ({
     port: 5173,
     proxy: {
       '/api': 'http://localhost:8787',
+      '/mcp': 'http://localhost:8787',
       '/collab': { target: 'ws://localhost:8787', ws: true },
     },
   },
