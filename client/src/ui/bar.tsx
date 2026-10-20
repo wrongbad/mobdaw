@@ -24,6 +24,8 @@ export type BarProps = {
   loopText: Accessor<string | null>
   unread: Accessor<number>
   chatOpen: Accessor<boolean>
+  /** The history panel (live cloud sessions only; absent: no button). */
+  history?: { open: Accessor<boolean>; onToggle(): void }
   /** A line of notice next to the logo (e.g. the project is read-only because a newer version wrote it); null: none. */
   notice?: Accessor<string | null>
   onStatus(): void
@@ -70,6 +72,7 @@ export function Bar(p: BarProps) {
           <button class="bar-btn zoom" title="zoom in (ctrl + scroll)" on:click={() => p.onZoom(1.5)} innerHTML={iconHtml('zoomIn', 18)} />
           <button class="bar-btn" title="render the whole project to a file" on:click={p.onExport}>export</button>
           <Show when={p.live}>
+            <Show when={p.history}>{(hist) => <button class="chat-btn" classList={{ on: hist().open() }} title="every change to the project, with revert and restore" on:click={hist().onToggle}>history</button>}</Show>
             <button class="chat-btn" classList={{ on: p.chatOpen() }} title="chat" on:click={p.onChat}>{p.unread() ? `chat (${p.unread()})` : 'chat'}</button>
           </Show>
         </div>

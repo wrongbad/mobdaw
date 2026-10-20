@@ -14,6 +14,7 @@
 //   points  Y.Map  id -> Y.Map Point (a lane's keyframes: pos = timeline samples, value = normalised 0..1 of the param's range)
 //   samples Y.Map  hash -> plain object SampleMeta
 //   chat    Y.Array of plain ChatMessage, append-only; outside the undo scope
+//   history Y.Array of plain HistoryEntry (one line per change, written by the server only; docs/spec.md "History"); outside the undo scope
 import * as Y from 'yjs'
 import { DEVICES, LOFI_DRUM, MIX, MIX_GAIN, MIX_PAN } from './devices.ts'
 import type { ParamTarget } from './params.ts'
@@ -179,6 +180,13 @@ export const samplesMap = (doc: Y.Doc) => doc.getMap<SampleMeta>('samples')
 export const regionsMap = (doc: Y.Doc) => doc.getMap<YM>('regions')
 export const markersMap = (doc: Y.Doc) => doc.getMap<YM>('markers')
 export const chatLog = (doc: Y.Doc) => doc.getArray<ChatMessage>('chat')
+/**
+ * One line of the project's shared change log: the server appends it for every transaction that changed a tracked entity
+ * (server/src/history.ts). `text` is at most 40 characters (describe.ts); `api` marks changes made through the agent API.
+ */
+export type HistoryEntry = { seq: number; username: string; color: string; text: string; ts: number; api?: boolean }
+export const HISTORY_MAX = 2000
+export const historyLog = (doc: Y.Doc) => doc.getArray<HistoryEntry>('history')
 
 /** Types to pass to `new Y.UndoManager(undoScope(doc), { trackedOrigins })`. */
 export const undoScope = (doc: Y.Doc) => [

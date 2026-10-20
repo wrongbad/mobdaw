@@ -483,3 +483,33 @@ reload for the latest version. Nothing is migrated or written.
 ## Chat
 Messages from the app itself (for example "migrated to a shared timeline at 96 bpm 4/4 ...") appear in the chat as a muted notice
 between the conversation, not as someone's bubble.
+
+## History
+Every project in the cloud keeps a shared change log, next to Chat: the **history** button in the bar opens it (live sessions only;
+snapshots and projects on this device have none). It lists every change by anyone, oldest to newest, as a colour dot, a text of at
+most 40 characters ("added 16 notes to Bass", "Reverb mix 0.32→0.50", "tempo 120→128 at bar 9"), who and when. Changes made through
+the agent API are marked "(api)". The history is separate from Ctrl+Z, which still undoes only your own edits.
+
+- **Capture** (`server/src/history.ts`): the server keeps a JSON mirror of each loaded document's undo-scope maps (meta, regions,
+  markers, tracks, clips, notes, loopers, pads, devices, lanes, points; not samples, chat or the log itself). After every transaction it
+  diffs the entities that transaction touched against the mirror into a *patch* (`{coll, id, before, after}` per entity, `null` for
+  created / deleted). One transaction is one entry; nothing is merged, so a gesture is one entry only because the client writes it in
+  one transaction. A transaction that changed no tracked entity makes none. The author is the transaction's origin: the connection's
+  user, a direct connection's context (`userId`, `username`, `via`, optional `label`), or the app itself.
+- **Storage**: the patch goes to the SQLite table `history(project_id, seq, ts, user_id, username, via, label, patch)` (`seq` counts
+  up per project) and a summary `{seq, username, color, text, ts, api?}` is appended to the doc's `history` Y.Array, so it syncs live
+  like chat. Both keep the last 2000 entries; older ones cannot be reverted or restored to. Loading a document reconciles the array with
+  the table (a copied project starts with an empty log).
+- **Text** (`shared/src/describe.ts`): `describe(patch, lookup)` names the main thing that changed (tracks first, then tempo, markers,
+  clips, notes, devices, automation), with names read through the patch or the mirror (a note's clip, the clip's track). An explicit
+  `label` on the writer's context replaces it (cut to 40 characters).
+- **Revert this** (`POST /api/projects/:id/history/:seq/revert`): writes back the entry's `before`, field by field (a device's params
+  count as fields), only where the field still holds the entry's `after`. Fields changed since are skipped and reported
+  (`{applied, skipped}`). A created entity is deleted if untouched since; a deleted one is recreated with the same id (a clip and its
+  notes, a device and its params, are entries of the same patch, so they come back together). It runs as a server write under the
+  caller's name with the text "reverted: ...", so it is an entry of its own and can be reverted too.
+- **Restore to this version** (`POST .../:seq/restore`): puts every entity touched by a later entry back to how it was before the
+  first of them, unconditionally, in one transaction ("restored to 14:02 UTC"). This rolls back everyone's later work, so the panel
+  asks first.
+- **Access**: owners and editors (viewers and anyone without a live session have no history). `GET /api/projects/:id/history?since=&limit=`
+  lists the log as JSON (oldest first). The core functions (`revertEntry`, `restoreTo`) are exported for the agent API.

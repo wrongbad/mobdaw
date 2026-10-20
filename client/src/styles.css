@@ -407,6 +407,21 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .chat-in input { flex: 1; min-width: 0; border: 0; background: var(--bg); }
 .chat-in button { border: 0; border-left: 1px solid var(--line); }
 
+/* history sidebar (shares the chat's place) */
+.history { width: 280px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
+.history[hidden] { display: none; }
+.history-log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: 4px 0; }
+.hist { display: flex; align-items: center; gap: 8px; padding: 5px 4px 5px 10px; font-size: 12px; }
+.hist:hover { background: var(--raise); }
+.hist-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.hist-main { flex: 1; min-width: 0; }
+.hist-text { overflow-wrap: anywhere; }
+.hist-meta { font-size: 10px; color: var(--dim); }
+.hist.api .hist-text { font-style: italic; }
+.hist.api .hist-meta { color: var(--accent); }
+.hist-more { flex: none; border: 0; background: none; color: var(--dim); padding: 4px 8px; }
+.hist-more:hover { color: var(--fg); }
+
 /* soundscape: pad stripes on the main lane, and a source lane in its own time world below it */
 /* soundscape: the main lane is an ordinary blank lane; regions are clip-styled blocks, and the source lane below has its own time world */
 .clip.region { color: var(--fg); }
