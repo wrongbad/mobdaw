@@ -1,1 +1,1 @@
-"""Listening: audio samples of a project as signals on the project timeline (needs numpy, scipy, soundfile)."""
+"""Listening: offline analysis of recorded audio (needs the `audio` extra: numpy, scipy, soundfile)."""
