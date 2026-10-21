@@ -23,12 +23,14 @@ when the project moved since the pull (someone else edited), so pull again.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import statistics
 import sys
 import urllib.error
 import urllib.request
+from bisect import bisect_right
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -45,6 +47,10 @@ MAX_OPS, MAX_NOTES = 5000, 100_000     # the server's batch limits (docs/agent-a
 
 class BridgeError(Exception):
     pass
+
+
+class SampleIncoming(BridgeError):
+    """409 sample_incoming: the take is still on the recorder's device; retry, or wait for the `sample` event."""
 
 
 # --- the API ---------------------------------------------------------------------
@@ -72,6 +78,8 @@ class Client:
                 err = json.loads(e.read())
             except Exception:
                 err = {}
+            if e.code == 409 and err.get("error") == "sample_incoming":
+                raise SampleIncoming(f"{method} {path}: {err.get('message') or 'sample_incoming'}") from None
             raise BridgeError(f"{method} {path}: {e.code} {err.get('message') or err.get('error') or e.reason}"
                               + (f" (op {err['op']})" if err.get("op") is not None else "")) from None
         except urllib.error.URLError as e:
@@ -103,6 +111,10 @@ class Client:
     def history_since(self, pid: str, seq: int) -> list[dict]:
         return self._call("GET", f"/projects/{pid}/history?since={seq}&limit=5")
 
+    def sample_url(self, pid: str, hash: str) -> str:
+        """The signed download URL of a project sample: absolute (S3) or a path on the server (local storage)."""
+        return self._call("GET", f"/projects/{pid}/samples/{hash}/url")["url"]
+
     def ops(self, pid: str, ops: list[dict], label: str) -> dict:
         return self._call("POST", f"/projects/{pid}/ops", {"label": label[:40], "ops": ops})
 
@@ -115,42 +127,125 @@ def _frac(x) -> Fraction:
     return Fraction(x).limit_denominator(1000)
 
 
+@dataclass
+class _Span:
+    """One region (or the filler after a free bar) on the tick and second axes; the same layout as `Span` in timemap.ts."""
+    bar: int
+    end_bar: float                  # first bar after the span (inf for the last)
+    tick0: Fraction
+    tick1: Fraction | None          # None: runs forever
+    sec0: float
+    bpm0: float
+    bpm1: float
+    free: bool
+    synthetic: bool
+    num: int                        # beats per bar (1 in a free bar)
+    bar_ticks: Fraction
+    beat_ticks: Fraction
+
+
+def _ramp_seconds(b0: float, b1: float, ticks: float, ppq: int, total: float) -> float:
+    """Seconds for `ticks` ticks of a span that goes from tempo b0 to b1 linearly in ticks (timemap.ts `secondsFor`)."""
+    if b0 == b1 or abs(b1 - b0) < 1e-12 * b0:
+        return ticks * 60 / (b0 * ppq)
+    return 60 * total / (ppq * (b1 - b0)) * math.log((b0 + (b1 - b0) * ticks / total) / b0)
+
+
 class Timeline:
-    """Bar starts in ticks from the regions of a state (the same arithmetic as shared/src/timemap.ts at constant tempo;
-    ramps change time, not ticks, so ticks need no tempo except for a free bar's nominal length)."""
+    """The project's timeline from the regions of a state: bar starts in ticks (exact Fractions) and score time in seconds
+    (floats), the same arithmetic as shared/src/timemap.ts: constant tempo, linear tempo ramps (`rampTo`, closed form) and
+    free bars (a bar of fixed seconds whose ticks are nominal: its length at the tempo in effect before it, 120 if first;
+    a gap after it is filled with the last metered meter at that tempo)."""
 
     def __init__(self, state: dict):
         self.ppq = state["meta"]["ppq"]
-        self.regions = sorted(state["regions"], key=lambda r: r["bar"])
-        self.bar_ticks: list[tuple[int, Fraction]] = []      # (first bar, ticks per bar) per region
-        bpm = Fraction(120)
-        for r in self.regions:
-            if r["kind"] == "free":
-                self.bar_ticks.append((r["bar"], Fraction(r["seconds"]).limit_denominator(1000) * bpm / 60 * self.ppq))
-            else:
-                bpm = Fraction(r["bpm"]).limit_denominator(1000)
-                self.bar_ticks.append((r["bar"], _frac(r["barTicks"])))
-        if not self.bar_ticks or self.bar_ticks[0][0] != 1:
+        by_bar: dict[int, dict] = {}
+        for r in state["regions"]:                      # same bar: the smallest id wins, as in normalizeRegions
+            if r["bar"] not in by_bar or r.get("id", "") < by_bar[r["bar"]].get("id", ""):
+                by_bar[r["bar"]] = r
+        self.regions = [by_bar[b] for b in sorted(by_bar)]
+        if not self.regions or self.regions[0]["bar"] != 1:
             raise BridgeError("the project has no region at bar 1")
+        self.spans: list[_Span] = []
+        tick, sec, bpm = Fraction(0), 0.0, 120.0        # bpm: the tempo a free bar borrows (the end tempo of what precedes it)
+        num, den = 4, 4                                  # the last metered meter, for fillers
 
-    def bar_start(self, bar: int) -> Fraction:
-        t = Fraction(0)
-        for i, (b0, bt) in enumerate(self.bar_ticks):
-            b1 = self.bar_ticks[i + 1][0] if i + 1 < len(self.bar_ticks) else None
-            if b1 is None or bar <= b1:
-                return t + (bar - b0) * bt
-            t += (b1 - b0) * bt
-        return t
+        def add(r: dict, end_bar: float, synthetic: bool = False) -> None:
+            nonlocal tick, sec, bpm, num, den
+            if r["kind"] == "free":
+                length = Fraction(r["seconds"]).limit_denominator(1000)
+                span = _Span(r["bar"], end_bar, tick, tick + length * Fraction(bpm).limit_denominator(1000) / 60 * self.ppq,
+                             sec, bpm, bpm, True, False, 1, length * Fraction(bpm).limit_denominator(1000) / 60 * self.ppq, Fraction(self.ppq))
+                sec += float(length)
+            else:
+                num, den = (int(x) for x in r["meter"].split("/"))
+                bt = Fraction(num * 4 * self.ppq, den)
+                b0 = float(r["bpm"])
+                finite = end_bar != math.inf
+                ticks = (end_bar - r["bar"]) * bt if finite else None
+                b1 = float(r["rampTo"]) if finite and r.get("rampTo") is not None and r["rampTo"] != r["bpm"] else b0
+                span = _Span(r["bar"], end_bar, tick, None if ticks is None else tick + ticks, sec, b0, b1, False, synthetic,
+                             num, bt, Fraction(4 * self.ppq, den))
+                if ticks is not None:
+                    sec += _ramp_seconds(b0, b1, float(ticks), self.ppq, float(ticks))
+            self.spans.append(span)
+            if span.tick1 is not None:
+                tick = span.tick1
+            bpm = span.bpm1
+
+        for i, r in enumerate(self.regions):
+            nxt = self.regions[i + 1]["bar"] if i + 1 < len(self.regions) else math.inf
+            if r["kind"] == "free":
+                add(r, r["bar"] + 1)
+                if nxt > r["bar"] + 1:
+                    add({"kind": "metered", "bar": r["bar"] + 1, "bpm": bpm, "meter": f"{num}/{den}"}, nxt, True)
+            else:
+                add(r, nxt)
+        self._tick0 = [s.tick0 for s in self.spans]
+        self._sec0 = [s.sec0 for s in self.spans]
+        self._bar0 = [s.bar for s in self.spans]
+        # (first bar, ticks per bar) per stored region
+        self.bar_ticks: list[tuple[int, Fraction]] = [(s.bar, s.bar_ticks) for s in self.spans if not s.synthetic]
+
+    def bar_start(self, bar: float) -> Fraction:
+        s = self.spans[max(0, bisect_right(self._bar0, bar) - 1)]
+        return s.tick0 + (Fraction(bar) - s.bar) * s.bar_ticks
 
     def bar_of(self, tick: Fraction) -> int:
         """The bar a tick is in (1-based)."""
-        t0 = Fraction(0)
-        for i, (b0, bt) in enumerate(self.bar_ticks):
-            b1 = self.bar_ticks[i + 1][0] if i + 1 < len(self.bar_ticks) else None
-            if b1 is None or tick < t0 + (b1 - b0) * bt:
-                return b0 + int((tick - t0) // bt)
-            t0 += (b1 - b0) * bt
-        return 1
+        s = self.spans[max(0, bisect_right(self._tick0, tick) - 1)]
+        return s.bar if s.free else s.bar + int((tick - s.tick0) // s.bar_ticks)
+
+    def seconds_at(self, tick) -> float:
+        """Score seconds of a tick (timemap.ts `tickToSampleExact` / sampleRate). Before tick 0 the first tempo extrapolates."""
+        s = self.spans[max(0, bisect_right(self._tick0, tick) - 1)]
+        dt = float(tick - s.tick0)
+        total = None if s.tick1 is None else float(s.tick1 - s.tick0)
+        if s.free or s.bpm0 == s.bpm1 or total is None:
+            return s.sec0 + dt * 60 / (s.bpm0 * self.ppq)
+        return s.sec0 + _ramp_seconds(s.bpm0, s.bpm1, dt, self.ppq, total)
+
+    def tick_at(self, seconds: float) -> float:
+        """The tick at a score time (timemap.ts `sampleToTick`), as a float; `_frac` it for an exact value."""
+        s = self.spans[max(0, bisect_right(self._sec0, seconds) - 1)]
+        ds = seconds - s.sec0
+        total = None if s.tick1 is None else float(s.tick1 - s.tick0)
+        if s.free or s.bpm0 == s.bpm1 or total is None or abs(s.bpm1 - s.bpm0) < 1e-12 * s.bpm0:
+            return float(s.tick0) + ds * s.bpm0 * self.ppq / 60
+        b = s.bpm0 * math.exp(ds * self.ppq * (s.bpm1 - s.bpm0) / (60 * total))
+        return float(s.tick0) + (b - s.bpm0) * total / (s.bpm1 - s.bpm0)
+
+    def beat_grid(self, from_bar: int, to_bar: int) -> list[tuple[float, Fraction, bool]]:
+        """Every beat of bars [from_bar, to_bar) as (seconds, tick, is_bar_start). A beat is a 1/den note (`beatTicks`); a free
+        bar has just its bar line."""
+        out = []
+        for bar in range(from_bar, to_bar):
+            s = self.spans[max(0, bisect_right(self._bar0, bar) - 1)]
+            t0 = self.bar_start(bar)
+            for k in range(1 if s.free else math.ceil(s.bar_ticks / s.beat_ticks - Fraction(1, 10**9))):
+                t = t0 + k * s.beat_ticks
+                out.append((self.seconds_at(t), t, k == 0))
+        return out
 
 
 def _meter_text(r: dict) -> str:
