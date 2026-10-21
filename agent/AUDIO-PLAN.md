@@ -176,10 +176,12 @@ ticks directly (`Timeline.tick_at(seconds)`); what remains is how the playing si
   dragging ("drifts to -180 ms by bar 12"). Both are reported, neither refused.
 - **Analysis on the playing's beats.** Chords and notes are estimated on the beats as played (project beats moved by the
   offset curve), so a dragging take still gets one chord per beat it actually played.
-- **Placement: follow the audio, quantize where it agrees.** Every heard event (chord change, note, accent) keeps its real
-  time. The bass is written at the project ticks of those times. Where the playing is within snapping distance of the
-  project grid (about 1/8 of a beat), the tick is snapped to the grid; where it isn't, the bass sits where the audio is.
-  So a take played tight to the click gives a quantized bass, and a take that drifts gives a bass that drifts with it.
+- **Placement: on the project's grid, never on the take's offset.** The existing click/MIDI is the timing truth, so drift
+  must not compound. The alignment is used only to read the take: each heard event (chord change, note, accent) is mapped
+  through the offset curve to the project beat and subdivision slot it was played *as* (played beat k is project beat k),
+  and the bass is written on that grid position. A take that is late, early, rushing or dragging still gives a bass
+  locked to the click. The offset is reported with the fix ("the take sits +35 ms behind the click: move the clip 35 ms
+  earlier"), since the DAW corrects an audio track's offset easily; the bass never copies it.
 - **Feel.** Subdivision and swing are measured, not assumed: compare straight 16ths, triplet 8ths, triplet 16ths and swung
   8ths at the best-fitting ratio against the onset phases, and report the winner ("swing 64%", "triplet feel"). Snapping
   uses the winning grid, and `bass.line` takes `swing=` so a shuffle gets a shuffled bass.
@@ -203,12 +205,13 @@ ticks directly (`Timeline.tick_at(seconds)`); what remains is how the playing si
 offset curve summary or the detected tempo/meter/downbeat with confidences, and the warnings. Every heard position is a
 project tick (a Fraction, not necessarily on the grid) plus its seconds. `listen` exits 0 whenever it could read the audio.
 The old refusals go: `listen`/`pull --listen` exit codes, the e2e "Drift" refusal (it becomes: followed, warned, the bass
-lands within 30 ms of the take's chord changes), and the off-grid text in `examples/bass_for_take.py`.
+on the project grid at the beats the take's chord changes were played as), and the off-grid text in `examples/bass_for_take.py`.
 
 **Tests** (synthetic, `tests/synth.py`): swung 8ths, triplet 8ths, laid back 35 ms, rushing 3% against a click, dragging
 then catching up; audio-only at 87 bpm 4/4, 3/4, 6/8, with a pickup, with ±4% rubato, and sparse whole-note chords.
 Assert: never an error; feel reported right; in case A the bass's chord-change notes land within 30 ms of the take's chord
-changes (in seconds, through the map) and on the grid when the take is tight; in case B tempo within 2% or the half/double
+changes as mapped to project beats, and every bass note is on the project grid even for the laid-back, rushing and
+dragging takes; in case B tempo within 2% or the half/double
 reading named in a warning, meter right on the clear cases and warned on the ambiguous ones, downbeat right on the clear
 cases.
 
