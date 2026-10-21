@@ -54,6 +54,9 @@ Errors are `{error, message}` with 400 (`bad_request`, `bad_ops` with `op`: the 
                "end": "4.1.0", "loopTicks": 3840, "notes": [{"id": "...", "p": "C2", "pitch": 36, "t": 0, "d": 240, "v": 100}]}]}],
   "master": {"devices": []} }
 ```
+A track's `role` is `"click"` on the metronome's track (the one the metronome button creates the first time it is switched on, and then only mutes);
+no other track has the field. A project has a **timing reference** when a `role: "click"` track exists (muted or not) or any MIDI clip has notes; the
+badmidi listening tools then keep the project's time map and a part for a recording follows it (`agent/AGENTS.md`, "Making a part for a recording").
 Positions are `bar.beat.tick` (bar and beat from 1, tick within the beat; a beat is a `1/den` note, so an eighth in 7/8) next to ticks
 from bar 1. Note `t` and `d` are ticks inside the clip. Velocity `v` is MIDI 1..127. Audio clips show `start` (the position),
 `startSeconds`, `lengthSeconds`, `sourceOffsetSeconds` (where in the sample the clip starts reading), `sourceHash` and the sample

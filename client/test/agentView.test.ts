@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  REVERB, addAudioClip, addSample, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, agentText, agentView, formatDuration, formatPosition, getTimeMap, parseDuration,
+  REVERB, addAudioClip, addClickTrack, addSample, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, agentText, agentView, formatDuration, formatPosition, getTimeMap, parseDuration,
   parsePosition, setKey, setParam, updateTrack, DEVICES, FINNWAVE,
 } from '@mobdaw/shared'
 
@@ -86,6 +86,20 @@ describe('agentView', () => {
     expect(plain).not.toHaveProperty('loopPhaseSeconds')
     expect(phased).toMatchObject({ loopSeconds: 2, loopPhaseSeconds: 0.5 })
     expect(agentText(doc)).toContain('loop 2 s from 0.5 s in')
+  })
+
+  it('marks the metronome track with role click (muted or not) and no other track', () => {
+    const { doc } = fixture()
+    const click = addClickTrack(doc)
+    let v = agentView(doc)
+    expect(v.tracks.find((t) => t.id === click)).toMatchObject({ name: 'click', role: 'click', muted: false })
+    expect(v.tracks.filter((t) => 'role' in t).map((t) => t.name)).toEqual(['click'])
+    expect(agentText(doc)).toContain('track "click" [' + click + '] midi click')
+    updateTrack(doc, click, { muted: true })
+    v = agentView(doc)
+    expect(v.tracks.find((t) => t.id === click)).toMatchObject({ role: 'click', muted: true })
+    expect(agentText(doc)).toContain('midi click muted')
+    expect(agentView(fixture().doc).tracks[0]).not.toHaveProperty('role')
   })
 
   it('lists every device type with its param names', () => {

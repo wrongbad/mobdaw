@@ -115,6 +115,8 @@ export type AgentAudioClip = {
 export type AgentSample = { name: string; duration: number; mime: string; status?: SampleStatus }
 export type AgentTrack = {
   id: string; name: string; kind: string; muted: boolean; soloed: boolean; color?: number
+  /** `'click'` on the metronome's track (the project has a timing reference); absent on every other track. */
+  role?: 'click'
   devices: AgentDevice[]; clips: (AgentMidiClip | AgentAudioClip)[]
 }
 export type AgentRegion =
@@ -201,7 +203,7 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
     }
   }
   const tracks = getTracks(doc).filter((t) => !wanted || wanted.includes(t.id.toLowerCase()) || wanted.includes(t.name.toLowerCase())).map((t) => ({
-    id: t.id, name: t.name, kind: t.kind, muted: t.muted, soloed: t.soloed, ...(t.color != null ? { color: t.color } : {}),
+    id: t.id, name: t.name, kind: t.kind, muted: t.muted, soloed: t.soloed, ...(t.color != null ? { color: t.color } : {}), ...(t.role === 'click' ? { role: 'click' as const } : {}),
     devices: devices.filter((d) => d.trackId === t.id).map(deviceView),
     clips: clips.filter((c) => c.trackId === t.id && inWindow(c)).map(clipView),
   }))
@@ -251,7 +253,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
   }
   if (v.markers.length) out.push(`markers: ${v.markers.map((m) => `bar ${m.bar} "${m.label}" [${m.id}]`).join(', ')}`)
   for (const t of v.tracks) {
-    out.push(`track "${t.name}" [${t.id}] ${t.kind}${t.muted ? ' muted' : ''}${t.soloed ? ' soloed' : ''}`)
+    out.push(`track "${t.name}" [${t.id}] ${t.kind}${t.role ? ` ${t.role}` : ''}${t.muted ? ' muted' : ''}${t.soloed ? ' soloed' : ''}`)
     for (const d of t.devices) out.push(`  device ${devLine(d)}`)
     for (const c of t.clips) {
       if (c.kind === 'audio') {
