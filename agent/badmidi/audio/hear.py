@@ -259,7 +259,7 @@ def _fold(L: np.ndarray, lo: int, hi: int) -> np.ndarray:
 # --- onsets, rhythm, grid -------------------------------------------------------------------------
 
 
-ONSET_DELAY = 0.0   # seconds to subtract from the flux peak time (set from measurement)
+ONSET_DELAY = -0.008   # seconds to subtract from the flux onset time: it leads the first stroke by 8 ms on tests/synth.py (measured)
 
 
 def onsets(x: np.ndarray) -> Onsets:

@@ -16,6 +16,7 @@ Pure numpy/scipy on mono 22050 Hz signals (`hear.prepare` converts) or on onset 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from fractions import Fraction
 
 import numpy as np
 from scipy.ndimage import gaussian_filter1d, maximum_filter1d, median_filter, uniform_filter1d
@@ -521,3 +522,216 @@ def meter(x, beat_times, feel_: Feel | None = None, chord_changes=None) -> Meter
         run = Reading(P, "4" if unit == "8" else "8", ph, round(sc[(P, ph)], 2))
         conf *= 0.6 if shuffle and not third else 1.0
     return Meter(P, unit, ph, float(B[ph]), conf, run, {k: round(v, 2) for k, v in sc.items()})
+
+
+# --- alignment to a reference grid ----------------------------------------------------------------
+
+
+def _extend(ref: np.ndarray) -> tuple[np.ndarray, int]:
+    """The reference beats with two extra beats at either end (at the nearest beat length), and how many were added before."""
+    d0, d1 = ref[1] - ref[0], ref[-1] - ref[-2]
+    return np.r_[ref[0] - d0 * np.arange(2, 0, -1), ref, ref[-1] + d1 * np.arange(1, 3)], 2
+
+
+def _beat_coord(t: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """Time -> position in beats (beat i is at i), through the possibly irregular reference beats, extended past both ends."""
+    E, pre = _extend(ref)
+    return np.interp(t, E, np.arange(len(E)) - pre)
+
+
+def _onset_curve(t: np.ndarray, w: np.ndarray, ref: np.ndarray, bpb: int) -> tuple[np.ndarray, np.ndarray, float]:
+    """Offset (in beats, per reference beat) of the on-beat onsets from the reference: in windows of 4 beats the phase that most
+    onsets sit at (a circular comb), smooth from window to window (Viterbi on the circle), unwrapped so it can run away from the
+    grid by more than a beat, then refined from the onsets near it. Returns (offset in seconds per beat, weight of onsets per beat,
+    share of the onset weight that sits on the beats)."""
+    n = len(ref)
+    u = _beat_coord(t, ref)
+    nb = 64
+    cs = np.arange(n, dtype=float)
+    shifts = (np.arange(nb) / nb) - 0.5
+    sig = 0.07
+    E = np.zeros((n, nb))
+    tot = np.zeros(n)
+    for i, c in enumerate(cs):
+        m = np.abs(u - c) <= 2.0
+        if m.any():
+            d = _cdist((u[m] % 1.0)[:, None], shifts[None])
+            E[i] = (w[m, None] * np.exp(-0.5 * (d / sig) ** 2)).sum(axis=0)
+            tot[i] = w[m].sum()
+    En = E / np.maximum(tot[:, None], 1e-9)
+    dd = np.abs(_cdist(np.arange(nb)[:, None] / nb, np.arange(nb)[None] / nb)) * nb
+    cost = 1.5 * (dd / 8) ** 2
+    V = En[0] - 0.5 * np.abs(shifts) * 4
+    bp = np.zeros((n, nb), int)
+    for i in range(1, n):
+        tt = V[None] - cost
+        bp[i] = tt.argmax(axis=1)
+        V = tt.max(axis=1) + En[i] * (1.0 if tot[i] > 0 else 0.0)
+    path = np.zeros(n, int)
+    path[-1] = int(V.argmax())
+    for i in range(n - 1, 0, -1):
+        path[i - 1] = bp[i][path[i]]
+    s = np.unwrap(shifts[path] * 2 * np.pi) / (2 * np.pi)                    # beats, continuous
+    off = np.zeros(n)
+    got = np.zeros(n, bool)
+    on = 0.0
+    for i, c in enumerate(cs):
+        m = np.abs(u - c) <= 2.0
+        if not m.any():
+            continue
+        j = np.round(u[m] - s[i])                                           # the reference beat each onset belongs to
+        r = u[m] - j - s[i]
+        keep = np.abs(r) < 0.15
+        if keep.sum() >= 1:
+            jj = j[keep].astype(int)
+            ok = (jj >= -2) & (jj < n + 2)
+            if ok.any():
+                E_, pre = _extend(ref)
+                sec = t[m][keep][ok] - E_[jj[ok] + pre]
+                ww = w[m][keep][ok]
+                o = np.argsort(sec)
+                cw = np.cumsum(ww[o])
+                off[i] = sec[o][np.searchsorted(cw, cw[-1] / 2)]
+                got[i] = True
+    L = np.diff(ref)
+    L = np.r_[L, L[-1]]
+    guess = s * L
+    off = np.where(got, off, guess)
+    # smooth over about two bars
+    sm = gaussian_filter1d(off, max(bpb * 0.75, 1.0), mode="nearest")
+    share = float(w[np.abs(_cdist(u - np.interp(u, cs, s), 0.0)) < 0.1].sum() / max(w.sum(), 1e-9))
+    return sm, tot, share
+
+
+def _dtw_curve(a: np.ndarray, ref: np.ndarray, kappa: float = 0.5) -> np.ndarray:
+    """Match audio beats to reference beats in order (monotonic, either side may skip a beat at a price) so the offset stays
+    continuous from beat to beat; the offset in seconds per reference beat."""
+    I, J = len(a), len(ref)
+    L = float(np.median(np.diff(ref)))
+    D = (a[:, None] - ref[None]) / L                                       # offsets in beats
+    INF = 1e18
+    C = np.full((I, J), INF)
+    bk = np.zeros((I, J, 2), int)
+    for i in range(I):
+        for j in range(J):
+            best, prev = 2.0 * abs(D[i, j]) + kappa * (i + j), (-1, -1)         # start anywhere, a late start costs the beats skipped
+            for pi, pj, pc in ((i - 1, j - 1, 0.0), (i - 1, j, kappa), (i, j - 1, kappa)):
+                if pi >= 0 and pj >= 0 and C[pi, pj] < INF:
+                    c = C[pi, pj] + pc + abs(D[i, j] - D[pi, pj])
+                    if c < best:
+                        best, prev = c, (pi, pj)
+            C[i, j], bk[i, j] = best, prev
+    end = C + kappa * ((I - 1 - np.arange(I))[:, None] + (J - 1 - np.arange(J))[None])
+    i, j = np.unravel_index(int(end.argmin()), end.shape)
+    pairs = []
+    while i >= 0:
+        pairs.append((i, j))
+        i, j = bk[i, j]
+    off = np.full(J, np.nan)
+    for i, j in pairs[::-1]:
+        off[j] = a[i] - ref[j] if np.isnan(off[j]) or abs(a[i] - ref[j]) < abs(off[j]) else off[j]
+    ok = ~np.isnan(off)
+    return np.interp(np.arange(J), np.nonzero(ok)[0], off[ok])
+
+
+def align(onset_times, ref_beats, audio_beats=None, strengths=None, beats_per_bar: int = 4) -> Alignment:
+    """How the playing sits against reference beats (a click, a project's time map): the offset in seconds at each reference beat,
+    a smooth curve (about two bars) from the phase of the onsets within their beat, unwrapped so a take that rushes or drags can
+    leave the grid by more than a beat (played beat k is reference beat k). Where the curve strays by over a third of a beat and
+    `audio_beats` (from `beats`) are given, they are matched to the reference beats in order instead. kind: 'tight' (within
+    ~20 ms), 'feel' (a steady offset: latency, laid back), 'drifting' (the offset moves by over ~45 ms). Never refuses."""
+    ref = np.asarray(ref_beats, float)
+    t = np.asarray(onset_times, float)
+    if len(ref) < 3:
+        return Alignment(np.zeros(len(ref)), 0.0, 0.0, "tight", ref.copy(), 0.0, "onsets", 0.0, 0)
+    w = np.ones(len(t)) if strengths is None else np.asarray(strengths, float)
+    L = float(np.median(np.diff(ref)))
+    ok = (w >= 0.2) & (t >= ref[0] - 0.75 * L) & (t <= ref[-1] + 0.75 * L)
+    t, w = t[ok], w[ok]
+    if len(t) < 4:
+        return Alignment(np.zeros(len(ref)), 0.0, 0.0, "tight", ref.copy(), 0.0, "onsets", 0.0, len(t))
+    curve, tot, share = _onset_curve(t, w, ref, beats_per_bar)
+    method = "onsets"
+    conf = float(np.clip((share - 0.3) / 0.4, 0, 1) * min(1.0, len(t) / 20))
+    if audio_beats is not None and len(audio_beats) >= 3 and np.abs(curve).max() > L / 3:
+        curve, method = _dtw_curve(np.asarray(audio_beats, float), ref), "beats"
+        curve = gaussian_filter1d(curve, 1.0, mode="nearest")
+        conf = min(conf + 0.2, 1.0) if conf > 0 else 0.3
+    mean = float(curve.mean())
+    rng = float(np.percentile(curve, 95) - np.percentile(curve, 5))
+    drift = float(np.polyfit(np.arange(len(curve)), curve, 1)[0] * (len(curve) - 1)) if len(curve) > 2 else 0.0
+    kind = "drifting" if rng > 0.045 else "feel" if abs(mean) > 0.02 else "tight"
+    return Alignment(curve, mean, float(np.abs(curve).max()), kind, ref + curve, conf, method, drift, len(t))
+
+
+# --- played beats -> the project grid ---------------------------------------------------------------
+
+
+@dataclass
+class GridPos:
+    """Where an event was played, in the reference's terms: reference beat `beat` (an index into `ref_beats`) plus subdivision slot
+    `slot` of `feel`'s subdivision of it; `position` = beat + the slot's notated fraction (a swung 8th is notated at 1/2)."""
+    beat: int
+    slot: int
+    position: Fraction
+    error_s: float               # event time minus where the slot was played (what a quantiser would have moved it)
+    error_beats: float
+
+
+def to_grid(event_times, al: Alignment, f: Feel | None = None) -> list[GridPos]:
+    """Map events (chord changes, notes, accents; seconds) to the project beat and slot they were played as. Played beat k is
+    reference beat k: an event is placed in the frame of `al.played_beats` (the reference beats moved by the offset curve), at the
+    nearest subdivision slot of feel `f` (default straight 16ths). A late, early, rushing or dragging take comes out on the project's
+    grid, so a part written from it stays on the click. Events outside the beats are placed by extending the first/last beat."""
+    f = f or Feel("straight16", 0.5, 0.0, 0.0)
+    P = np.asarray(al.played_beats, float)
+    if len(P) < 2:
+        return []
+    pos = np.array(f.positions())
+    fr = notated(f)
+    ext, pre = _extend(P)
+    out = []
+    for t in np.asarray(event_times, float):
+        u = float(np.interp(t, ext, np.arange(len(ext)) - pre))              # in played beats
+        k = int(np.floor(u))
+        x = u - k
+        cand = np.r_[pos, 1.0]
+        j = int(np.abs(cand - x).argmin())
+        beat, slot = (k + 1, 0) if j == len(pos) else (k, j)
+        frac = Fraction(0) if j == len(pos) else fr[j]
+        kk = min(max(k, 0), len(P) - 2)
+        out.append(GridPos(beat, slot, Fraction(beat) + frac, float((x - cand[j]) * (P[kk + 1] - P[kk])), float(x - cand[j])))
+    return out
+
+
+# --- grids for the chord and note hearing ------------------------------------------------------------
+
+
+def played_grid(al: Alignment, ref: Grid) -> Grid:
+    """The reference grid with its beats moved to where the take played them: `hear_chords` / `hear_notes` / `hear` on this hear one
+    chord per beat actually played, whatever the take's offset or drift."""
+    n = len(ref.beats)
+    P = list(map(float, al.played_beats[:n]))
+    if len(P) < n:
+        P += [P[-1] + (P[-1] - P[-2] if len(P) > 1 else 0.5) * (i + 1) for i in range(n - len(P))]
+    end = None if ref.end is None else P[-1] + (ref.end - ref.beats[-1])
+    return Grid(P, list(ref.bar_starts), end)
+
+
+def audio_grid(bt: BeatTrack, mt: Meter | None = None, per_bar: int = 4) -> Grid:
+    """A Grid on the audio's own beats, with bar lines from the meter's downbeat (every `per_bar` beats from the first when no meter)."""
+    B = [float(b) for b in bt.times]
+    bpb, d0 = (mt.beats_per_bar, mt.downbeat_index) if mt else (per_bar, 0)
+    starts = [i >= d0 and (i - d0) % bpb == 0 for i in range(len(B))]
+    iv = float(np.median(np.diff(B))) if len(B) > 1 else 0.5
+    return Grid(B, starts, B[-1] + iv if B else None)
+
+
+def analyze(x) -> Timing:
+    """Features, beats, feel (on the beats found) and meter of a take in one call, for an audio-only project."""
+    x = np.asarray(x, np.float32)
+    f = features(x)
+    bt = beats(f)
+    o = onsets(x)
+    fl = feel(o.times, bt.times, o.strengths)
+    return Timing(f, bt, fl, meter(f, bt.times, fl), o.times)
