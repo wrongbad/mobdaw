@@ -22,6 +22,29 @@ class RequestTest(unittest.TestCase):
         self.assertIn("revert with history seq 7", text)
         self.assertIn("bar 2: F or F5", text)
 
+    def test_reply_passes_on_the_timing_warnings(self):
+        w = ["the take sits +35 ms behind the beats: move the clip 35 ms earlier. The bass is on the project's grid either way"]
+        text = b.reply_text(b.Result("Am | F", "8 notes", 7, [], w))
+        self.assertIn("timing: the take sits +35 ms behind the beats: move the clip 35 ms earlier", text)
+        self.assertNotIn("tempo", text)
+        self.assertIn("revert with history seq 7.", text, "in case A a revert undoes just the bass")
+
+    def test_reply_says_the_project_tempo_was_set_and_that_a_revert_undoes_both(self):
+        note = "I set the project tempo to 92 bpm 4/4 (pickup 0.4 s) to match the take (the project had no click or MIDI to follow)."
+        text = b.reply_text(b.Result("G | Am | F", "12 notes", 9, [], ["tempo 92 bpm, or 184: tell me if it's double (confidence 0.30)"], note))
+        self.assertIn("I set the project tempo to 92 bpm 4/4 (pickup 0.4 s) to match the take", text)
+        self.assertIn("timing: tempo 92 bpm, or 184: tell me if it's double", text)
+        self.assertIn("revert with history seq 9 (it undoes the tempo change and the bass together)", text)
+
+    def test_map_note(self):
+        from badmidi.audio.propose import MapProposal
+        p = MapProposal([{"id": "map1", "bar": 1, "kind": "free", "seconds": 0.4}, {"id": "map2", "bar": 2, "kind": "metered", "bpm": 92.0, "meter": "4/4"}],
+                        "steady", 92.0, "4/4", 0.4, 0.4)
+        got = SimpleNamespace(proposal=p)
+        self.assertEqual(b.map_note(got, True), "I set the project tempo to 92 bpm 4/4 (pickup 0.4 s) to match the take (the project had no click or MIDI to follow).")
+        self.assertTrue(b.map_note(got, False).startswith("would set the project tempo to 92 bpm"))
+        self.assertEqual(b.map_note(SimpleNamespace(proposal=None), True), "")
+
     def test_chart_and_asks_use_the_hear_rule(self):
         """One rule (`HeardChord.is_unsure`, the chart's `<- unsure`): a clear chord with a faint rival is not asked about, a
         chord with a rival over half as likely is, and so is one under 0.5 with any rival."""

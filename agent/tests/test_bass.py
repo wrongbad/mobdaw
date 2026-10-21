@@ -140,6 +140,38 @@ class TestStyles(unittest.TestCase):
         self.assertEqual(bass.line(h, style="walk").text(), bass.line(CHORDS, style="walk", key="A minor").text())
         self.assertEqual(h["chords"], CHORDS)
 
+    def test_swing_puts_the_off_beat_8ths_where_the_take_played_them(self):
+        straight = notes(bass.line(CHORDS, style="pulse"))
+        sw = notes(bass.line(CHORDS, style="pulse", swing=0.62))
+        self.assertEqual(len(sw), len(straight))
+        off = {on % 1 for on, _, _ in sw if on % 1}
+        self.assertEqual(off, {F(30, 48)}, "0.62 of a beat, rounded to 1/48: whole ticks at 960 ppq")
+        self.assertTrue(all((o * 960).denominator == 1 for o in off))
+        self.assertEqual([on for on, _, _ in sw if on % 1 == 0], [on for on, _, _ in straight if on % 1 == 0], "the beats stay")
+        for on, p, _ in sw:
+            self.assertEqual(p % 12, chord_at(on).bass)
+        # the notes still fill the bar: each lasts to the next onset, split at barlines
+        self.assertEqual(sum(n.dur for *_, n in sw if not n.is_rest), 16)
+        self.assertEqual({on % 1 for on, _, _ in notes(bass.line(CHORDS, style="pulse", swing=0.5))} - {F(0)}, {F(1, 2)})
+
+    def test_swing_comes_from_the_heard_take_and_only_when_it_swung(self):
+        from badmidi import HeardPart, HeardTiming
+        h = HeardPart("Guitar", "guitar (heard)", "A minor", 0, "on the grid", 1, CHORDS, None, "chords", [], HeardTiming("a", feel="swing8", swing=0.667))
+        self.assertEqual({on % 1 for on, _, _ in notes(bass.line(h, style="pulse"))} - {F(0)}, {F(32, 48)})
+        self.assertEqual({on % 1 for on, _, _ in notes(bass.line(h, style="pulse", swing=0.5))} - {F(0)}, {F(1, 2)}, "an explicit swing wins")
+        t = HeardPart("Guitar", "guitar (heard)", "A minor", 0, "x", 1, CHORDS, None, "chords", [], HeardTiming("a", feel="triplet8", swing=0.667))
+        self.assertEqual({on % 1 for on, _, _ in notes(bass.line(t, style="pulse"))} - {F(0)}, {F(1, 2)}, "only a swing feel swings the 8ths")
+        self.assertEqual(repr(h.timing).count("swing8"), 1)
+
+    def test_a_triplet_feel_pulses_in_triplet_8ths(self):
+        rh = Rhythm(F(1, 3), 1, {F(4 * k): [0.9, 0, 0, 0.6, 0, 0, 0, 0, 0.7, 0, 0, 0] for k in range(4)})
+        ns = notes(bass.line(CHORDS, rh, "pulse"))
+        self.assertEqual({on % 1 for on, _, _ in ns}, {F(0), F(1, 3), F(2, 3)})
+        self.assertEqual(len(ns), 4 * 12)
+        self.assertEqual({on for on, _, n in ns if ">" in n.art}, {F(4 * k) + x for k in range(4) for x in (F(0), F(1), F(8, 3))}, "accents follow the heard slots")
+        six = Rhythm(F(1, 6), 1, {F(4 * k): [0.0] * 24 for k in range(4)})
+        self.assertEqual({on % 1 for on, _, _ in notes(bass.line(CHORDS, six, "pulse"))}, {F(0), F(1, 3), F(2, 3)})
+
     def test_errors(self):
         with self.assertRaisesRegex(ValueError, "style"):
             bass.line(CHORDS, style="slap")

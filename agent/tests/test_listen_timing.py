@@ -337,6 +337,40 @@ class TestCaseB(unittest.TestCase):
         self.assertEqual(res.timing.case, "a")
         self.assertIsNone(res.proposal)
 
+    def test_the_example_agent_sets_the_map_and_pushes_the_bass_in_one_batch(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples"))
+        import bass_for_take as b
+        x, _ = take(BARS, clock=synth.Clock(87), pickup=2)
+        wav = os.path.join(Rig.tmp, "ex.wav")
+        sf.write(wav, x, synth.SR, subtype="PCM_16")
+        h = sha(wav)
+        st = state_for(h, len(x) / synth.SR - 0.5, bpm=120, click=False)
+
+        class Agent(FakeClient):
+            sent = []
+            _state = st
+
+            def ops(self, pid, ops, label):
+                self.sent.append((label, ops))
+                return {"seq": 11, "ids": [None] * len(ops)}
+
+        c = Agent({h: wav})
+        dry = b.make_bass(c, "pid", "Guitar", "roots", apply=False, cache_dir=Rig.cache)
+        self.assertEqual(c.sent, [])
+        self.assertTrue(dry.map_note.startswith("would set the project tempo to 87 bpm 4/4 (pickup 1.4 s)"), dry.map_note)
+        r = b.make_bass(c, "pid", "Guitar", "roots", cache_dir=Rig.cache)
+        (label, ops), = c.sent
+        self.assertEqual(label, "bass for Guitar")
+        self.assertEqual([o["op"] for o in ops], ["addRegion", "addRegion", "addTrack", "addDevice", "addMidiClip", "addNotes"], "one batch: map, then bass")
+        self.assertTrue(r.map_note.startswith("I set the project tempo to 87 bpm 4/4 (pickup 1.4 s)"))
+        text = b.reply_text(r)
+        self.assertIn("heard: G | Am | F | C | G | Am | F | C | G", text)
+        self.assertIn("(it undoes the tempo change and the bass together)", text)
+        kept = b.make_bass(c, "pid", "Guitar", "roots", cache_dir=Rig.cache, keep_map=True)
+        self.assertEqual(kept.map_note, "")
+        self.assertEqual([o["op"] for o in c.sent[1][1]][:1], ["addTrack"])
+        self.assertTrue(any("--keep-map" in w for w in kept.warnings))
+
     def test_no_beat_in_the_audio_falls_back_to_the_old_map(self):
         x = np.zeros(4 * synth.SR, np.float32)
         wav = os.path.join(Rig.tmp, "silence.wav")

@@ -45,14 +45,16 @@ class Result:
 def bar_spans(got: Listened) -> list[tuple]:
     part = got.part
     if part.rhythm and part.rhythm.bars:
-        return part.rhythm.bar_spans()
+        spans = part.rhythm.bar_spans()
+        first = part.chords[0].start if part.chords else spans[0][0]
+        return ([(first, spans[0][0])] if first < spans[0][0] else []) + spans           # (a pickup bar of an audio-only project has no rhythm row)
     return [(part.chords[0].start + 4 * i, part.chords[0].start + 4 * i + 4) for i in range(got.bars[1] - got.bars[0] + 1)]
 
 
 def chart_line(got: Listened) -> str:
     """The heard chords, bar by bar: `Am | F | C | G` (two chords in a bar: `Am F`), `?` after a chord it is unsure of."""
     part, spans = got.part, bar_spans(got)
-    bars = [" ".join(c.symbol + ("?" if c.is_unsure() else "") for c in part.chords if a <= c.start < z) or "-" for a, z in spans]
+    bars = [" ".join(c.symbol + ("?" if c.is_unsure() else "") for c in part.chords if a <= c.start < z and not c.silent) or "-" for a, z in spans]
     return " | ".join(bars)
 
 
