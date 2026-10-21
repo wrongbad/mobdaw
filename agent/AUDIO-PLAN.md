@@ -1,7 +1,7 @@
 # Listening: from a recorded take to an agent's bass track
 
 Plan of record for teaching the badmidi bridge to hear audio. Read `BRIDGE-PLAN.md` (pull/push) and `docs/agent-api.md`
-first. Status: phases 1-6 built (milestones 1-5; the bass patch needs a listening pass), milestone 6 (monophonic) built. The chat loop runs end to
+first. Status: Phase 7 (timing follows the audio, no refusals) planned, not built; phases 1-6 built (milestones 1-5; the bass patch needs a listening pass), milestone 6 (monophonic) built. The chat loop runs end to
 end in `tests/e2e_audio_live.sh` against `examples/bass_for_take.py`, on a take of open-position guitar shapes (`tests/synth.py`: six
 Karplus-Strong strings, strum, body, room). The chord hearing was hardened against such playing (single thirds are not power chords,
 the key comes from the chord sequence, confidence compares rival roots and families, `HeardChord.alt_conf` and one `is_unsure()`),
@@ -10,7 +10,7 @@ real recordings** through `tools/listen-eval.py`, then refitting the constants i
 
 ## The goal, as a user sees it
 
-1. In mobdaw, record a real instrument (guitar, keys, a sung line) onto an audio track, to the click.
+1. In mobdaw, record a real instrument (guitar, keys, a sung line) onto an audio track, to the click or not.
 2. In chat: `@k(api) make a bass track for Guitar, bars 1-16`.
 3. A minute later there is a new MIDI track "Bass" playing a part that fits, as one history entry ("bass for Guitar"),
    and a chat reply with the chords the agent heard, e.g. `Am | F | C | G (or Em?) | ...`. A wrong chord is
@@ -29,8 +29,10 @@ real recordings** through `tools/listen-eval.py`, then refitting the constants i
   Heard parts are never pushed (unless asked for as a muted guide track).
 - **Not tuner-perfect, and honest about it.** Every heard chord and note carries a confidence. Low confidence turns into
   an "A or B?" in the chat reply, not a silent guess.
-- **v1 assumes the take was recorded to the project's click.** Bar lines then come from the project's time map and need no
-  beat tracking. A take that drifts from the grid is detected and reported, not fixed (see "Later").
+- **Follow what the audio contains; never refuse.** Swing, triplets, a laid-back feel, a take that drifts from the click,
+  a take with no click at all: the hearing always makes its best reading and says how sure it is. Low confidence is a
+  warning in the chart and the chat reply, never an exit code. See "Phase 7: timing follows the audio" (this replaces the
+  first design, where a take off the click was refused).
 
 ## What exists today
 
@@ -82,9 +84,8 @@ All frame-based at 22050 Hz, ~10 ms hop. Every output is in score time (bars/bea
   (a guitar tuned 20 cents flat, or a capo'd piano sample, still reads right). Reported.
 - **Onsets.** Spectral flux with adaptive threshold; onset strength per 16th-note slot of each bar (the instrument's
   rhythm, which the bass will lock to).
-- **Grid check.** Do onsets cluster on the project's beats? Report the mean offset and drift. Mean offset > 30 ms
-  suggests latency compensation is off; drift means the take wasn't recorded to the click (v1 then refuses with a
-  message pointing at `tempo from loop` or re-recording).
+- **Grid check.** Do onsets cluster on the project's beats? Report the mean offset and drift. (Superseded by the alignment
+  in Phase 7: it is reported, never a refusal.)
 
 ### 3b. Polyphonic: chords per beat (the default for guitar and keys)
 - **Semitone filterbank:** this is the "note-aligned filters" idea. Log-frequency spectrum (STFT, 4096-point at 22 kHz,
@@ -151,13 +152,65 @@ Add "Making a part for a recording" to `docs/agent-api.md` and `AGENTS.md`:
 
 1. `wait_for_events`; a chat mention asks for a bass for a track.
 2. If its sample is `incoming`, reply "waiting for the take to upload" and wait for the `sample` event.
-3. `badmidi listen ...`; if the grid check fails, say so and stop. If bars are unsure, either ask in chat
+3. `badmidi listen ...`; pass its timing warnings on. If bars are unsure, either ask in chat
    (`bar 4: G or Em?`) or pick the key-consistent one and say which in the reply.
 4. `badmidi pull --listen ... -o piece.py`, draft with `bass.line`, edit by taste, `check`, `push --apply`.
 5. `send_chat`: the chart it heard, what the bass does, "revert with: ...".
 
 The agent runs wherever the user's Claude Code runs (laptop or a cloud session with mobdaw's host allowed), with
 `MOBDAW_TOKEN` in the environment.
+
+## Phase 7: timing follows the audio
+
+Design rule (from Kyle): always follow what the audio contains, no refusals. Two cases, decided from the pulled state:
+
+**A. The project has a timing reference**: a click track (`role: 'click'`) or any MIDI track with notes. The project's
+time map is then the truth for the meter and bar lines of every MIDI track, including the new bass. Nothing about the
+map is inferred or changed. The audio clip's place on the timeline is known in seconds, so audio time maps to project
+ticks directly (`Timeline.tick_at(seconds)`); what remains is how the playing sits against the project's beats:
+
+- **Alignment, not a pass/fail check.** Track the playing's offset from the project's beats across the take as a smooth
+  curve (per beat, from the onset phases, unwrapped as `_drift` does today; when the playing strays by more than about a
+  third of a beat, switch to the audio's own beats from the beat tracker below and match them to project beats in order,
+  monotonic, DTW-style). A constant offset is feel or latency ("+35 ms behind the click"); a moving one is rushing or
+  dragging ("drifts to -180 ms by bar 12"). Both are reported, neither refused.
+- **Analysis on the playing's beats.** Chords and notes are estimated on the beats as played (project beats moved by the
+  offset curve), so a dragging take still gets one chord per beat it actually played.
+- **Placement: follow the audio, quantize where it agrees.** Every heard event (chord change, note, accent) keeps its real
+  time. The bass is written at the project ticks of those times. Where the playing is within snapping distance of the
+  project grid (about 1/8 of a beat), the tick is snapped to the grid; where it isn't, the bass sits where the audio is.
+  So a take played tight to the click gives a quantized bass, and a take that drifts gives a bass that drifts with it.
+- **Feel.** Subdivision and swing are measured, not assumed: compare straight 16ths, triplet 8ths, triplet 16ths and swung
+  8ths at the best-fitting ratio against the onset phases, and report the winner ("swing 64%", "triplet feel"). Snapping
+  uses the winning grid, and `bass.line` takes `swing=` so a shuffle gets a shuffled bass.
+
+**B. Audio only** (no click track, no MIDI notes): the project's map is a default nobody chose, so the audio defines it.
+
+- **Beat tracking** on the onset-strength envelope: tempo from a tempogram with a broad prior centred near 100 bpm, then a
+  dynamic-programming beat tracker that allows slow tempo change (Ellis 2007 style). Confidence from how clearly the best
+  tempo beats its half/double and its rivals.
+- **Meter and downbeat** from the periodicity of accents and of chord changes (chords change on bar lines far more often
+  than elsewhere): score 2, 3, 4 (and 6/8 against 3/4 from the subdivision) beats per bar at every phase, keep the best,
+  report the runner-up. The first downbeat is where the best phase puts it; audio before it is a pickup.
+- **Write the map to match.** The bass push carries the time map in the same batch (one history entry, so a revert undoes
+  both): one region at the detected tempo and meter when the tempo is steady within about 2%, otherwise regions or ramps
+  that follow the tempo curve; a pickup before the first downbeat becomes a free bar of that length. The click and every
+  later MIDI track then line up with the take. `--keep-map` opts out (the bass is then placed by `tick_at` on the old map).
+- **Guess and warn.** Every guess carries a confidence; under a threshold the chart and the reply say so and name the
+  alternative ("tempo 92 bpm, or 184: tell me if it's double", "3/4, could be 6/8", "rubato: tempo moves ±6%").
+
+**Output.** `listen` (and the `HEARD` data in a pulled piece) gains a timing section: the case (A or B), the feel, the
+offset curve summary or the detected tempo/meter/downbeat with confidences, and the warnings. Every heard position is a
+project tick (a Fraction, not necessarily on the grid) plus its seconds. `listen` exits 0 whenever it could read the audio.
+The old refusals go: `listen`/`pull --listen` exit codes, the e2e "Drift" refusal (it becomes: followed, warned, the bass
+lands within 30 ms of the take's chord changes), and the off-grid text in `examples/bass_for_take.py`.
+
+**Tests** (synthetic, `tests/synth.py`): swung 8ths, triplet 8ths, laid back 35 ms, rushing 3% against a click, dragging
+then catching up; audio-only at 87 bpm 4/4, 3/4, 6/8, with a pickup, with ±4% rubato, and sparse whole-note chords.
+Assert: never an error; feel reported right; in case A the bass's chord-change notes land within 30 ms of the take's chord
+changes (in seconds, through the map) and on the grid when the take is tight; in case B tempo within 2% or the half/double
+reading named in a warning, meter right on the clear cases and warned on the ambiguous ones, downbeat right on the clear
+cases.
 
 ## Testing
 
@@ -193,7 +246,9 @@ Milestone 5 is the demo: record guitar, ask in chat, get a bass track. Milestone
 
 - **Distorted guitar** smears harmonics across everything; power chords carry no third. Mitigation: the `5` template plus
   key prior; report "power chord, read as minor from the key".
-- **Recorded off the click.** v1 refuses. Beat tracking is a different, harder problem.
+- **Recorded off the click, or no click at all.** Followed, not refused (Phase 7). The hard part is the audio-only project:
+  tempo can read at half or double, 3/4 vs 6/8 vs 4/4 can be ambiguous, and the first downbeat is a guess. Each gets a
+  confidence and a warning naming the other reading.
 - **Latency compensation off by a few ms** shifts onsets; harmless for chords per beat, matters for locking the bass to
   the strum rhythm. The grid check exposes it.
 - **Bleed and room noise** from a phone mic: whitening and the confidence gate; the reply says when confidence is low
@@ -202,6 +257,6 @@ Milestone 5 is the demo: record guitar, ask in chat, get a bass track. Milestone
 
 ## Later
 
-Beat tracking for free-time takes (then `addRegion`s from the detected tempo), running the same analysis in the browser
+Running the same analysis in the browser
 (wasm, the user's CPU) for a "show chords" lane, GM bass via patch matching, drums from a recorded beat, and other parts
 (pads, counter-melodies) through the same heard-parts path.
