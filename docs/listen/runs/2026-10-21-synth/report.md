@@ -1,13 +1,15 @@
 # listen-eval: synth
 
-2026-10-21, `docs/listen/eval-synth`, 15 takes, git e35b811, `tools/listen-eval.py`. Raw per-bar data: `bars.csv` (git-ignored).
+2026-10-21, `docs/listen/eval-synth`, 15 takes, git fb39f53, `tools/listen-eval.py`. Raw per-bar data: `bars.csv` (git-ignored).
+
+These takes are synthetic (`agent/tests/synth.py`: strummed Karplus-Strong strings, a body, a room), and the hearing was fitted on the same material: read the numbers as the best case. The point of this tool is a folder of real recordings.
 
 ## Overall (chords)
 
 - **14 takes, 456 beats**: root right on **100%**, quality exactly right on **99%** (triad / 7th / power as labelled), major-minor-power family right on 100%.
 - key right on **14/14** takes that name one (a relative major/minor instead: 0).
 - tuning within 3 cents of the label on 14/14 takes (mean error 1.2, worst 1.7 cents).
-- grid check passed on 14/14 takes; hearing took 0.3 s per take on average.
+- grid check passed on 14/14 takes; hearing took 0.5 s per take on average.
 
 ### Does the confidence mean anything?
 

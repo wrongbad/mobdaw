@@ -323,6 +323,9 @@ def report(results: list[Result], folder: str, label: str, when: str) -> str:
     L = [f"# listen-eval: {label}", "",
          f"{when}, `{os.path.relpath(folder, ROOT) if folder.startswith(ROOT) else folder}`, {len(results)} takes, "
          f"git {_git()}, `tools/listen-eval.py`. Raw per-bar data: `bars.csv` (git-ignored).", ""]
+    if results and all(r.lab.synth for r in results):
+        L += ["These takes are synthetic (`agent/tests/synth.py`: strummed Karplus-Strong strings, a body, a room), and the hearing was "
+              "fitted on the same material: read the numbers as the best case. The point of this tool is a folder of real recordings.", ""]
     nb = sum(len(r.beats) for r in chords)
     allb = [b for r in chords for b in r.beats]
     if chords:
