@@ -106,35 +106,68 @@ PATTERNS = {
     "ballad": [(0, "D", 1.0), (4, "D", .8), (6, "D", .7), (7, "U", .5)],
     "waltz": [(0, "D", 1.0), (2, "D", .8), (3, "U", .6), (4, "D", .8), (5, "U", .6)],
     "whole": [(0, "D", 1.0)],
+    "eighths": [(0, "D", 1.0), (1, "U", .55), (2, "D", .8), (3, "U", .55), (4, "D", .9), (5, "U", .55), (6, "D", .8), (7, "U", .55)],
+    "shuffle": [(0, "D", 1.0), (2, "D", .8), (3, "U", .6), (4, "D", .9), (6, "D", .8), (7, "U", .6)],          # swung with swing=0.667
+    "six8": [(0, "D", 1.0), (1, "U", .5), (2, "D", .7), (3, "D", .9), (4, "U", .5), (5, "D", .7)],            # slots are thirds of a beat: slot=1/3
+    "triplet": [(0, "D", 1.0), (1, "U", .5), (2, "D", .7), (3, "D", .9), (4, "U", .5), (5, "D", .7),
+                (6, "D", .8), (7, "U", .5), (8, "D", .7), (9, "D", .9), (10, "U", .5), (11, "D", .7)],         # 4/4 in thirds: slot=1/3
 }
+
+
+class Clock:
+    """Beat position -> seconds for a take whose tempo moves: `bpm` at the start, `rubato` a sine of that relative size with
+    `period` seconds, `accel` a linear change of that relative size over `beats` beats, `offset` seconds before beat 1 and
+    `lag` a constant shift of every beat (a laid-back player)."""
+
+    def __init__(self, bpm: float = 100, rubato: float = 0.0, period: float = 20.0, accel: float = 0.0, offset: float = 0.0,
+                 lag: float = 0.0, beats: float = 64):
+        dt = 0.01
+        t = np.arange(0, beats * 60 / bpm * 1.5, dt)
+        rate = bpm / 60 * (1 + rubato * np.sin(2 * np.pi * t / period)) * (1 + accel * np.minimum(t / (beats * 60 / bpm), 1.5))
+        self.b = np.concatenate([[0], np.cumsum((rate[:-1] + rate[1:]) / 2 * dt)])
+        self.t, self.offset, self.lag = t, offset, lag
+
+    def __call__(self, beat):
+        return np.interp(beat, self.b, self.t) + self.offset + self.lag
 
 
 def render(bars, bpm: float = 100, per_bar: int = 4, pattern: str | list | None = None, detune: float = 0.0, seed: int = 1,
            sr: int = SR, drive: float = 0.0, wet: float = 0.12, noise: float = 0.003, tail: float = 1.0,
-           body: float = 1.0, offset: float = 0.0) -> np.ndarray:
+           body: float = 1.0, offset: float = 0.0, clock=None, swing: float = 0.5, slot: float = 0.5,
+           pickup: int = 0) -> np.ndarray:
     """Float32 mono audio of `bars` (a symbol, or a list of symbols sharing the bar) strummed at `bpm` in `per_bar` beats a bar.
     `detune`: cents the whole guitar sits above A440. `drive`: 0 clean, 2-8 overdriven. `offset`: seconds of silence before beat 1.
-    `pattern`: a PATTERNS name or a list of (8th slot, 'D'/'U', velocity); default by meter, 'folk' or 'waltz'."""
+    `pattern`: a PATTERNS name or a list of (slot, 'D'/'U', velocity), a slot being `slot` beats (an 8th by default); default by meter,
+    'folk' or 'waltz'. `clock`: a `Clock` (beat position -> seconds) instead of the steady `bpm`; `swing`: where the off-beat 8th falls in
+    its beat (0.5 straight, 0.667 triplet swing). `pickup`: beats of the last chord before bar 1 (bar 1 starts at beat `pickup`)."""
     rng = np.random.default_rng(seed)
     beat = 60.0 / bpm
     pat = PATTERNS[pattern] if isinstance(pattern, str) else pattern or PATTERNS["waltz" if per_bar == 3 else "folk"]
     segs = []                                                      # (start beat, beats, symbol)
+    if pickup:
+        last = bars[-1] if isinstance(bars[-1], str) else bars[-1][-1]
+        segs.append((0, pickup, last))
     for i, bar in enumerate(bars):
         syms = [bar] if isinstance(bar, str) else list(bar)
         for j, s in enumerate(syms):
-            segs.append((i * per_bar + j * per_bar / len(syms), per_bar / len(syms), s))
-    total = len(bars) * per_bar * beat + tail
-    n = int((total + offset) * sr)
+            segs.append((pickup + i * per_bar + j * per_bar / len(syms), per_bar / len(syms), s))
+    T = clock or (lambda b: offset + np.asarray(b) * beat)
+    total = float(T(pickup + len(bars) * per_bar)) + tail
+    n = int(total * sr)
     x = np.zeros(n)
     strikes: list[list[tuple[float, float, int]]] = [[] for _ in OPEN]     # per string: (time, velocity, segment)
     for ci, (b0, nb, sym) in enumerate(segs):
         notes, strings = shape(sym)
-        bar_b0 = int(b0 // per_bar) * per_bar
-        slots = [(bar_b0 + s / 2, d, v) for s, d, v in pat if b0 - 1e-9 <= bar_b0 + s / 2 < b0 + nb - 1e-9]
+        bar_b0 = pickup + int((b0 - pickup) // per_bar) * per_bar
+        slots = [(bar_b0 + s * slot, d, v) for s, d, v in pat if b0 - 1e-9 <= bar_b0 + s * slot < b0 + nb - 1e-9]
+        if b0 < pickup:
+            slots = [(b0 + k, "D", 0.7) for k in range(int(nb))]
         if not slots or slots[0][0] > b0 + 1e-9:
             slots.insert(0, (b0, "D", 0.95))
         for sb, d, v in slots:
-            t = max(offset + sb * beat + rng.normal(0, 0.004), 0.0)
+            fl = np.floor(sb + 1e-9)
+            sw = fl + swing if abs(sb - fl - 0.5) < 1e-6 else sb                                 # the off-beat 8th is swung
+            t = max(float(T(sw)) + rng.normal(0, 0.004), 0.0)
             gap = rng.uniform(0.008, 0.025)                          # seconds between strings
             vel = float(np.clip(v * rng.uniform(0.75, 1.05), 0.2, 1.1))
             order = list(strings) if d == "D" else list(reversed(strings))[:4]      # an up-strum hits the top strings
@@ -148,7 +181,7 @@ def render(bars, bpm: float = 100, per_bar: int = 4, pattern: str | list | None 
             b0, nb, sym = segs[ci]
             notes, strings = shape(sym)
             m = notes[strings.index(s)]
-            chord_end = offset + (b0 + nb) * beat
+            chord_end = float(T(b0 + nb))
             changes = ci + 1 == len(segs) or segs[ci + 1][2] != sym
             end = chord_end + 0.04 * rng.random() if changes else t + 3.5     # the left hand lifts at a chord change
             if j + 1 < len(ks):
@@ -165,7 +198,7 @@ def render(bars, bpm: float = 100, per_bar: int = 4, pattern: str | list | None 
     # fret noise: a squeak or tap around each chord change, and a little pick noise
     for b0, nb, sym in segs:
         for _ in range(2):
-            t = offset + b0 * beat + rng.uniform(-0.12, 0.02)
+            t = float(T(b0)) + rng.uniform(-0.12, 0.02)
             if t > 0:
                 m = int(rng.uniform(0.02, 0.06) * sr)
                 nz = fftconvolve(rng.normal(size=m), np.hanning(9) * np.cos(np.arange(9) * rng.uniform(1.0, 2.2)), "same") * np.hanning(m)
