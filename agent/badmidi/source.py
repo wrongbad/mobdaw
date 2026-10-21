@@ -263,7 +263,7 @@ def to_source(score: Score, report=None, phrase: int = 4, heard: dict | None = N
     from .views import _bar_cells
     f = _Fmt()
     ids = _identifiers(score.parts, ("bass", "HEARD") if heard else ())
-    first = score.meter_at(1)
+    first = score._meters[1]                    # (bar 1 may be a free bar: the Score's meter is the one the metered bars start with)
     doc = [f"{score.title or 'Untitled'}.", ""]
     if report is not None:
         doc += ["Imported. What the importer reported:", ""]

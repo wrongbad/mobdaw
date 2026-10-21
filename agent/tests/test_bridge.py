@@ -50,6 +50,22 @@ class Bridge(unittest.TestCase):
             score = load_score(path)
             self.assertTrue(plan(score, read_snapshot(snapshot_path(path))).empty)
 
+    def test_the_tempo_map_is_guarded_and_round_trips(self):
+        """Tempo changes, ramps and free bars come back from the piece as they went in; any edit to them is refused."""
+        regions = [{"id": "f", "bar": 1, "kind": "free", "seconds": 1.37},
+                   {"id": "a", "bar": 2, "kind": "metered", "bpm": 87.008, "meter": "4/4", "rampTo": 90.25, "beatTicks": 960, "barTicks": 3840},
+                   {"id": "b", "bar": 4, "kind": "metered", "bpm": 90.25, "meter": "3/4", "beatTicks": 960, "barTicks": 2880},
+                   {"id": "c", "bar": 6, "kind": "metered", "bpm": 100, "meter": "6/8", "beatTicks": 480, "barTicks": 2880}]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = piece(pull(state(regions=regions, tracks=[]), "P"), tmp)
+            snap = read_snapshot(snapshot_path(path))
+            self.assertTrue(plan(load_score(path), snap).empty)
+            for edit in (lambda s: s.tempo_mark(5, bpm=120), lambda s: s.free_bar(1, 3), lambda s: s.meter_change(3, "3/4")):
+                score = load_score(path)
+                edit(score)
+                with self.assertRaisesRegex(BridgeError, "meter or tempo map differs"):
+                    plan(score, snap)
+
     def test_edits_become_ops(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = piece(pull(state(), "P"), tmp)

@@ -457,7 +457,7 @@ def _start_score(state: dict) -> tuple[Score, bool]:
         scale = parse_key(key) if key else None
     except Exception:
         scale = None
-    return Score(state.get("name") or "Untitled", meter=Meter.parse(_score_meter(rs[0]) if rs[0]["kind"] == "metered" else "4/4"),
+    return Score(state.get("name") or "Untitled", meter=Meter.parse(_score_meter(first) if first else "4/4"),
                  key=scale or "C major", tempo=first["bpm"] if first else 120), scale is not None
 
 
@@ -680,10 +680,25 @@ def _tick(q: Fraction, ppq: int):
     return int(t) if t.denominator == 1 else round(float(t), 4)
 
 
+def _tempo_sig(score: Score) -> tuple:
+    """The tempo side of a Score's timeline: opening tempo, tempo marks (where, to what, until), free bar lengths."""
+    return (float(score.tempo), tuple((m.start, m.bpm, m.end) for m in score.tempo_marks[1:]),
+            tuple(sorted((bar, m.free) for bar, m in score._free.items())))
+
+
 def check_timeline(score: Score, snap: dict) -> None:
-    """Refuse when the piece's bars are not the project's: notes would land in the wrong places."""
+    """Refuse when the piece's bars or tempo are not the project's: notes would land in the wrong places. 'The project's' is the
+    snapshot's regions: for an audio-only project pulled with `--listen` that is the map proposed from the audio, whose ops
+    `plan` sends first in the same batch; anything else the piece changes about meter or tempo is refused."""
+    ref_state = {"meta": {"ppq": snap["ppq"]}, "regions": snap["regions"], "markers": []}
+    ref, _ = _start_score(ref_state)
+    _timeline_into(ref, ref_state, [])
+    if _tempo_sig(score) != _tempo_sig(ref):
+        raise BridgeError("the piece's tempo or free bars differ from the project's: its meter or tempo map differs from the project's. "
+                          "Push only sends notes (and, for an audio-only project, the time map proposed from its audio); change the timeline "
+                          "with apply_ops (addRegion / setRegion), then pull again")
     tl = Timeline({"meta": {"ppq": snap["ppq"]}, "regions": snap["regions"]})
-    for bar in range(1, max(snap.get("bars", 0), score.bars) + 2):
+    for bar in range(1, max(snap.get("bars", 0), score.bars, *(r["bar"] for r in snap["regions"])) + 2):
         want, got = tl.bar_start(bar), score.bar_start(bar) * snap["ppq"]
         if want != got:
             raise BridgeError(
