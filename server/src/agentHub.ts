@@ -3,12 +3,13 @@
 // While an agent (an API token) is active in a project (a request in the last `idleMs`, or an open `events` wait) the hub holds a
 // direct connection to the project's document, so it stays loaded, and publishes the agent's presence into the document's
 // awareness under its own client id, as `{user: {username: "k (api)", color}, api: true}`; Hocuspocus broadcasts it like any other
-// state. The same connection feeds a per-project event buffer (new chat, new history entries, people joining and leaving) that
+// state. The same connection feeds a per-project event buffer (new chat, new history entries, people joining and leaving, samples changing status) that
 // `events` long-polls over by cursor. Both go away when the last agent in a project has been idle for `idleMs`.
 import * as Y from 'yjs'
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
 import {
-  apiName, chatLog, docName, historyLog, mentionHandle, parseMentions, userColor, type AwarenessState, type ChatMessage, type HistoryEntry,
+  apiName, chatLog, docName, historyLog, mentionHandle, parseMentions, samplesMap, userColor, type AwarenessState, type ChatMessage, type HistoryEntry, type SampleMeta,
+  type SampleStatus,
 } from '@mobdaw/shared'
 import type { Collab } from './history.ts'
 import type { Db } from './db.ts'
@@ -20,7 +21,8 @@ export type AgentEvent =
   | { type: 'chat'; message: ChatMessage; mentionsMe: boolean }
   | { type: 'history'; entry: HistoryEntry }
   | { type: 'presence'; joined?: string; left?: string }
-type Raw = { cursor: number; ev: { type: 'chat'; message: ChatMessage } | { type: 'history'; entry: HistoryEntry } | { type: 'presence'; joined?: string; left?: string } }
+  | { type: 'sample'; hash: string; /** Absent: ready (uploaded). */ status?: SampleStatus }
+type Raw = { cursor: number; ev: Exclude<AgentEvent, { type: 'chat' }> | { type: 'chat'; message: ChatMessage } }
 
 export type EventsResult = { cursor: number; events: AgentEvent[]; /** Events before your cursor were not kept (the project had no agent for a while): re-read state and chat. */ gap?: boolean }
 
@@ -112,9 +114,18 @@ export function createAgentHub(db: Db, collab: Collab & object, idleMs = 60_000)
     const onHist = (e: Y.YArrayEvent<HistoryEntry>) => {
       for (const d of e.changes.delta) if (d.insert) for (const m of d.insert as HistoryEntry[]) push(f, { type: 'history', entry: m })
     }
+    const smp = samplesMap(doc)
+    const onSamples = (e: Y.YMapEvent<SampleMeta>) => {
+      for (const [hash, ch] of e.changes.keys) {
+        if (ch.action !== 'update') continue
+        const now = smp.get(hash)
+        if (now && (ch.oldValue as SampleMeta | undefined)?.status !== now.status) push(f, { type: 'sample', hash, ...(now.status ? { status: now.status } : {}) })
+      }
+    }
     chat.observe(onChat)
     hist.observe(onHist)
-    f.off.push(() => chat.unobserve(onChat), () => hist.unobserve(onHist))
+    smp.observe(onSamples)
+    f.off.push(() => chat.unobserve(onChat), () => hist.unobserve(onHist), () => smp.unobserve(onSamples))
     return f
   }
 
@@ -204,6 +215,7 @@ export function createAgentHub(db: Db, collab: Collab & object, idleMs = 60_000)
       return { type: 'chat', message: ev.message, mentionsMe: mentioned }
     }
     if (ev.type === 'history') return ev.entry.username === me ? null : ev
+    if (ev.type === 'sample') return ev
     return ev.joined === me || ev.left === me ? null : ev
   }
 

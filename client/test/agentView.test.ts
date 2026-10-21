@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  REVERB, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, agentText, agentView, formatDuration, formatPosition, getTimeMap, parseDuration,
+  REVERB, addAudioClip, addSample, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, agentText, agentView, formatDuration, formatPosition, getTimeMap, parseDuration,
   parsePosition, setKey, setParam, updateTrack, DEVICES, FINNWAVE,
 } from '@mobdaw/shared'
 
@@ -58,6 +58,21 @@ describe('agentView', () => {
     expect(text).toContain('C2 0+240 v50')
     expect(text).toContain('C#4 960+480 v127')
     expect(text.split('\n').length).toBeLessThan(40)
+  })
+
+  it('shows audio clips with their source offset and a table of the samples they play', () => {
+    const { doc } = fixture()
+    const gtr = addTrack(doc, 'Guitar', 'audio')
+    addSample(doc, { hash: 'h1', name: 'take.wav', duration: 2.5, size: 9, mime: 'audio/wav', status: 'incoming' })
+    addSample(doc, { hash: 'h2', name: 'unused.wav', duration: 1, size: 9, mime: 'audio/wav' })
+    addAudioClip(doc, { trackId: gtr, sourceHash: 'h1', start: 0, length: 96000, sourceOffset: 24000 })
+    const v = agentView(doc)
+    expect(v.samples).toEqual({ h1: { name: 'take.wav', duration: 2.5, mime: 'audio/wav', status: 'incoming' } })
+    expect(v.tracks.find((t) => t.id === gtr)!.clips[0]).toMatchObject({ kind: 'audio', sourceHash: 'h1', sourceOffsetSeconds: 0.5 })
+    expect(agentText(doc)).toContain('audio clip')
+    expect(agentText(doc)).toContain('"take.wav", from 0.5 s (incoming)')
+    expect(agentView(doc, undefined, { tracks: ['Bass'] }).samples).toEqual({})
+    expect(agentView(fixture().doc).samples).toEqual({})
   })
 
   it('lists every device type with its param names', () => {

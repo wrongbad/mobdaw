@@ -1,9 +1,18 @@
 import { Hono } from 'hono'
 import type { LibrarySample, UploadUrlRequest } from '@mobdaw/shared'
 import { isDevUser, projectRole, requireSignedInOrPublic, writeBlock, type Ctx, type Env } from '../auth.ts'
-import { tx } from '../db.ts'
+import { tx, type Db } from '../db.ts'
 import { isHash, type Storage } from '../storage/index.ts'
 import { getUpload } from '../uploads.ts'
+
+/** The owner of a complete upload of `hash` linked to the project (any owner's will do: the bytes are the same). */
+export const linkedOwner = (db: Db, project: string, hash: string) =>
+  (db
+    .prepare(
+      `SELECT ps.owner_id AS owner FROM project_samples ps JOIN uploads s ON s.hash = ps.hash AND s.owner_id = ps.owner_id
+       WHERE ps.project_id = ? AND ps.hash = ? AND s.state = 'complete' LIMIT 1`,
+    )
+    .get(project, hash) as { owner: number } | undefined)?.owner
 
 /** Project-scoped sample routes, mounted at /projects/:id/samples. */
 export function sampleRoutes(ctx: Ctx, storage: Storage) {
@@ -143,15 +152,9 @@ export function sampleRoutes(ctx: Ctx, storage: Storage) {
 
   r.get('/:hash/url', async (c) => {
     const hash = c.req.param('hash')
-    // Any owner's upload linked here will do: the bytes are the same.
-    const linked = db
-      .prepare(
-        `SELECT ps.owner_id AS owner FROM project_samples ps JOIN uploads s ON s.hash = ps.hash AND s.owner_id = ps.owner_id
-         WHERE ps.project_id = ? AND ps.hash = ? AND s.state = 'complete' LIMIT 1`,
-      )
-      .get(c.req.param('id')!, hash) as { owner: number } | undefined
-    if (!linked) return c.json({ error: 'not_found' }, 404)
-    return c.json({ url: await storage.downloadUrl(linked.owner, hash) })
+    const owner = linkedOwner(db, c.req.param('id')!, hash)
+    if (owner == null) return c.json({ error: 'not_found' }, 404)
+    return c.json({ url: await storage.downloadUrl(owner, hash) })
   })
 
   return r

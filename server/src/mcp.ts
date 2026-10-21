@@ -65,7 +65,7 @@ export function mcpServerFor(svc: AgentService, user: AgentUser): McpServer {
   }, ({ projectId, since, limit }) => run(async () => svc.chat(user, projectId, since, limit))())
 
   server.registerTool('wait_for_events', {
-    description: 'Long-poll for what happened in the project since your cursor: new chat messages (with mentionsMe, true when someone mentioned @you(api)), other people\'s history entries, people joining and leaving. Returns at once if there are some, else after `wait` seconds (max 25) or when the first arrives. Pass the returned cursor as since next time; omit it the first time. While waiting you show as present in the project. gap: true means events before your cursor were not kept: re-read state and chat.',
+    description: 'Long-poll for what happened in the project since your cursor: new chat messages (with mentionsMe, true when someone mentioned @you(api)), other people\'s history entries, people joining and leaving, samples changing status (type sample, with hash and status; no status means uploaded and ready). Returns at once if there are some, else after `wait` seconds (max 25) or when the first arrives. Pass the returned cursor as since next time; omit it the first time. While waiting you show as present in the project. gap: true means events before your cursor were not kept: re-read state and chat.',
     inputSchema: { projectId, since: z.number().optional().describe('cursor from the last call'), wait: z.number().optional().describe('seconds to wait for news, 0..25 (default 0)') },
   }, ({ projectId, since, wait }, extra) => run(async () => svc.events(user, projectId, since, wait ?? 0, extra.signal))())
 

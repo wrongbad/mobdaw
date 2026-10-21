@@ -2,12 +2,13 @@
 // thin wrappers over these. Every call checks that the user may use the project (owner or editor: viewers don't take part live),
 // marks the agent as present, and acts as "<user> (api)".
 import {
-  addChatMessage, agentText, agentView, apiName, type ViewFilter, chatLog, deviceCatalogText, parseMentions, mentionHandle, userColor,
+  addChatMessage, agentText, agentView, apiName, type ViewFilter, chatLog, deviceCatalogText, parseMentions, mentionHandle, samplesMap, userColor,
   type ChatMessage, type HistoryItem, type HistoryResult,
 } from '@mobdaw/shared'
 import { isDevUser, memberRole, writeBlock, type Ctx } from './auth.ts'
 import { applyOps, OpError, OPS_HELP, type OpsResult } from './agentOps.ts'
 import type { AgentHub, AgentUser, EventsResult } from './agentHub.ts'
+import { linkedOwner } from './routes/samples.ts'
 import { lastSeq, listHistory, restoreTo, revertEntry, writeAs, type Collab } from './history.ts'
 
 /** A refused call: `status` is the HTTP status, `code` the machine-readable error (`message` says more). */
@@ -118,6 +119,18 @@ export function createAgentService(ctx: Ctx, collab: Collab, hub: AgentHub) {
     async events(user: AgentUser, projectId: string, since: unknown, wait: unknown, signal?: AbortSignal): Promise<EventsResult> {
       access(user, projectId)
       return hub.events(projectId, user, num(since), num(wait) ?? 0, signal)
+    },
+
+    /** The owner whose stored copy of the project's sample to download. 404: not a sample of this project; 409: not uploaded yet. */
+    async sampleOwner(user: AgentUser, projectId: string, hash: string): Promise<number> {
+      access(user, projectId)
+      const doc = await hub.touch(projectId, user)
+      const meta = samplesMap(doc).get(hash)
+      const owner = linkedOwner(ctx.db, projectId, hash)
+      if (owner == null && !meta) throw new AgentError(404, 'not_found', 'no such sample in this project')
+      // (the take is still on the recorder's device, or its upload has not finished)
+      if (owner == null || meta?.status === 'incoming') throw new AgentError(409, 'sample_incoming', 'the sample has not been uploaded yet: wait for its "sample" event or retry')
+      return owner
     },
 
     catalog: () => `${OPS_HELP}\n\nDevice types and their params:\n${deviceCatalogText()}`,

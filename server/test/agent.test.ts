@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { createHash } from 'node:crypto'
 import {
-  addMidiClip, addNote, addTrack, chatLog, getClips, getNotes, getTracks, historyLog, getDevices, getRegions, addChatMessage, type AwarenessState,
+  addAudioClip, addSample, setSampleStatus, addMidiClip, addNote, addTrack, chatLog, getClips, getNotes, getTracks, historyLog, getDevices, getRegions, addChatMessage, type AwarenessState,
 } from '@mobdaw/shared'
 import { endSubscription } from '../src/accounts.ts'
 import { ADMIN, admit, client, connect, login, startTest, until, userId, type Client } from './helpers.ts'
@@ -293,5 +294,60 @@ describe('mcp', () => {
     await mcp.close()
     expect((await fetch(`${t.base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(401)
     expect((await fetch(`${t.base}/mcp`, { headers: { authorization: `Bearer ${tok}` } })).status).toBe(405)
+  })
+})
+
+describe('samples', () => {
+  const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
+  const upload = async (c: Client, project: string, d: Buffer) => {
+    const up = await c.post(`/api/projects/${project}/samples/upload-url`, { hash: sha(d), size: d.length, mime: 'audio/wav' })
+    expect((await fetch(t.base + up.body.url, { method: 'PUT', body: d as unknown as BodyInit })).status).toBe(200)
+    expect((await c.post(`/api/projects/${project}/samples/${sha(d)}/complete`)).body).toEqual({ ok: true })
+    return sha(d)
+  }
+  let agent: Client, token = ''
+  beforeAll(async () => {
+    token = (await admin.post('/api/me/api-tokens', { name: 'samples' })).body.token
+    agent = client(t.base, token)
+  })
+  const meta = (hash: string, status?: 'incoming') => ({ hash, name: 'take.wav', duration: 2, size: 9, mime: 'audio/wav', ...(status ? { status } : {}) })
+
+  it('gives a signed url for an uploaded sample, and 404 / 409 / 401 otherwise', async () => {
+    const bytes = Buffer.from('RIFF-agent-sample')
+    const hash = await upload(admin, projectId, bytes)
+    addSample(a.doc, meta(hash))
+    const got = await agent.get(`${base()}/samples/${hash}/url`)
+    expect(got.status).toBe(200)
+    expect(await (await fetch(t.base + got.body.url)).text()).toBe('RIFF-agent-sample')
+    expect((await agent.get(`${base()}/samples/${'0'.repeat(64)}/url`)).body).toMatchObject({ error: 'not_found' })
+    // another project's sample is not reachable through this one
+    const other = (await admin.post('/api/projects', { name: 'Other' })).body.id
+    const oh = await upload(admin, other, Buffer.from('RIFF-other-sample'))
+    expect((await agent.get(`${base()}/samples/${oh}/url`)).status).toBe(404)
+    expect((await agent.get(`/api/agent/projects/${other}/samples/${oh}/url`)).status).toBe(200)
+    expect((await client(t.base).get(`${base()}/samples/${hash}/url`)).status).toBe(401)
+    const bt = (await alice.post('/api/me/api-tokens', {})).body.token
+    expect((await client(t.base, bt).get(`/api/agent/projects/${other}/samples/${oh}/url`)).status).toBe(404) // not a member
+  })
+
+  it('answers 409 sample_incoming while the take is on the recorder\'s device, shows it in the view and emits an event when it lands', async () => {
+    const bytes = Buffer.from('RIFF-incoming-take')
+    const hash = sha(bytes)
+    const tr = addTrack(a.doc, 'Guitar', 'audio')
+    addSample(a.doc, meta(hash, 'incoming'))
+    const clip = addAudioClip(a.doc, { trackId: tr, sourceHash: hash, start: 48000, length: 96000, sourceOffset: 24000 })
+    await until(() => !!getClips(b.doc).find((c) => c.id === clip))
+    expect((await agent.get(`${base()}/samples/${hash}/url`)).body).toMatchObject({ error: 'sample_incoming' })
+    const v = (await agent.get(`${base()}/state`)).body
+    expect(v.samples[hash]).toEqual({ name: 'take.wav', duration: 2, mime: 'audio/wav', status: 'incoming' })
+    expect(v.tracks.find((x: any) => x.id === tr).clips[0]).toMatchObject({ sourceHash: hash, sourceOffsetSeconds: 0.5 })
+    const text = await (await fetch(t.base + `${base()}/state?format=text`, { headers: { authorization: `Bearer ${token}` } })).text()
+    expect(text).toContain('from 0.5 s (incoming)')
+    const { cursor } = (await agent.get(`${base()}/events`)).body
+    await upload(admin, projectId, bytes)
+    setSampleStatus(a.doc, hash, undefined)
+    const ev = (await agent.get(`${base()}/events?since=${cursor}&wait=5`)).body
+    expect(ev.events.filter((e: any) => e.type === 'sample')).toEqual([{ type: 'sample', hash }])
+    expect((await agent.get(`${base()}/samples/${hash}/url`)).status).toBe(200)
   })
 })

@@ -7,7 +7,7 @@ import { DEVICES, MIX, type DeviceDef, type ParamDef } from './devices.ts'
 import { noteName } from './noteName.ts'
 import {
   MASTER_TRACK, getClips, getDevices, getKey, getMarkers, getNotes, getPpq, getRegions, getSampleRate, getSamples, getTimeMap, getTracks,
-  type Device, type Region,
+  type Device, type Region, type SampleStatus,
 } from './schema.ts'
 import type { TimeMap } from './timemap.ts'
 
@@ -106,8 +106,11 @@ export type AgentMidiClip = {
 }
 export type AgentAudioClip = {
   id: string; kind: 'audio'; start: string; startSeconds: number; lengthSeconds: number; sample?: string; sourceHash: string
-  loopSeconds?: number; gain: number
+  /** Where in the sample the clip starts reading. */
+  sourceOffsetSeconds: number; loopSeconds?: number; gain: number
 }
+/** A sample an audio clip plays; `status: 'incoming'` means the take is still on the recorder's device (not downloadable yet). */
+export type AgentSample = { name: string; duration: number; mime: string; status?: SampleStatus }
 export type AgentTrack = {
   id: string; name: string; kind: string; muted: boolean; soloed: boolean; color?: number
   devices: AgentDevice[]; clips: (AgentMidiClip | AgentAudioClip)[]
@@ -121,6 +124,8 @@ export type AgentView = {
   meta: { ppq: number; sampleRate: number; key?: string }
   regions: AgentRegion[]
   markers: { id: string; bar: number; label: string; text?: string }[]
+  /** The samples the audio clips in this view play, by hash (`sourceHash`). */
+  samples: Record<string, AgentSample>
   tracks: AgentTrack[]
   master: { devices: AgentDevice[] }
 }
@@ -180,6 +185,7 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
       return {
         id: c.id, kind: 'audio', start: formatPosition(map, startTick), startSeconds: r3(c.start / rate), lengthSeconds: r3(c.length / rate),
         ...(samples[c.sourceHash]?.name ? { sample: samples[c.sourceHash].name } : {}), sourceHash: c.sourceHash,
+        sourceOffsetSeconds: r3(c.sourceOffset / rate),
         ...(c.loopLength ? { loopSeconds: r3(c.loopLength / rate) } : {}), gain: r3(c.gain),
       }
     }
@@ -191,6 +197,16 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
         id: n.id, p: noteName(n.pitch).toUpperCase(), pitch: n.pitch, t: r3(n.tick), d: r3(n.durTicks), v: Math.round(n.velocity * 127),
       })),
     }
+  }
+  const tracks = getTracks(doc).filter((t) => !wanted || wanted.includes(t.id.toLowerCase()) || wanted.includes(t.name.toLowerCase())).map((t) => ({
+    id: t.id, name: t.name, kind: t.kind, muted: t.muted, soloed: t.soloed, ...(t.color != null ? { color: t.color } : {}),
+    devices: devices.filter((d) => d.trackId === t.id).map(deviceView),
+    clips: clips.filter((c) => c.trackId === t.id && inWindow(c)).map(clipView),
+  }))
+  const used: Record<string, AgentSample> = {}
+  for (const t of tracks) for (const c of t.clips) {
+    const s = c.kind === 'audio' ? samples[c.sourceHash] : undefined
+    if (s && c.kind === 'audio') used[c.sourceHash] = { name: s.name, duration: r3(s.duration), mime: s.mime, ...(s.status ? { status: s.status } : {}) }
   }
   const regions: AgentRegion[] = getRegions(doc).map((r: Region) => {
     if (r.kind === 'free') return { id: r.id, bar: r.bar, kind: 'free', seconds: r3(r.length / rate) }
@@ -205,11 +221,8 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
     meta: { ppq, sampleRate: rate, ...(getKey(doc) ? { key: getKey(doc) } : {}) },
     regions,
     markers: getMarkers(doc).map((m) => ({ id: m.id, bar: m.bar, label: m.label, ...(m.text ? { text: m.text } : {}) })),
-    tracks: getTracks(doc).filter((t) => !wanted || wanted.includes(t.id.toLowerCase()) || wanted.includes(t.name.toLowerCase())).map((t) => ({
-      id: t.id, name: t.name, kind: t.kind, muted: t.muted, soloed: t.soloed, ...(t.color != null ? { color: t.color } : {}),
-      devices: devices.filter((d) => d.trackId === t.id).map(deviceView),
-      clips: clips.filter((c) => c.trackId === t.id && inWindow(c)).map(clipView),
-    })),
+    samples: used,
+    tracks,
     master: { devices: devices.filter((d) => d.trackId === MASTER_TRACK).map(deviceView) },
   }
 }
@@ -240,7 +253,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
     for (const d of t.devices) out.push(`  device ${devLine(d)}`)
     for (const c of t.clips) {
       if (c.kind === 'audio') {
-        out.push(`  audio clip [${c.id}] at ${c.start} (${c.startSeconds} s), ${c.lengthSeconds} s${c.sample ? `, "${c.sample}"` : ''}${c.loopSeconds ? `, loop ${c.loopSeconds} s` : ''}`)
+        out.push(`  audio clip [${c.id}] at ${c.start} (${c.startSeconds} s), ${c.lengthSeconds} s${c.sample ? `, "${c.sample}"` : ''}${c.sourceOffsetSeconds ? `, from ${c.sourceOffsetSeconds} s` : ''}${v.samples[c.sourceHash]?.status ? ` (${v.samples[c.sourceHash].status})` : ''}${c.loopSeconds ? `, loop ${c.loopSeconds} s` : ''}`)
         continue
       }
       out.push(`  clip [${c.id}] ${c.start} to ${c.end} (${c.length}, ${c.lengthTicks} ticks)${c.loopTicks ? `, loop ${c.loopTicks} ticks` : ''}${c.forever ? ' forever' : ''}${c.view ? `, ${c.view} view` : ''}, ${c.notes.length} notes`)

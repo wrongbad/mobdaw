@@ -25,7 +25,7 @@ export function createApp(ctx: Ctx, storage: Storage, collab: Collab, hub: Agent
   api.route('/projects', projectRoutes(ctx, collab))
   api.route('/projects/:id/samples', sampleRoutes(ctx, storage))
   api.route('/projects/:id/history', historyRoutes(ctx, collab))
-  api.route('/agent', agentRoutes(ctx, agent))
+  api.route('/agent', agentRoutes(ctx, agent, storage))
   api.route('/oauth', oauthRoutes(ctx))
   api.route('/uploads', uploadRoutes(ctx, storage, collab))
   if (storage.routes) api.route('/storage', storage.routes) // local driver; signature-authorized

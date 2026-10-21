@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { sessionUser, type Ctx } from '../auth.ts'
 import { apiTokenUser } from '../apiTokens.ts'
 import type { AgentUser } from '../agentHub.ts'
+import type { Storage } from '../storage/index.ts'
 import { AgentError, type AgentService } from '../agentService.ts'
 
 /** Cap on a request body to the agent API and MCP: what really bounds the cost of a batch. */
@@ -33,7 +34,7 @@ export const failure = (c: Context, e: unknown) => {
 }
 
 /** The agent API, mounted at /agent: JSON for programs (docs/agent-api.md). */
-export function agentRoutes(ctx: Ctx, svc: AgentService) {
+export function agentRoutes(ctx: Ctx, svc: AgentService, storage: Storage) {
   const r = new Hono<AgentEnv>()
   r.use('*', agentAuth(ctx))
   r.use('*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json({ error: 'too_large', message: `request body over ${MAX_BODY_BYTES >> 20} MB: split the batch` }, 413) }))
@@ -68,6 +69,7 @@ export function agentRoutes(ctx: Ctx, svc: AgentService) {
   r.post('/projects/:id/history/:seq/revert', handle((c, u, id) => svc.revert(u, id, Number(c.req.param('seq')))))
   r.post('/projects/:id/history/:seq/restore', handle((c, u, id) => svc.restore(u, id, Number(c.req.param('seq')))))
   r.get('/projects/:id/events', handle((c, u, id) => svc.events(u, id, c.req.query('since'), c.req.query('wait'), c.req.raw.signal)))
+  r.get('/projects/:id/samples/:hash/url', handle(async (c, u, id) => ({ url: await storage.downloadUrl(await svc.sampleOwner(u, id, c.req.param('hash') ?? ''), c.req.param('hash') ?? '') })))
   r.notFound((c) => c.json({ error: 'not_found' }, 404))
   return r
 }

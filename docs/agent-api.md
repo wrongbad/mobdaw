@@ -25,7 +25,7 @@ there when done. Tokens look like `mdw_...`.
   open connections and presence arrives within a minute).
 
 ## Routes (`/api/agent`, JSON)
-Errors are `{error, message}` with 400 (`bad_request`, `bad_ops` with `op`: the failing op's index), 401, 403, 404.
+Errors are `{error, message}` with 400 (`bad_request`, `bad_ops` with `op`: the failing op's index), 401, 403, 404, 409 (`sample_incoming`).
 
 | Route | |
 |---|---|
@@ -36,6 +36,7 @@ Errors are `{error, message}` with 400 (`bad_request`, `bad_ops` with `op`: the 
 | `POST /projects/:id/chat {text}` | Post as "k (api)"; mentions are parsed against the members and who is present. Returns the message. |
 | `GET /projects/:id/history?since=<seq>&limit=` | The change log (`{seq, ts, username, text, via, api}`), oldest first. |
 | `POST /projects/:id/history/:seq/revert` and `/restore` | As the History panel does ("revert this", "restore to this version"), logged as "k (api)". `{applied, skipped, seq}`. |
+| `GET /projects/:id/samples/:hash/url` | `{url}`: a short-lived signed download URL (15 min, no auth needed) for a sample of the project, the same as the session route. `404 not_found` if the hash is not a sample of this project, `409 sample_incoming` while the take is still only on the recorder's device (`status: 'incoming'`) or its upload is not complete: wait for the `sample` event or retry. |
 | `GET /projects/:id/events?since=<cursor>&wait=<s>` | Long-poll, see "Events". |
 | `GET /catalog` | The ops reference and the device types with their params, as text. |
 
@@ -46,6 +47,7 @@ Errors are `{error, message}` with 400 (`bad_request`, `bad_ops` with `op`: the 
 { "rev": 12, "meta": {"ppq": 960, "sampleRate": 48000, "key": "D minor"},
   "regions": [{"id": "default", "bar": 1, "kind": "metered", "bpm": 120, "meter": "4/4", "beatTicks": 960, "barTicks": 3840}],
   "markers": [{"id": "...", "bar": 9, "label": "Chorus"}],
+  "samples": {"<sha256>": {"name": "take.wav", "duration": 12.5, "mime": "audio/wav", "status": "incoming"}},
   "tracks": [{"id": "...", "name": "Bass", "kind": "midi", "muted": false, "soloed": false,
     "devices": [{"id": "...", "type": "finnwave", "typeId": 2, "params": {"rolloff": 0.3, "...": 0}}, {"type": "mix", "params": {"volume": 1, "pan": 0}}],
     "clips": [{"id": "...", "kind": "midi", "start": "2.1.0", "startTick": 3840, "lengthTicks": 7680, "length": "2 bars",
@@ -54,8 +56,11 @@ Errors are `{error, message}` with 400 (`bad_request`, `bad_ops` with `op`: the 
 ```
 Positions are `bar.beat.tick` (bar and beat from 1, tick within the beat; a beat is a `1/den` note, so an eighth in 7/8) next to ticks
 from bar 1. Note `t` and `d` are ticks inside the clip. Velocity `v` is MIDI 1..127. Audio clips show `start` (the position),
-`startSeconds`, `lengthSeconds` and the sample name; they can be moved and resized but not created yet. `format=text` is the same as a
-compact outline (ids in brackets) for prompting.
+`startSeconds`, `lengthSeconds`, `sourceOffsetSeconds` (where in the sample the clip starts reading), `sourceHash` and the sample
+name; they can be moved and resized but not created yet. `samples` is the table for the hashes the audio clips in the view play
+(`name`, `duration` in seconds, `mime`; `status` only when it is `incoming`: still on the recorder's device, not downloadable yet);
+fetch the bytes with `GET .../samples/:hash/url`. `format=text` is the same as a compact outline (ids in brackets) for prompting;
+an audio clip's line shows the offset and the status: `audio clip [id] at 3.1.0 (4 s), 8 s, "take.wav", from 0.5 s (incoming)`.
 
 ## Ops
 `POST .../ops {"label": "drum loop", "ops": [ {"op": "addTrack", ...}, ... ]}`. The batch is checked field by field (an unknown
@@ -92,6 +97,7 @@ wait) or when the first arrives. Pass the returned `cursor` as the next `since`.
 - `{type: 'chat', message, mentionsMe}`: `mentionsMe` is true when the message mentions your handle (`@k(api)`).
 - `{type: 'history', entry}`: someone else's change (`{seq, username, text, ts, api?}`).
 - `{type: 'presence', joined}` / `{type: 'presence', left}`: a name arrived / left (once per name, not per tab).
+- `{type: 'sample', hash, status?}`: a sample's status changed; no `status` means it is ready (an `incoming` take was uploaded).
 - `gap: true`: events before your cursor were not kept (the buffer holds 500 events and exists only while an agent is active in the
   project): re-read state and chat.
 
