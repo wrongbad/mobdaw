@@ -137,7 +137,7 @@ def line(chords, rhythm: Rhythm | None = None, style: str = "roots", key=None, r
                     m = v.pick(fifth) if m is None else m
                     v.prev = m
                 else:
-                    m = v.pick(next((p for p in mids[j - 1:] if p is not None), c.bass))
+                    m = v.pick(next((p for p in mids[j - 1:] if p is not None and p != v.prev % 12), c.bass))
                 out.append((t, m, False))
     out = _snap(out, kick, t0, end) if kick and style != "pulse" else out
     return _motif(sorted(out, key=lambda x: x[0]), end, bars)

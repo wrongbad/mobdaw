@@ -35,7 +35,11 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from fractions import Fraction
 
+import hashlib
+
+from . import patches
 from .core import Motif, Note, Pitch
+from .heard import HeardPart
 from .ingest import (_Item, _N, _clean_name, _lines, _pitch, _place, _unique, estimate_key,
                      instrument_for, SourceNote)
 from .scale import Scale, key as parse_key
@@ -400,6 +404,7 @@ class Pulled:
     score: Score
     snapshot: dict
     report: list[str] = field(default_factory=list)
+    heard: dict[str, HeardPart] = field(default_factory=dict)      # HEARD in the piece: name -> what the recording says
 
 
 def _timeline_into(score: Score, state: dict, report: list[str]) -> None:
@@ -479,17 +484,25 @@ def _baseline(score: Score, parts_by_track: dict[str, list[str]], tracks: list[_
     return out
 
 
-def _snapshot(state: dict, project: str, filter_info: dict | None, tracks: list[_Track], parts_by_track: dict, baseline: list[dict], bars: int) -> dict:
+def _snapshot(state: dict, project: str, filter_info: dict | None, tracks: list[_Track], parts_by_track: dict, baseline: list[dict], bars: int,
+              heard: list[dict] | None = None) -> dict:
     return {
         "project": project, "rev": state.get("rev"), "ppq": state["meta"]["ppq"], "regions": state["regions"], "filter": filter_info or {},
-        "bars": bars, "notes": baseline,
+        "bars": bars, "notes": baseline, "heard": heard or [],
         "tracks": [{"id": tr.info["id"], "name": tr.info["name"], "drums": tr.drums, "parts": parts_by_track.get(tr.info["id"], []), "clips": tr.clips}
                    for tr in tracks],
     }
 
 
-def pull(state: dict, project: str = "", filter_info: dict | None = None) -> Pulled:
-    """A Score and a snapshot from a project state (see the module docstring)."""
+def _sig(score: Score, part: str) -> str:
+    """A fingerprint of what a part says (onset, pitch, length of every note): how push notices an edit to a heard part."""
+    ev = sorted((str(on), m, str(d)) for on, m, d, _ in _events(score, [part]))
+    return hashlib.sha1(json.dumps(ev).encode()).hexdigest()
+
+
+def pull(state: dict, project: str = "", filter_info: dict | None = None, heard: list[HeardPart] | None = None) -> Pulled:
+    """A Score and a snapshot from a project state (see the module docstring). `heard`: audio tracks as heard
+    (badmidi.audio.listen): each becomes a read-only part "<track> (heard)" and an entry of the piece's HEARD."""
     ppq = state["meta"]["ppq"]
     report: list[str] = []
     score, keyed = _start_score(state)
@@ -500,7 +513,10 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None) -> Pul
             if c["kind"] == "audio":
                 report.append(f"left out: audio clip at {c['start']} on {t['name']!r}")
 
-    if not keyed:
+    if not keyed and heard:
+        score.key = parse_key(heard[0].key)
+        report.append(f"key: {score.key.name} (heard in {heard[0].track!r}; the project has none; setKey to fix)")
+    elif not keyed:
         weights = [0.0] * 12
         for tr in tracks:
             if not tr.drums:
@@ -582,7 +598,15 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None) -> Pul
                 if any(a <= on < a + body * passes for on, _ in part.events()):
                     score.loops.append(Loop(part, a, body, passes))
     baseline = _baseline(score, parts_by_track, tracks)
-    return Pulled(score, _snapshot(state, project, filter_info, tracks, parts_by_track, baseline, score.bars if score.parts else 0), report)
+    marks, hp = [], {}
+    for h in heard or []:
+        h.part = _unique(h.part, taken)
+        h.add_to(score)
+        hp[_unique(_clean_name(h.track) or "track", set(hp))] = h
+        marks.append({"part": h.part, "track": h.track, "sig": _sig(score, h.part)})
+        report.append(f"heard: {h.part!r} from audio track {h.track!r}: {len(h.chords)} chord spans, key {h.key}, {h.grid}; "
+                      "read-only (HEARD in the piece has the chords and rhythm; push skips it, --guide pushes it muted)")
+    return Pulled(score, _snapshot(state, project, filter_info, tracks, parts_by_track, baseline, score.bars if score.parts else 0, marks), report, hp)
 
 
 # --- push: Score + snapshot -> ops ---------------------------------------------------
@@ -598,6 +622,7 @@ class PushPlan:
     new_tracks: int = 0
     new_parts: dict[int, list[str]] = field(default_factory=dict)    # addTrack op index -> the piece's part names for it
     track_parts: dict[str, list[str]] = field(default_factory=dict)  # existing track id -> the piece's part names for it
+    guided: list[str] = field(default_factory=list)                  # heard parts pushed as muted tracks (no longer heard parts)
 
     @property
     def empty(self) -> bool:
@@ -679,9 +704,17 @@ def _reconcile_clips(score: Score, t: dict, parts: list[str], loops: list, ppq: 
     return eff
 
 
-def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, preset: str | None = None) -> PushPlan:
-    """The ops that turn the snapshot's project into the piece."""
+def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, preset: str | None = None,
+         patch: dict[str, str] | str | None = None, guide: bool = False) -> PushPlan:
+    """The ops that turn the snapshot's project into the piece. Heard parts (audio as chords) are not the project's: they
+    are skipped, and refused if edited; `guide` sends them as muted tracks instead."""
     check_timeline(score, snap)
+    heard = {h["part"]: h for h in snap.get("heard", [])}
+    if not guide:
+        for name, h in heard.items():
+            if any(p.name == name for p in score.parts) and _sig(score, name) != h["sig"]:
+                raise BridgeError(f"{name!r} is what the recording says, not a track of the project: edits to it are not pushed. "
+                                  "Put your changes in another part (HEARD has the chords), or push it as a muted track you can then edit with --guide")
     ppq = snap["ppq"]
     tl = Timeline({"meta": {"ppq": ppq}, "regions": snap["regions"]})
     pl = PushPlan()
@@ -805,7 +838,7 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
     # new parts -> new tracks (voice lines of a new part share its track)
     groups: dict[str, list[str]] = {}
     for p in score.parts:
-        if p.name in known or p.staff in known:
+        if p.name in known or p.staff in known or (p.name in heard and not guide):
             continue
         groups.setdefault(p.staff, []).append(p.name)
     for root, names in groups.items():
@@ -815,23 +848,37 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
         for e in ev:
             window_ok(e[0], root)
         drums = score[names[0]].drums
-        src = (like.get(root) or like.get("*")) if isinstance(like, dict) else like
+        is_guide = guide and names[0] in heard
+        src = None if is_guide else (like.get(root) or like.get("*")) if isinstance(like, dict) else like
+        pat = None if is_guide else (patch.get(root) or patch.get("*")) if isinstance(patch, dict) else patch
+        if sum(map(bool, (src, preset, pat))) > 1:
+            raise BridgeError(f"new part {root!r}: --like, --preset and --patch are alternatives; give one")
         if drums and not (src or preset):
             raise BridgeError(f"new drum part {root!r}: say which track's drum devices it plays (--like <drum track>): "
                               "a drum kit is one keyed one-shot device per drum, which a piece cannot describe")
-        op = {"op": "addTrack", "name": root}
+        op = {"op": "addTrack", "name": heard[names[0]]["track"] + " (heard)" if is_guide else root}
         if src:
             op["like"] = src
         elif preset:
             op["preset"] = preset
+        elif pat:
+            op["preset"] = "none"
         pl.ops.append(op)
         ref = f"${len(pl.ops) - 1}"
         pl.new_parts[len(pl.ops) - 1] = names
+        if pat:
+            try:
+                pl.ops.append(patches.device_op(pat, ref))
+            except ValueError as e:
+                raise BridgeError(str(e)) from None
+        if is_guide:
+            pl.ops.append({"op": "updateTrack", "id": ref, "muted": True})
+            pl.guided += names
         clip_ops(ref, [], ev, root, drums, [lp for lp in score.loops if lp.part.name in names])
         pl.new_tracks += 1
         pl.adds += len(ev)
         new_notes_total += len(ev)
-        pl.summary.append(f"new {'drum ' if drums else ''}track {root!r}: {len(ev)} notes" + (f", like {src!r}" if src else (f", preset {preset!r}" if preset else ", default instrument (finnwave); --like <track> copies a track's sound")))
+        pl.summary.append(f"new {'drum ' if drums else ''}track {root!r}: {len(ev)} notes" + (" (muted guide of the recording)" if is_guide else f", like {src!r}" if src else f", preset {preset!r}" if preset else f", patch {pat!r}" if pat else ", default instrument (finnwave); --like <track> copies a track's sound, --patch bass is a bass sound"))
     if len(pl.ops) > MAX_OPS or new_notes_total > MAX_NOTES:
         raise BridgeError(f"too big for one batch ({len(pl.ops)} ops, {new_notes_total} notes; limits {MAX_OPS} / {MAX_NOTES})")
     return pl
@@ -852,7 +899,8 @@ def rebaseline(score: Score, snap: dict, state: dict, pl: PushPlan, res: dict) -
         parts[res["ids"][i]] = names
     tracks = _collect(state, [])
     f = snap.get("filter") or {}
-    return _snapshot(state, snap["project"], f, tracks, parts, _baseline(score, parts, tracks), max(snap.get("bars", 0), score.bars))
+    heard = [h for h in snap.get("heard", []) if h["part"] not in pl.guided]
+    return _snapshot(state, snap["project"], f, tracks, parts, _baseline(score, parts, tracks), max(snap.get("bars", 0), score.bars), heard)
 
 
 # --- files -------------------------------------------------------------------------
@@ -896,6 +944,13 @@ def projects_main(argv: list[str]) -> int:
     return 0
 
 
+def write_pulled(pulled: Pulled, path: str, header: str, phrase: int = 4) -> None:
+    """The piece (with HEARD for heard parts) and its snapshot."""
+    from .source import write_source
+    write_source(pulled.score, path, header, phrase=phrase, heard=pulled.heard or None)
+    write_snapshot(snapshot_path(path), pulled.snapshot)
+
+
 def pull_main(argv: list[str]) -> int:
     import argparse
     ap = argparse.ArgumentParser(prog="badmidi pull", description="Pull a mobdaw project into a badmidi piece and a snapshot.")
@@ -904,8 +959,10 @@ def pull_main(argv: list[str]) -> int:
     ap.add_argument("--tracks", help="comma-separated track names or ids: pull only these (push then touches only these)")
     ap.add_argument("--bars", help="bar range such as 17-32: only notes touching them (push then only edits those bars)")
     ap.add_argument("--phrase", type=int, default=4, help="bars per at() call (default 4)")
+    ap.add_argument("--listen", action="append", default=[], metavar="TRACK",
+                    help="an audio track to hear as chords: a read-only '<track> (heard)' part and HEARD in the piece (needs badmidi[audio]); repeatable")
+    ap.add_argument("--wait", type=float, default=0, metavar="SECONDS", help="--listen: wait this long for a take that is still uploading")
     args = ap.parse_args(argv)
-    from .source import write_source
     from .views import has_errors
     c = Client()
     pid = c.project_id(args.project)
@@ -914,14 +971,31 @@ def pull_main(argv: list[str]) -> int:
     state = c.state(pid, tracks, bars)
     name = next((p["name"] for p in c.projects() if p["id"] == pid), "project")
     state["name"] = name
-    pulled = pull(state, pid, {k: v for k, v in (("tracks", tracks), ("fromBar", bars and bars[0]), ("toBar", bars and bars[1])) if v})
+    heard, charts = [], []
+    if args.listen:
+        try:
+            from .audio.listen import listen
+        except ImportError:
+            raise BridgeError("--listen needs numpy, scipy and soundfile: pip install 'badmidi[audio]'") from None
+        for tr in args.listen:
+            try:
+                got = listen(c, pid, c.state(pid, [tr]), tr, bars, "chords", args.wait)
+            except SampleIncoming:
+                raise BridgeError(f"the take on {tr!r} is still uploading from the recorder's device; try again in a minute, or pass --wait 120") from None
+            if not got.ok:
+                print(got.chart().splitlines()[0])
+                raise BridgeError(f"{tr}: {got.problem()}")
+            heard.append(got.part)
+            charts.append(got.chart())
+    pulled = pull(state, pid, {k: v for k, v in (("tracks", tracks), ("fromBar", bars and bars[0]), ("toBar", bars and bars[1])) if v}, heard)
     out = args.out or re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_").lower() + ".py"
-    write_source(pulled.score, out, "\n".join([f"pulled from mobdaw project {name!r} ({pid}) at rev {state.get('rev')}", *pulled.report]), phrase=args.phrase)
-    write_snapshot(snapshot_path(out), pulled.snapshot)
+    write_pulled(pulled, out, "\n".join([f"pulled from mobdaw project {name!r} ({pid}) at rev {state.get('rev')}", *pulled.report]), args.phrase)
     n = len(pulled.snapshot["notes"])
     print(f"{name}: {len(pulled.score.parts)} parts, {n} notes, rev {state.get('rev')}")
     for line in pulled.report:
         print(line)
+    for chart in charts:
+        print(chart)
     print(f"wrote {out} and {snapshot_path(out)}" + ("; check reports errors" if has_errors(pulled.score) else ""))
     return 0
 
@@ -936,6 +1010,9 @@ def push_main(argv: list[str]) -> int:
     ap.add_argument("--like", action="append", default=[], metavar="[PART=]TRACK",
                     help="new tracks copy this track's devices (a bare TRACK applies to every new part); repeatable")
     ap.add_argument("--preset", help="new tracks get this instrument device type (default finnwave)")
+    ap.add_argument("--patch", action="append", default=[], metavar="[PART=]NAME",
+                    help=f"new tracks get this named sound ({', '.join(patches.PATCHES)}); a bare NAME applies to every new part; repeatable")
+    ap.add_argument("--guide", action="store_true", help="push the heard parts as muted MIDI tracks (to see and fix what was heard)")
     ap.add_argument("--json", action="store_true", help="print the ops as JSON")
     args = ap.parse_args(argv)
     from .views import has_errors
@@ -948,7 +1025,11 @@ def push_main(argv: list[str]) -> int:
     for x in args.like:
         k, eq, v = x.partition("=")
         like[k if eq else "*"] = v if eq else k
-    p = plan(score, snap, like or None, args.preset)
+    patch: dict[str, str] = {}
+    for x in args.patch:
+        k, eq, v = x.partition("=")
+        patch[k if eq else "*"] = v if eq else k
+    p = plan(score, snap, like or None, args.preset, patch or None, args.guide)
     if p.empty:
         print("nothing to push: the piece matches the project as pulled")
         return 0

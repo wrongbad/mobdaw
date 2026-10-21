@@ -20,6 +20,8 @@
                                          (--quantize, --key as for import)
     badmidi pull PROJECT -o piece.py     a mobdaw project as a piece (+ piece.mobdaw.json); see bridge.py
     badmidi push piece.py [--apply]      the piece's note edits back to the project, as ONE history entry
+    badmidi pull PROJECT --listen Guitar -o piece.py   also hear an audio track: a read-only "guitar (heard)" part and HEARD
+    badmidi listen PROJECT --track Guitar [--bars 1-16] [--wait 60]   the chord chart of a recorded track (needs badmidi[audio])
     badmidi projects                     (MOBDAW_URL, MOBDAW_TOKEN in the environment)
 
     badmidi import song.mid [-o song.py] import MIDI or MusicXML as a badmidi piece to edit
@@ -123,6 +125,12 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["import"]:
         return import_main(argv[1:])
+    if argv[:1] == ["listen"]:
+        try:
+            from .audio.listen import main as listen_main
+        except ImportError:
+            sys.exit("badmidi listen needs numpy, scipy and soundfile: pip install 'badmidi[audio]'")
+        return listen_main(argv[1:])
     if argv[:1] in (["pull"], ["push"], ["projects"]):
         from .bridge import main as bridge_main
         return bridge_main(argv[0], argv[1:])

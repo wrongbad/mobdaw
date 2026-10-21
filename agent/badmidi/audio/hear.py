@@ -492,14 +492,16 @@ def hear_chords(x: np.ndarray, sr: int, grid: Grid) -> Heard:
 # --- text -----------------------------------------------------------------------------------------
 
 
-def format_chart(h: Heard, grid: Grid, name: str = "audio") -> str:
-    """One bar per line with confidence, a runner-up where unsure; then tuning, key, grid check, rhythm."""
+def format_chart(h: Heard, grid: Grid, name: str = "audio", first_bar: int = 1, mode: str | None = None) -> str:
+    """One bar per line with confidence, a runner-up where unsure; then tuning, key, grid check, rhythm (bars with the
+    same pattern share a line). `first_bar` numbers the bars; `mode` ('chords') is named in the header."""
     bars = grid.bars()
     gc = h.grid_check
-    lines = [f"{name}, {len(bars)} bars, tuning {h.tuning_cents:+.0f} c, key {h.key.name}, "
+    span = f"{len(bars)} bars" + (f" ({first_bar}-{first_bar + len(bars) - 1})" if first_bar != 1 else "")
+    lines = [f"{name}, {span}, " + (f"heard as {mode}, " if mode else "") + f"tuning {h.tuning_cents:+.0f} c, key {h.key.name}, "
              + (f"on the grid ({gc.mean_offset * 1000:+.0f} ms)" if gc.on_grid else
                 f"OFF the grid (mean {gc.mean_offset * 1000:+.0f} ms, drift {gc.drift * 1000:+.0f} ms, spread {gc.spread * 1000:.0f} ms)")]
-    for n, (a, b) in enumerate(bars, 1):
+    for n, (a, b) in enumerate(bars, first_bar):
         cells = []
         for c in h.chords:
             if c.end_beat <= a or c.start_beat >= b:
@@ -512,9 +514,18 @@ def format_chart(h: Heard, grid: Grid, name: str = "audio") -> str:
         lines.append(f"{n:>3}  " + "  ".join(cells))
     if h.rhythm.bars:
         spb = h.rhythm.slots_per_beat
-        row = h.rhythm.bars[0]
-        cells = ["".join("x" if v >= 0.5 else "o" if v >= 0.2 else "." for v in row[i:i + spb]) for i in range(0, len(row), spb)]
-        lines.append("rhythm: | " + " ".join(cells) + " |  (bar 1, onset strength per 16th: x strong, o weak)")
+        runs: list[list] = []                                    # [first bar, last bar, text]
+        for n, row in enumerate(h.rhythm.bars, first_bar):
+            text = " ".join("".join("x" if v >= 0.5 else "o" if v >= 0.2 else "." for v in row[i:i + spb]) for i in range(0, len(row), spb))
+            if runs and runs[-1][2] == text and runs[-1][1] == n - 1:
+                runs[-1][1] = n
+            else:
+                runs.append([n, n, text])
+        for a, b, text in runs[:8]:
+            lines.append(f"rhythm {'bar %d' % a if a == b else 'bars %d-%d' % (a, b)}: | {text} |")
+        if len(runs) > 8:
+            lines.append(f"rhythm: ... {len(runs) - 8} more patterns")
+        lines.append("(rhythm: onset strength per slot, x strong, o weak)")
     return "\n".join(lines)
 
 

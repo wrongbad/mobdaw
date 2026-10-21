@@ -86,9 +86,9 @@ def _kwargs(p: Part) -> list[str]:
     return out
 
 
-def _identifiers(parts: list[Part]) -> dict[str, str]:
+def _identifiers(parts: list[Part], reserved: tuple[str, ...] = ()) -> dict[str, str]:
     import badmidi
-    taken = set(badmidi.__all__) | set(keyword.kwlist) | set(dir(builtins)) | {"score", "Fraction"}
+    taken = set(badmidi.__all__) | set(keyword.kwlist) | set(dir(builtins)) | {"score", "Fraction", *reserved}
     out: dict[str, str] = {}
     for p in parts:
         base = re.sub(r"\W+", "_", p.name.strip().lower()).strip("_") or "part"
@@ -254,7 +254,7 @@ def _music(score: Score, p: Part, var: str, cells: list[list[str]], phrase: int)
     return out
 
 
-def to_source(score: Score, report=None, phrase: int = 4) -> str:
+def to_source(score: Score, report=None, phrase: int = 4, heard: dict | None = None) -> str:
     """Python source of a piece file that rebuilds `score`: a docstring with a
     bar map to fill in (and `report`, any object with a str(), e.g. an import
     report), the Score and its parts, then each part's music in phrases of
@@ -262,7 +262,7 @@ def to_source(score: Score, report=None, phrase: int = 4) -> str:
     anchor, so `check` keeps catching miscounts as the piece is edited."""
     from .views import _bar_cells
     f = _Fmt()
-    ids = _identifiers(score.parts)
+    ids = _identifiers(score.parts, ("bass", "HEARD") if heard else ())
     first = score.meter_at(1)
     doc = [f"{score.title or 'Untitled'}.", ""]
     if report is not None:
@@ -284,6 +284,10 @@ def to_source(score: Score, report=None, phrase: int = 4) -> str:
     one = "score = Score(" + ", ".join(args) + ")"
     body = [one] if len(one) <= LINE else ["score = Score(" + ",\n              ".join(args) + ")"]
     body += _declarations(score, ids)
+    if heard:
+        f.fraction = True
+        body += ["", "# --- what the recording says: read-only (push skips the \"(heard)\" parts); draft a bass part with bass.line ---",
+                 "HEARD = {", *(h.source(k) for k, h in heard.items()), "}"]
     calls = _score_calls(score, f)
     if calls:
         body += ["", "# --- meter, tempo, form ---------------------------------------------------", *calls]
@@ -297,11 +301,11 @@ def to_source(score: Score, report=None, phrase: int = 4) -> str:
                 music += ["", f"# --- {p.name} " + "-" * max(4, 66 - len(p.name)), *lines]
     if any(lp for lp in score.loops):
         music.insert(0, "# loops that repeat exactly are p.loop(); any other is written out bar by bar")
-    head = ["from badmidi import *"] + (["from fractions import Fraction"] if f.fraction else [])
+    head = ["from badmidi import *"] + (["from badmidi import bass"] if heard else []) + (["from fractions import Fraction"] if f.fraction else [])
     return f'"""{_doc(chr(10).join(doc))}\n"""\n' + "\n".join(head + ["", *body, "", *music]).rstrip() + "\n"
 
 
-def write_source(score: Score, path: str, report=None, phrase: int = 4) -> None:
-    text = to_source(score, report, phrase)
+def write_source(score: Score, path: str, report=None, phrase: int = 4, heard: dict | None = None) -> None:
+    text = to_source(score, report, phrase, heard)
     with open(path, "w") as fh:
         fh.write(text)
