@@ -18,6 +18,7 @@ from scipy.ndimage import maximum_filter1d, median_filter, uniform_filter1d
 from scipy.signal import resample_poly
 
 from ..core import dur_suffix, pc_name
+from ..heard import is_unsure
 
 SR = 22050
 LOW, HIGH = 33, 96            # semitone filterbank range, MIDI A1..C7
@@ -103,9 +104,12 @@ class ChordSpan:
     quality: str
     bass_pc: int
     confidence: float
-    runner_up: tuple[str, float] | None = None
+    runner_up: tuple[str, float] | None = None     # the best chord of another root or family, and its confidence
     implied: str = ""            # for a power chord: 'm' or '' (major) as read from the key
     src: str = ""                # 'melody': a guess from a melody's notes, not heard
+
+    def unsure(self) -> bool:
+        return is_unsure(self.confidence, self.runner_up[1] if self.runner_up else 0.0, self.runner_up is not None)
 
 
 @dataclass
@@ -172,7 +176,7 @@ def tuning_offset(x: np.ndarray) -> float:
     n, nfft = 4096, 16384
     S = _stft(x, n, 2048, nfft)
     df = SR / nfft
-    k0, k1 = int(100 / df), int(2000 / df)
+    k0, k1 = int(100 / df), int(1000 / df)
     mid = S[:, k0:k1]
     pk = (mid[:, 1:-1] > mid[:, :-2]) & (mid[:, 1:-1] >= mid[:, 2:]) & (mid[:, 1:-1] > 0.05 * S.max(axis=1, keepdims=True)) \
         & (mid[:, 1:-1] > 0.01 * S.max())
@@ -335,9 +339,9 @@ def grid_check(onset_times, grid: Grid, strengths=None, slots_per_beat: int = 4,
 QUALITIES: dict[str, tuple[str, list[tuple[int, float]], float]] = {
     "maj": ("", [(0, 1), (4, .9), (7, .7)], 1.0),
     "min": ("m", [(0, 1), (3, .9), (7, .7)], 1.0),
-    "7": ("7", [(0, 1), (4, .9), (7, .65), (10, .4)], 0.99),
-    "maj7": ("maj7", [(0, 1), (4, .9), (7, .65), (11, .4)], 0.99),
-    "m7": ("m7", [(0, 1), (3, .9), (7, .65), (10, .4)], 0.99),
+    "7": ("7", [(0, 1), (4, .9), (7, .65), (10, .4)], 0.98),
+    "maj7": ("maj7", [(0, 1), (4, .9), (7, .65), (11, .4)], 0.98),
+    "m7": ("m7", [(0, 1), (3, .9), (7, .65), (10, .4)], 0.98),
     "sus2": ("sus2", [(0, 1), (2, .9), (7, .7)], 0.97),
     "sus4": ("sus4", [(0, 1), (5, .9), (7, .7)], 0.97),
     "dim": ("dim", [(0, 1), (3, .9), (6, .7)], 0.96),
@@ -501,22 +505,51 @@ def _presence(chroma: np.ndarray) -> np.ndarray:
     return np.log1p(np.maximum(chroma - fl, 0) / COMPRESS)
 
 
+CHANGE_Q = 2.5           # change penalty for a new quality on the same root (A -> Am, Am -> A5): a third that decays is not a new chord
+
+
+def _two_stage(full: np.ndarray, pen: np.ndarray) -> np.ndarray:
+    """The chord path in two steps. Roots first (each root scores as its best quality, so a third that rings out on beat 2 cannot
+    split an Am into A5 and Am), then inside each root's span the quality, with a dearer change."""
+    nq, B = len(NAMES), len(full)
+    roots = np.concatenate([full[:, :-1].reshape(B, 12, nq).max(axis=2), full[:, -1:]], axis=1)
+    rpath = _viterbi(BETA * roots, pen)
+    path = np.zeros(B, np.int32)
+    i = 0
+    while i < B:
+        j = i
+        while j + 1 < B and rpath[j + 1] == rpath[i]:
+            j += 1
+        if rpath[i] == 12:
+            path[i:j + 1] = len(_ROOT)
+        else:
+            sub = _viterbi(BETA * full[i:j + 1, rpath[i] * nq:(rpath[i] + 1) * nq], np.full(j + 1 - i, CHANGE_Q))
+            path[i:j + 1] = rpath[i] * nq + sub
+        i = j + 1
+    return path
+
+
+def _scores(cn: np.ndarray, bn: np.ndarray, key: Key) -> np.ndarray:
+    """Score of every chord template for rows of normalised presence `cn` and normalised bass chroma `bn` (rows x 12*qualities)."""
+    sc = cn @ _TEMPLATES.T
+    sc = sc * _PRIOR + BASS_W * bn[:, _ROOT]
+    return sc + 0.02 * ((_TEMPLATES > 0) @ _scale(key)) / (_TEMPLATES > 0).sum(axis=1)       # key breaks near ties
+
+
 def hear_chords_from_chroma(chroma: np.ndarray, bass: np.ndarray, silent: np.ndarray, grid: Grid,
                             key: Key | None = None) -> tuple[list[ChordSpan], Key]:
     """Chord spans from per-beat chroma (B x 12), bass chroma (B x 12) and a silent-beat mask."""
     B = len(chroma)
     key = key or estimate_key(chroma[~silent] if (~silent).any() else chroma, bass)
     pr = _presence(chroma)
-    cn = pr / np.maximum(np.linalg.norm(pr, axis=1, keepdims=True), 1e-9)
+    unit = lambda m: m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9)
+    cn = unit(pr)
     bn = bass / np.maximum(bass.sum(axis=1, keepdims=True), 1e-9)
-    sc = cn @ _TEMPLATES.T
-    sc = sc * _PRIOR + BASS_W * bn[:, _ROOT]
-    sc = sc + 0.02 * ((_TEMPLATES > 0) @ _scale(key)) / (_TEMPLATES > 0).sum(axis=1)       # key breaks near ties
-    sc = np.where(silent[:, None], 0.0, sc)
+    sc = np.where(silent[:, None], 0.0, _scores(cn, bn, key))
     full = np.concatenate([sc, np.where(silent, 1.0, N_SCORE)[:, None]], axis=1)             # last state: N
     pen = np.array([CHANGE * (0.45 if grid.bar_starts[i] else 0.8 if grid.position(i) == 2 else 1.0)
                     for i in range(B)])
-    path = _viterbi(BETA * full, pen)
+    path = _two_stage(full, pen)
     flats = _flats(key)
     spans = []
     i = 0
@@ -1006,8 +1039,7 @@ def format_chart(h: Heard, grid: Grid, name: str = "audio", first_bar: int = 1, 
         for c in ([] if notes else h.chords):
             if c.end_beat <= a or c.start_beat >= b:
                 continue
-            unsure = c.runner_up is not None and (c.confidence < 0.5 or c.runner_up[1] > 0.5 * c.confidence)
-            cell = f"{c.symbol} {c.confidence:.2f}" + (f" | {c.runner_up[0]} {c.runner_up[1]:.2f}  <- unsure" if unsure else "")
+            cell = f"{c.symbol} {c.confidence:.2f}" + (f" | {c.runner_up[0]} {c.runner_up[1]:.2f}  <- unsure" if c.unsure() else "")
             if c.quality == "5" and c.implied:
                 cell += " (power chord, minor by key)"
             cells.append(cell)

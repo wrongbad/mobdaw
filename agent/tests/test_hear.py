@@ -1,14 +1,18 @@
-"""badmidi.audio.hear on synthetic audio: pads, Karplus-Strong strums, distorted power chords."""
+"""badmidi.audio.hear on synthetic audio: pads, Karplus-Strong strums, distorted power chords, and open-position guitar (tests/synth.py)."""
 import os
 import subprocess
 import sys
 import unittest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # synth.py, whichever way the tests are started
+
 try:
     import numpy as np
     from scipy.signal import fftconvolve, resample_poly
+    import synth
     from badmidi.audio import hear
     from badmidi.audio.hear import SR, Grid
+    from badmidi.heard import HeardChord, is_unsure
 except ImportError:  # the audio extra is optional
     np = None
 
@@ -284,6 +288,97 @@ class TestHear(unittest.TestCase):
             self.assertLess(max(v for i, v in enumerate(bar) if i not in (0, 6, 8, 12)), 0.2, bar)
 
 
+@unittest.skipIf(np is None, "numpy/scipy not installed")
+class TestHearGuitar(unittest.TestCase):
+    """Open-position shapes strummed on six Karplus-Strong strings (synth.py): single thirds, muted strings, up-strums, a body,
+    fret noise, a room. Each progression is heard in tune or 15 cents sharp (alternating), and must get the root and the quality
+    (triad / 7th / power) as played, the key a musician would name, and the tuning within 3 cents."""
+    heard = {}
+
+    @classmethod
+    def setUpClass(cls):
+        for i, (name, p) in enumerate(synth.PROGRESSIONS.items()):
+            detune = DETUNE if i % 2 else 0
+            x = synth.render(p.bars, p.bpm, p.per_bar, p.pattern, detune, seed=i + 1)
+            cls.heard[name] = (detune, hear.hear_chords(x, SR, Grid.regular(p.bpm, p.per_bar, len(p.bars) * p.per_bar)))
+
+    @staticmethod
+    def accuracy(h, p):
+        got = {i: c for c in h.chords for i in range(c.start_beat, c.end_beat)}
+        exp = synth.expected_beats(p.bars, p.per_bar)
+        root = sum(1 for i, (r, _, _) in enumerate(exp) if i in got and got[i].root_pc == r)
+        qual = sum(1 for i, (r, q, _) in enumerate(exp) if i in got and got[i].root_pc == r and got[i].quality == q)
+        return root / len(exp), qual / len(exp)
+
+    def test_chords_key_and_tuning(self):
+        for name, p in synth.PROGRESSIONS.items():
+            with self.subTest(name):
+                detune, h = self.heard[name]
+                r, q = self.accuracy(h, p)
+                self.assertGreaterEqual(r, 0.9)
+                self.assertGreaterEqual(q, 0.85)
+                self.assertAlmostEqual(h.tuning_cents, detune, delta=3)
+                if name == "A blues":                      # a blues in A is major and minor at once; the tonic is what counts
+                    self.assertEqual(h.key.name.split()[0], "A")
+                else:
+                    self.assertEqual(h.key.name, p.key)
+                self.assertTrue(h.grid_check.on_grid, h.grid_check)
+
+    def test_a_single_third_is_not_a_power_chord(self):
+        """The open shapes carry one third among five or six strings: Am (A E A C E), C (C E G C E), F barre, D (D A D F#)."""
+        for name in ("Am F C G", "C G Am F", "D A Bm G"):
+            _, h = self.heard[name]
+            self.assertNotIn("5", [c.quality for c in h.chords], name)
+
+    def test_power_chords_still_win_when_the_third_is_absent(self):
+        p = synth.Prog(["E5", "A5", "D5", "E5"] * 2, 100, "E minor")
+        h = hear.hear_chords(synth.render(p.bars, p.bpm, drive=3.0, seed=4), SR, Grid.regular(100, 4, 32))
+        self.assertGreaterEqual(sum(c.quality == "5" for c in h.chords) / len(h.chords), 0.75, [c.symbol for c in h.chords])
+
+    def test_clear_chords_are_confident_and_not_unsure(self):
+        for name in ("Am F C G", "Em C G D", "A blues"):
+            _, h = self.heard[name]
+            for c in h.chords:
+                self.assertGreaterEqual(c.confidence, 0.7, (name, c))
+                self.assertFalse(c.unsure(), (name, c))
+
+    def test_the_rival_is_another_root_or_family_not_a_7th(self):
+        _, h = self.heard["Am F C G"]
+        for c in h.chords:
+            self.assertIsNotNone(c.runner_up)
+            self.assertNotIn(c.runner_up[0], (c.symbol + "7", c.symbol + "maj7"), c)
+            self.assertLess(c.runner_up[1], 0.5, c)
+
+    def test_a_third_in_the_middle_is_unsure(self):
+        """Chroma halfway between A and Am (an A with a quarter-strength third on both sides) is a rival at the same score."""
+        ch = np.zeros((8, 12))
+        ch[:, [9, 4]] = [3.0, 2.5]
+        ch[:, 0] = 1.2
+        ch[:, 1] = 1.2
+        spans, _ = hear.hear_chords_from_chroma(ch, ch * 0, np.zeros(8, bool), Grid.regular(100, 4, 8))
+        self.assertTrue(spans[0].unsure(), spans[0])
+
+    def test_is_unsure_is_one_rule(self):
+        self.assertFalse(is_unsure(0.9, 0.05, "Em"))
+        self.assertTrue(is_unsure(0.9, 0.5, "Em"))         # the rival is more than half as likely
+        self.assertTrue(is_unsure(0.4, 0.0, "Em"))         # not sure of itself
+        self.assertFalse(is_unsure(0.3, 0.2, ""))          # no rival: nothing to ask
+        c = HeardChord(0, 4, "G", 7, 7, "maj", 0.46, "Em", 0.3)
+        self.assertTrue(c.is_unsure())
+        self.assertIn('alt="Em", alt_conf=0.30', repr(c))
+        self.assertEqual(eval(repr(c), {"HeardChord": HeardChord, "Fraction": __import__("fractions").Fraction}), c)
+
+    def test_every_string_is_in_tune(self):
+        rng = np.random.default_rng(0)
+        for m in synth.OPEN:
+            f = 440 * 2 ** ((m - 69) / 12)
+            y = synth.string(f, 1.0, SR, rng)
+            sp = np.abs(np.fft.rfft(y * np.hanning(len(y)), 1 << 18))
+            fr = np.fft.rfftfreq(1 << 18, 1 / SR)
+            band = (fr > f * 0.97) & (fr < f * 1.03)
+            self.assertAlmostEqual(1200 * np.log2(fr[band][np.argmax(sp[band])] / f), 0, delta=1.0)
+
+
 @SLOW
 @unittest.skipIf(np is None, "numpy/scipy not installed")
 class TestHearSweep(unittest.TestCase):
@@ -303,6 +398,26 @@ class TestHearSweep(unittest.TestCase):
                     self.assertGreaterEqual(r, 0.9)
                     self.assertGreaterEqual(q, 0.8)
                     self.assertAlmostEqual(h.tuning_cents, DETUNE, delta=5)
+
+
+@SLOW
+@unittest.skipIf(np is None, "numpy/scipy not installed")
+class TestGuitarSweep(unittest.TestCase):
+    """Every progression with other seeds, in tune, sharp and flat, clean and overdriven (about a minute)."""
+
+    def test_sweep(self):
+        for name, p in synth.PROGRESSIONS.items():
+            for seed, detune, drive in ((11, 0, 0), (12, 15, 0), (13, -15, 0), (14, 7, 2.0), (15, 0, 4.0)):
+                with self.subTest(name, seed=seed, detune=detune, drive=drive):
+                    x = synth.render(p.bars, p.bpm, p.per_bar, p.pattern, detune, seed, drive=drive)
+                    h = hear.hear_chords(x, SR, Grid.regular(p.bpm, p.per_bar, len(p.bars) * p.per_bar))
+                    r, q = TestHearGuitar.accuracy(h, p)
+                    self.assertGreaterEqual(r, 0.9)
+                    self.assertGreaterEqual(q, 0.85)
+                    self.assertAlmostEqual(h.tuning_cents, detune, delta=3)
+                    self.assertEqual(h.key.name.split()[0], p.key.split()[0])
+                    if name != "A blues":
+                        self.assertEqual(h.key.name, p.key)
 
 
 if __name__ == "__main__":

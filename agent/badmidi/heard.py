@@ -25,10 +25,19 @@ def _num(x) -> str:
     return str(x.numerator) if x.denominator == 1 else f"Fraction({x.numerator}, {x.denominator})"
 
 
+def is_unsure(conf: float, alt_conf: float, alt: str | bool = True) -> bool:
+    """Is a heard chord one to ask about? There is a rival (`alt`: another root or family, e.g. G against Em, Am against A5; not
+    Am against Am7) and either the chord's own confidence is under 0.5 or the rival is more than half as likely. The chart's
+    `<- unsure` and the chat reply of `examples/bass_for_take.py` both use this."""
+    return bool(alt) and (conf < 0.5 or alt_conf > 0.5 * conf)
+
+
 class HeardChord(NamedTuple):
     """A chord heard from `start` to `end` (quarters). `bass` is the pitch class the bass plays under it (an inversion if
-    it is not the root); `conf` 0..1; `alt` the runner-up symbol when unsure; `implied` is 'm' for a power chord that the
-    key reads as minor; `src` is 'melody' for a chord guessed from a melody's notes (not heard). quality 'N' is no chord."""
+    it is not the root); `conf` 0..1 is how much better it fits than any chord of another root or family; `alt` is that best
+    rival (empty if none) and `alt_conf` its confidence in the same terms (`is_unsure()` compares them); `implied` is 'm' for a
+    power chord that the key reads as minor; `src` is 'melody' for a chord guessed from a melody's notes (not heard). quality
+    'N' is no chord."""
     start: Fraction
     end: Fraction
     symbol: str
@@ -37,6 +46,7 @@ class HeardChord(NamedTuple):
     quality: str
     conf: float = 1.0
     alt: str = ""
+    alt_conf: float = 0.0
     implied: str = ""
     src: str = ""
 
@@ -47,6 +57,9 @@ class HeardChord(NamedTuple):
     @property
     def silent(self) -> bool:
         return self.quality == "N"
+
+    def is_unsure(self) -> bool:
+        return is_unsure(self.conf, self.alt_conf, self.alt)
 
     def tones(self) -> list[int]:
         """Pitch classes of the chord, root first (a power chord is root and fifth)."""
@@ -62,6 +75,8 @@ class HeardChord(NamedTuple):
 
     def __repr__(self) -> str:
         extra = "".join(f', {k}="{v}"' for k, v in (("alt", self.alt), ("implied", self.implied), ("src", self.src)) if v)
+        if self.alt:
+            extra = extra.replace(f'alt="{self.alt}"', f'alt="{self.alt}", alt_conf={self.alt_conf:.2f}', 1)
         return f'HeardChord({_num(self.start)}, {_num(self.end)}, "{self.symbol}", {self.root}, {self.bass}, "{self.quality}", {self.conf:.2f}{extra})'
 
 

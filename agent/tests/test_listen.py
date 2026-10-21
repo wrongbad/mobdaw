@@ -95,7 +95,7 @@ class TestListen(unittest.TestCase):
         self.assertTrue(self.res.ok, txt)
         self.assertRegex(txt.splitlines()[0], r"^Guitar \(audio, 1 take\), 4 bars, heard as chords \(auto: no single clear pitch, \d+% of the sound\), tuning \+\d+ c, key A minor, on the grid")
         for n, sym in enumerate(PROG, 1):
-            self.assertRegex(txt, rf"\n +{n}  {sym} 0\.\d\d")
+            self.assertRegex(txt, rf"\n +{n}  {sym} [01]\.\d\d")
         self.assertIn("rhythm bar 1: | x... ..x. ", txt)           # strums on slots 0, 6, 8, 12
 
     def test_score_time(self):

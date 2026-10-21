@@ -18,7 +18,7 @@ import argparse
 import os
 import re
 import sys
-import tempfile
+import time
 from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -36,12 +36,6 @@ class Result:
     unsure: list[str]
 
 
-def unsure(c) -> bool:
-    """A heard chord to ask about. (`alt` is the runner-up even when the chord is clear, and the runner-up's score is not kept in
-    a HeardChord, so this is the chart's `confidence < 0.5` half of its "<- unsure" rule.)"""
-    return bool(c.alt) and c.conf < 0.5
-
-
 def bar_spans(got: Listened) -> list[tuple]:
     part = got.part
     if part.rhythm and part.rhythm.bars:
@@ -52,7 +46,7 @@ def bar_spans(got: Listened) -> list[tuple]:
 def chart_line(got: Listened) -> str:
     """The heard chords, bar by bar: `Am | F | C | G` (two chords in a bar: `Am F`), `?` after a chord it is unsure of."""
     part, spans = got.part, bar_spans(got)
-    bars = [" ".join(c.symbol + ("?" if unsure(c) else "") for c in part.chords if a <= c.start < z) or "-" for a, z in spans]
+    bars = [" ".join(c.symbol + ("?" if c.is_unsure() else "") for c in part.chords if a <= c.start < z) or "-" for a, z in spans]
     return " | ".join(bars)
 
 
@@ -78,7 +72,7 @@ def make_bass(c: Client, pid: str, track: str, style: str = "root-fifth", bars: 
         raise BridgeError("the draft has errors:\n" + score.check())
     pl = plan(score, pulled.snapshot, sound="bass")
     asks = [f"bar {got.bars[0] + i}: {c_.symbol} or {c_.alt}" for i, (a, z) in enumerate(bar_spans(got))
-            for c_ in got.part.chords if a <= c_.start < z and unsure(c_)]
+            for c_ in got.part.chords if a <= c_.start < z and c_.is_unsure()]
     if not apply:
         return Result(chart_line(got), f"dry run: {len(pl.ops)} ops, +{pl.adds} notes, {pl.new_tracks} new track", None, asks)
     res = c.ops(pid, pl.ops, f"bass for {track}")

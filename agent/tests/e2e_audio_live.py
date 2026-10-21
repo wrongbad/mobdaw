@@ -25,6 +25,9 @@ import urllib.request
 import numpy as np
 import soundfile as sf
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import synth  # noqa: E402
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from badmidi.audio import source  # noqa: E402
 from badmidi import patches  # noqa: E402
@@ -36,40 +39,15 @@ import bass_for_take  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BPM, BARS, SR = 120, 4, 44100          # a new project is 120 bpm 4/4: a bar is 2 s
-# Am F C G, strummed like open-position guitar chords (root, fifth, octave, third, fifth, and the third again an octave up)
-CHORDS = [("A2", [0, 7, 12, 15, 19, 27]), ("F2", [0, 7, 12, 16, 19, 28]), ("C3", [0, 7, 12, 16, 19, 28]), ("G2", [0, 7, 12, 16, 19, 28])]
-
-
-def midi_hz(m):
-    return 440 * 2 ** ((m - 69) / 12)
-
-
-def pluck(hz, seconds, rng):
-    """Karplus-Strong: a noise burst through a delay line with a lowpass in the feedback."""
-    n = int(SR * seconds)
-    d = int(SR / hz)
-    buf = rng.uniform(-1, 1, d)
-    out = np.empty(n)
-    for i in range(n):
-        out[i] = buf[i % d]
-        buf[i % d] = 0.996 * 0.5 * (buf[i % d] + buf[(i + 1) % d])
-    return out
 
 
 def make_take(path, seed=1, bpm=BPM):
-    """4 bars of strummed chords, one per bar (Am F C G), each strummed on the downbeat and again on beat 3, at `bpm`."""
-    rng = np.random.default_rng(seed)
+    """4 bars of Am F C G in open-position guitar shapes (x02210, 133211, x32010, 320003: one third among five or six strings),
+    strummed down and up on six Karplus-Strong strings through a body and a room (tests/synth.py), at `bpm`."""
     bar = 60 / bpm * 4
-    x = np.zeros(int(SR * bar * BARS))
-    for b, (root, intervals) in enumerate(CHORDS):
-        base = {"A2": 45, "F2": 41, "C3": 48, "G2": 43}[root]
-        for beat in (0, 2):
-            t0 = int(SR * (b * bar + beat * 60 / bpm))
-            for k, iv in enumerate(intervals):             # strum: each string 15 ms after the last
-                s = pluck(midi_hz(base + iv), 60 / bpm * 2, rng)
-                i = t0 + int(SR * 0.015 * k)
-                x[i:i + len(s)] += s[:len(x) - i] * 0.2
-    sf.write(path, np.clip(x, -1, 1).astype(np.float32), SR, subtype="PCM_16")
+    x = synth.render(["Am", "F", "C", "G"][:BARS], bpm, 4, seed=seed, sr=SR)
+    x = x[:int(SR * bar * BARS)]
+    sf.write(path, x, SR, subtype="PCM_16")
     return len(x) / SR
 
 
@@ -175,7 +153,7 @@ def main(pid=None):
 
     # --- 3. the CLI as an agent runs it: listen, pull --listen, draft a bass, push --patch bass
     chart = cli("listen", pid, "--track", "Guitar", "--bars", "1-4")
-    assert "on the grid" in chart and "heard as chords" in chart, chart
+    assert "on the grid" in chart and "heard as chords" in chart and "key A minor" in chart and "unsure" not in chart, chart
     roots = re.findall(r"^\s*(\d+)\s+(\S+)", chart, re.M)
     assert roots == [("1", "Am"), ("2", "F"), ("3", "C"), ("4", "G")], roots
 
@@ -239,7 +217,7 @@ def main(pid=None):
     assert agent.returncode == 0, f"bass_for_take exited {agent.returncode}"
     chat = c._call("GET", f"/projects/{pid}/chat?since=0")["messages"]
     replies = [m for m in chat if m["username"] == f"{user} (api)"]
-    assert any("heard: Am | F | C | G" in m["text"] for m in replies), [m["text"] for m in replies]
+    assert any("heard: Am | F | C | G\n" in m["text"] and "Unsure" not in m["text"] for m in replies), [m["text"] for m in replies]
     hist = history(c, pid)
     assert len(hist) == n_hist + 1 and hist[-1]["text"] == "bass for Guitar", hist[-2:]
     assert f"revert with history seq {hist[-1]['seq']}" in replies[-1]["text"], replies[-1]["text"]
