@@ -1,8 +1,10 @@
 // The score view's pure core: a project's MIDI tracks -> ABC text for abcjs (docs/SCORE-PLAN.md). No DOM, no Yjs; the caller reads the
 // doc into a `ScoreInput` and renders `BuiltScore.abc`. Layers: flatten -> measures -> quantize -> notate (+ spell, staves, drums) -> abc.
+import type { ScoreClef } from '@mobdaw/shared'
 import { emitAbc, type Part, type Staff } from './abc'
 import { drumEvents, drumHeads } from './drums'
-import { flattenTrack, type FlatTrack, type ScoreInput } from './flatten'
+import { hintedBar, hintedBars, hintStaff, notatedSpan, voiceCounts, wholeRest } from './hinted'
+import { flattenTrack, type FlatNote, type FlatTrack, type ScoreInput } from './flatten'
 import { buildBars } from './measures'
 import { chordEvents, notateStaff, type QNote } from './notate'
 import { quantizeNotes } from './quantize'
@@ -56,7 +58,8 @@ export function buildScore(input: ScoreInput, opts: { show: ReadonlySet<string>;
   if (!shown.length) return none
 
   const ppq = input.map.ppq
-  const endTick = Math.max(...shown.flatMap((f) => f.notes.map((n) => n.tick + n.dur)))
+  // (a hinted note may be notated past where it is played)
+  const endTick = Math.max(...shown.flatMap((f) => [...f.notes.map((n) => n.tick + n.dur), ...(f.drums ? [] : f.uncut.map((n) => notatedSpan(n, ppq)?.end ?? 0))]))
   const bars = buildBars(input.map, endTick, input.markers)
 
   // the key counts every pitched track, so toggling tracks does not change it
@@ -87,10 +90,25 @@ export function buildScore(input: ScoreInput, opts: { show: ReadonlySet<string>;
     }
     const q = quantizeNotes(f.notes, bars, ppq)
     const qn: QNote[] = f.notes.map((n, i) => ({ on: q.on[i], end: q.end[i], pitch: n.pitch, noteId: n.noteId, stac: q.stac[i] }))
-    const staff = (clef: 'treble' | 'bass', ns: QNote[]): Staff => ({ clef, voices: [{ bars: notateStaff(chordEvents(ns.filter((n) => n.on < bars[bars.length - 1].endTick), ppq), bars, q.windows, ppq) }] })
-    const clef = chooseClef(f.notes.map((n) => n.pitch))
-    if (clef === 'grand') return { name: f.name, staves: [staff('treble', qn.filter((n) => n.pitch >= GRAND_SPLIT)), staff('bass', qn.filter((n) => n.pitch < GRAND_SPLIT))] }
-    return { name: f.name, staves: [staff(clef, qn)] }
+    const lastEnd = bars[bars.length - 1].endTick
+    const layout: ScoreClef[] = f.clefs ?? (() => {
+      const clef = chooseClef(f.notes.map((n) => n.pitch))
+      return clef === 'grand' ? ['treble', 'bass'] : [clef]
+    })()
+    // a note goes on the staff its fresh hint names, else (several staves) by the split at middle C
+    const staffOf = (n: FlatNote) => (n.fresh?.hint.staff ? hintStaff(n, layout.length) : layout.length === 1 || n.pitch >= GRAND_SPLIT ? 0 : layout.length - 1)
+    const guessed = layout.map((_, s) => notateStaff(chordEvents(qn.filter((n, i) => staffOf(f.notes[i]) === s && n.on < lastEnd), ppq), bars, q.windows, ppq))
+    const hb = hintedBars(f, bars, ppq)
+    const nv = voiceCounts(layout.length, hb)
+    const hinted = bars.map((bar, bi) => (hb.hinted[bi] ? hintedBar(hb.notes[bi], bar, ppq, nv) : null))
+    const staves: Staff[] = layout.map((clef, s) => ({
+      clef,
+      voices: Array.from({ length: nv[s] }, (_, v) => ({
+        bars: bars.map((bar, bi) => hinted[bi]?.[s][v] ?? (v === 0 ? guessed[s][bi] : [wholeRest(bar, true)])),
+        ...(nv[s] > 1 && v < 2 ? { stem: v === 0 ? ('up' as const) : ('down' as const) } : {}),
+      })),
+    }))
+    return { name: f.name, staves }
   })
 
   const out = emitAbc({ bars, parts, key, ppq, staffWidth })

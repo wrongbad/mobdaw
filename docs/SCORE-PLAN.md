@@ -1,7 +1,7 @@
 # Score view: MIDI tracks as an ensemble score
 
 Plan of record for a sheet-music mode that shows a chosen set of MIDI tracks as one score, and later lets you edit
-it. Status: milestone 1 (view, end to end) built in `client/src/score/` and the `score` button in the top bar. Open questions settled 2026-10-21 (see the end).
+it. Status: milestone 1 (view, end to end) built in `client/src/score/` and the `score` button in the top bar; notation hints (from MusicXML import) are drawn as written. Open questions settled 2026-10-21 (see the end).
 
 ## The goal, as a user sees it
 
@@ -30,11 +30,12 @@ it. Status: milestone 1 (view, end to end) built in `client/src/score/` and the 
   and renderer-independent. badmidi (`agent/badmidi/ingest.py`, `lilypond.py`, `musicxml.py`) already solves most of
   it in Python; port its rules (the per-beat 16th-vs-triplet quantizer, splitting into printable values, key estimate),
   don't reinvent them.
-- **The doc stays the piano roll.** Notes keep their exact ticks. The score is a view computed from them; nothing about
-  the score is stored in v1. Every guess is recomputed on each render, so it is never stale.
+- **The doc stays the piano roll.** Notes keep their exact ticks. The score is a view computed from them. Every guess is
+  recomputed on each render, so it is never stale. The one thing stored is an optional per-note *notation hint* (see
+  "Notation hints"), which the score uses only while it is still true of the note.
 - **Editing writes only what you touched.** A note edited in the score is written back at its notated (quantized)
-  tick and length; its neighbours keep their performed timing. Notation hints that cannot be derived (a spelling, a
-  voice, a clef) are a later, additive schema change (milestone 4), only once guessing has shown where it fails.
+  tick and length; its neighbours keep their performed timing. Notation that cannot be derived (a spelling, a voice, a
+  staff, a clef, a tuplet) lives in the note hints, which editing will have to keep true.
 
 ## Layers
 
@@ -95,21 +96,49 @@ Y.Doc ──1 flatten──▶ Performance ──2 interpret──▶ Notation �
    through the inverse of layer 1 (absolute tick → clip-local tick; a loop repeat is not editable, the click selects the
    source note) and go through the existing undo manager and history labels (`noteOps.ts` has the pure edits).
 
+## Notation hints
+
+A note may carry `Note.hint` (`NoteHint` in `shared/src/schema.ts`; the doc comments there are the reference): how its writer notated it.
+The score view draws a note exactly so when it can, and guesses (the layers above) when it can't.
+
+- **The data.** `on` and `len`: the notated onset and length of the whole tied chain, as exact fractions of a quarter from the clip start
+  (so a quintuplet sixteenth is `[1,5]`, not a rounded tick). `segs`: the written pieces of a tied chain. `tup`: `{ n, of, start, span }`,
+  the tuplet group the note is in. `staff` and `voice` (1-based; `Track.clefs` gives one clef per staff, top first), `spell` (`'F#4'`) and
+  `art` (`>` accent, `^` marcato, `'` staccato, `_` tenuto). `at: [tick, durTicks, pitch]` is the note as it was when the hint was written.
+- **Freshness.** A hint is *fresh* when the note's current `tick`, `durTicks` and `pitch` equal `at`, exactly. Anything else (the note was
+  moved, resized or transposed, the clip's left edge was trimmed, which shifts every `tick`) makes it stale, and a stale hint is ignored:
+  it is never repaired and never trusted. Hints are for a clip's first pass only; loop repeats (`repeat > 0` in flatten) are always guessed.
+  Moving a whole clip does not touch note ticks, so the hints stay fresh.
+- **Hinted vs guessed, per (track, bar).** `hinted.ts` decides for each bar of each track: if every note sounding in the bar (by its
+  notated span if it has a fresh hint, by its performed span if not; a repeat's notes count as unhinted) has a fresh hint, the whole track-bar
+  is written from the hints; otherwise the whole track-bar is guessed, as without hints. The two are never mixed in one voice of one bar, so
+  an edit makes only the bars it touches fall back to guessing. A bar is not "mostly hinted".
+- **What a hinted bar does.** Onsets and lengths at clip start + `on` (a clip may start off the quarter grid; ticks are not rounded); staves and
+  voices from the hints (`( V V )` in `%%score`, stems up for voice 1 and down for voice 2); `spell` as the head's spelling (accidentals follow
+  ABC's per-bar state; a spelling that does not name the note's pitch is ignored); articulations before the note (`.`, `!>!`, `!marcato!`,
+  `!tenuto!`); tuplets as `(n:of:k` over the pieces of the group, rests in the span at the group's ratio; `segs` written verbatim and tied
+  unless one crosses a bar line (then the ordinary splitting rules apply); same-onset notes of a voice are a chord; gaps are rests (voice 1
+  visible; a voice with nothing in the bar is an invisible whole-bar rest `x`, except voice 1).
+- **Guessed bars of a track with `clefs`.** The track still has one staff per clef. Each note goes to the staff its fresh hint names, else
+  middle C splits the top staff from the bottom one. A track without `clefs` keeps the clef and grand-staff logic of milestone 1.
+  Drum tracks ignore hints.
+- **Where hints come from.** MusicXML import (`client/src/content/musicxml.ts`) now; badmidi pushing hints with its notes, and score editing
+  (which must write them with the notes it changes), later.
+
 ## Where the guesswork will show, and the escape hatches
 
 | problem | v1 behaviour | later |
 |---|---|---|
 | performed timing (rubato, swing) | per-beat 16th/triplet snap | per-track grid override; swing detection writes straight 8ths + "Swing" |
-| chord vs. voices | same onset+length → chord, else trim | two voices; voice hint stored per note |
-| spelling | key + line of fifths | spelling hint per note (`spell?: 'F#4'`) |
+| chord vs. voices | same onset+length → chord, else trim | two voices (guessed); from hints, as many voices as the hints name |
+| spelling | key + line of fifths | `hint.spell` (done, for notes that carry hints) |
 | piano split | moving split point | per-track staff setting |
 | drums | percussion staff, position and head by drum name, two voices (feet down) | per-drum position override; a drum key legend |
 | loops | written out, repeats read-only | repeat barlines when a clip loops whole bars |
 | free bars, ramps | unmetered bar; `accel.` text | — |
 | grace notes, very short notes | snap to one step | grace notes below a threshold |
 
-Stored hints (milestone 4) are optional fields, so old clients ignore them; still check `isFutureDoc` and the
-schema-version entry in `docs/todo.md` before adding them.
+Hints are optional fields, so old clients ignore them; see "Notation hints" above.
 
 ## Milestones
 
@@ -123,7 +152,9 @@ schema-version entry in `docs/todo.md` before adding them.
    letter at a cursor. One history entry per gesture.
 3. **Better guesses.** Two voices per staff, grand-staff split, beaming by groups, tuplets beyond triplets, per-track
    quantize override, swing.
-4. **Hints, export, polish.** Stored notation hints, MusicXML export (and print via the browser), repeat barlines. Re-evaluate abcjs vs. Verovio here with the real failures in hand.
+4. **Export, polish.** MusicXML export (and print via the browser), repeat barlines. Re-evaluate abcjs vs. Verovio here with the real failures in hand.
+   (The "stored notation hints" that were part of this milestone are built now, ahead of editing: see "Notation hints". Milestone 2's edits
+   must keep the hints of the notes they touch true, or drop them.)
 
 ## Spike notes (2026-10-21)
 

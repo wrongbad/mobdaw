@@ -474,7 +474,7 @@ export function hasDefaultTimeline(doc: Y.Doc): boolean {
 }
 
 /** `ticks` long from `startTick`, rounded up to whole bars of the map (at least one); unchanged when it ends in a free region. */
-function wholeBars(map: TimeMap, startTick: number, ticks: number): number {
+export function wholeBars(map: TimeMap, startTick: number, ticks: number): number {
   const p0 = map.position(startTick), p1 = map.position(startTick + ticks)
   if (p0.free || p1.free) return ticks
   const bar = Math.max(p1.tickInBar < 1e-6 ? p1.bar : p1.bar + 1, p0.bar + 1)

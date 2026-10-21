@@ -54,6 +54,7 @@ import { follow, peakToFill } from './meter'
 import { addImportedClip, automateParam, commitParam, commitParams, deleteClips, loopForever, reorderDevice, unloopClip } from '../project/actions'
 import { INSTRUMENT_PRESETS, addInstrument } from '../content/presets'
 import { exportProjectMidi, importSmf, isMidiFile, parseSmf } from '../content/midifile'
+import { importMusicXml, isMusicXmlFile, parseMusicXml } from '../content/musicxml'
 import { applyRegionEdits, tempoFromLoop } from '../audio/loopPedal'
 import { createRecorder } from '../project/recorder'
 import { sliderDraft } from '../project/draft'
@@ -69,8 +70,10 @@ const scoreMode = {
     try { on ? localStorage.setItem(`mobdaw.score.on.${projectId}`, '1') : localStorage.removeItem(`mobdaw.score.on.${projectId}`) } catch { /* private mode */ }
   },
 }
+/** A score file (MIDI or MusicXML): its parts become MIDI tracks. */
+const isScoreFile = (f: Pick<File, 'name' | 'type'>) => isMidiFile(f) || isMusicXmlFile(f)
 const importableFiles = (list: FileList | null | undefined) =>
-  [...(list ?? [])].filter((f) => isMidiFile(f) || f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
+  [...(list ?? [])].filter((f) => isScoreFile(f) || f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
 
 type Lane = {
   el: HTMLElement; row: HTMLElement; body: HTMLElement; head: HeadRefs
@@ -258,9 +261,9 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     bgPicker.value = ''
     if (bgTarget && files.length) void dropFiles(files, bgTarget.trackId, bgTarget.at)
   }
-  // "upload midi" in the new-track menu: each instrument of the score becomes a track, at the playhead.
+  // "upload midi / musicxml" in the new-track menu: each instrument of the score becomes a track, at the playhead.
   let midiTarget: { trackId: string; at: number } | null = null // (null: new tracks at the playhead)
-  const midiPicker = h('input', { type: 'file', accept: '.mid,.midi,.kar,.rmi,audio/midi,audio/x-midi', multiple: true, hidden: true })
+  const midiPicker = h('input', { type: 'file', accept: '.mid,.midi,.kar,.rmi,.musicxml,.xml,.mxl,audio/midi,audio/x-midi', multiple: true, hidden: true })
   midiPicker.onchange = () => {
     const files = [...(midiPicker.files ?? [])]
     midiPicker.value = ''
@@ -276,7 +279,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
         doc.transact(() => addInstrument(doc, addTrack(doc, `midi ${n}`, 'midi', undefined, undefined, nextTrackColor(getTracks(doc))), INSTRUMENT_PRESETS[0]))
       }],
       ['soundscape', () => addTrack(doc, `soundscape ${n}`, 'soundscape', undefined, undefined, nextTrackColor(getTracks(doc)))],
-      ['upload midi', () => midiPicker.click()],
+      ['upload midi / musicxml', () => midiPicker.click()],
     ])
   } }, '+')
   const overlay = h('div', { className: 'overlay' })
@@ -667,12 +670,12 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       const at = fromX(e.clientX - body.getBoundingClientRect().left)
       const files = importableFiles(e.dataTransfer?.files)
       // a score merges into a MIDI lane; audio only lands on an audio lane (elsewhere it starts a new track)
-      void dropFiles(files.filter(isMidiFile), kind === 'midi' ? t.id : null, at)
-      void dropFiles(files.filter((f) => !isMidiFile(f)), kind === 'audio' ? t.id : null, at)
+      void dropFiles(files.filter(isScoreFile), kind === 'midi' ? t.id : null, at)
+      void dropFiles(files.filter((f) => !isScoreFile(f)), kind === 'audio' ? t.id : null, at)
     }
     // background menu: audio lanes take uploads; MIDI lanes and soundscapes make a new region
     if (t.kind === 'audio') bgMenu(body, (e) => [['upload', () => pickInto(t.id, atX(e))]])
-    else if (t.kind === 'midi') bgMenu(body, (e) => [['new piano roll', () => newMidiClip(t.id, atX(e))], ['new drum grid', () => newMidiClip(t.id, atX(e), true)], ['upload midi', () => { midiTarget = { trackId: t.id, at: atX(e) }; midiPicker.click() }]])
+    else if (t.kind === 'midi') bgMenu(body, (e) => [['new piano roll', () => newMidiClip(t.id, atX(e))], ['new drum grid', () => newMidiClip(t.id, atX(e), true)], ['upload midi / musicxml', () => { midiTarget = { trackId: t.id, at: atX(e) }; midiPicker.click() }]])
     else if (t.kind === 'soundscape') bgMenu(body, (e) => [['new region', () => newPad(t.id, atX(e))]])
     // soundscape tracks: the main lane is blank like an empty track (regions turn the loopers on); the source audio gets its own lane
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
@@ -1009,9 +1012,11 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       return
     }
     for (const f of files) {
-      if (isMidiFile(f)) {
+      if (isScoreFile(f)) {
         try {
-          importSmf(doc, parseSmf(await f.arrayBuffer()), { at, trackId, base: f.name.replace(/\.[^.]+$/, '') })
+          const base = f.name.replace(/\.[^.]+$/, '')
+          if (isMusicXmlFile(f)) importMusicXml(doc, parseMusicXml(new Uint8Array(await f.arrayBuffer())), { at, trackId, base })
+          else importSmf(doc, parseSmf(await f.arrayBuffer()), { at, trackId, base })
           say('')
         } catch (err) {
           say(`${f.name}: ${(err as Error).message}`, true)

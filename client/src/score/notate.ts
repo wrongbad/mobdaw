@@ -3,8 +3,9 @@
 // Port of the idea in agent/badmidi/lilypond.py `_split`. Pure; one voice per call.
 import { groupBounds, type Bar } from './measures'
 import { isTuplet, type Win } from './quantize'
+import type { Spelled } from './spell'
 
-export type Head = { pitch: number; noteIds: string[] }
+export type Head = { pitch: number; noteIds: string[]; /** Written spelling, from a notation hint (else the key decides). */ spell?: Spelled }
 /** A quantized note: absolute ticks. */
 export type QNote = { on: number; end: number; pitch: number; noteId: string; /** Performed clearly shorter than written (see quantize.ts). */ stac?: boolean }
 /** Something sounding (or, with no heads, silent) from `start` to `end`. */
@@ -23,14 +24,20 @@ export type Piece = {
   cont: boolean
   /** On the first piece of a tuplet window: how many pieces it holds. */
   tuplet?: number
+  /** On that piece: `n` notes in the time of `of` (absent: 3 in the time of 2). */
+  ratio?: { n: number; of: number }
   /** Staccato dot (only the first piece of a note). */
   stac?: boolean
+  /** ABC decorations before the note, e.g. `!>!` (hinted notes only; the first piece of a note). */
+  deco?: string
   /** A rest that fills the whole bar. */
   whole?: boolean
+  /** A rest that is not drawn (`x`): the whole-bar rest of a voice with nothing in the bar. */
+  hide?: boolean
 }
 
-const EPS = 1e-6
-const near = (a: number, b: number) => Math.abs(a - b) < EPS
+export const EPS = 1e-6
+export const near = (a: number, b: number) => Math.abs(a - b) < EPS
 const multiple = (x: number, of: number) => near(x / of, Math.round(x / of))
 
 /** Notes -> events: same onset = one chord ending at its latest end, cut at the next onset. */
@@ -62,7 +69,7 @@ function values(ppq: number) {
 }
 
 /** The next piece length for a run of `rem` ticks starting `p` ticks into its segment: 0 when less than a 32nd is left. */
-function greedy(rem: number, p: number, ppq: number): number {
+export function greedy(rem: number, p: number, ppq: number): number {
   let fit = 0
   for (const v of values(ppq)) {
     if (v.len > rem + EPS) continue
@@ -72,10 +79,10 @@ function greedy(rem: number, p: number, ppq: number): number {
   return fit
 }
 
-type Span = { start: number; len: number }
+export type Span = { start: number; len: number }
 
 /** Split [a, b) of a bar that is not in a tuplet window. */
-function splitPlain(a: number, b: number, bar: Bar, ppq: number): Span[] {
+export function splitPlain(a: number, b: number, bar: Bar, ppq: number): Span[] {
   const bounds = groupBounds(bar)
   const beat = bar.free ? ppq : bar.beatTicks
   const printable = (len: number) => values(ppq).some((v) => near(v.len, len))

@@ -1,6 +1,6 @@
 // Layer 3: pieces -> ABC text for abcjs, plus the character ranges of every note so a click can find its doc notes. Lines of music
 // are packed to the pane's width by an estimate of each bar's width; every voice gets the same bars per line. Pure.
-import { defaultGroups } from '@mobdaw/shared'
+import { defaultGroups, type ScoreClef } from '@mobdaw/shared'
 import type { DrumHead } from './drums'
 import type { Bar } from './measures'
 import { beatLines } from './measures'
@@ -8,7 +8,7 @@ import type { Piece } from './notate'
 import { abcLetter, accidentalFor, keyName, spellPitch, type KeyInfo } from './spell'
 
 export type Voice = { bars: Piece[][]; /** Rests are invisible (the drums' second voice). */ hidden?: boolean; stem?: 'up' | 'down' }
-export type Staff = { clef: 'treble' | 'bass' | 'perc'; voices: Voice[]; /** Key -> head, for a percussion staff. */ drums?: ReadonlyMap<number, DrumHead> }
+export type Staff = { clef: ScoreClef; voices: Voice[]; /** Key -> head, for a percussion staff. */ drums?: ReadonlyMap<number, DrumHead> }
 /** One track: a staff, or two (grand staff). */
 export type Part = { name: string; staves: Staff[] }
 export type AbcInput = { bars: readonly Bar[]; parts: readonly Part[]; key: KeyInfo; ppq: number; staffWidth: number }
@@ -30,6 +30,9 @@ export function meterText(b: Bar): string {
   const plain = b.groups.join('+') === defaultGroups(b.num, b.den).join('+')
   return plain ? `${b.num}/${b.den}` : `${b.groups.join('+')}/${b.den}`
 }
+
+/** abcjs's spelling of each clef. */
+const CLEF_TEXT: Record<ScoreClef, string> = { treble: 'treble', bass: 'bass', alto: 'alto', tenor: 'tenor', treble_8: 'treble-8', bass_8: 'bass-8', perc: 'perc' }
 
 const quoted = (s: string) => s.replace(/["\\\n\r]/g, ' ').trim()
 
@@ -59,22 +62,24 @@ function renderBar(staff: Staff, voice: Voice, bar: Bar, pieces: Piece[], lead: 
   const state = new Map<string, number>()
   pieces.forEach((p, i) => {
     if (i > 0 && lines.has(Math.round(p.start))) text += ' '
-    if (p.tuplet) text += `(3:2:${p.tuplet}`
+    if (p.tuplet) text += `(${p.ratio?.n ?? 3}:${p.ratio?.of ?? 2}:${p.tuplet}`
     const len = lenText(p.len, ctx.ppq)
     if (!p.heads.length) {
-      text += (voice.hidden ? 'x' : 'z') + len // a whole-bar rest is a plain rest of the bar's length (`Z` draws a multi-measure rest)
+      text += (voice.hidden || p.hide ? 'x' : 'z') + len // a whole-bar rest is a plain rest of the bar's length (`Z` draws a multi-measure rest)
       return
     }
     let tok: string
     if (staff.drums) tok = drumToken(p, staff.drums) + len
     else {
       const names = [...p.heads].sort((a, b) => a.pitch - b.pitch).map((h) => {
-        const a = accidentalFor(spellPitch(h.pitch, ctx.key), ctx.key.fifths, state, p.cont)
+        const sp = h.spell ?? spellPitch(h.pitch, ctx.key)
+        const a = accidentalFor(sp, ctx.key.fifths, state, p.cont)
         if (a) accs++
-        return a + abcLetter(spellPitch(h.pitch, ctx.key)) + (p.tie ? '-' : '')
+        return a + abcLetter(sp) + (p.tie ? '-' : '')
       })
       tok = names.length > 1 ? `[${names.join('')}]${len}` : p.tie ? `${names[0].slice(0, -1)}${len}-` : `${names[0]}${len}`
     }
+    if (p.deco) tok = p.deco + tok
     if (p.stac) tok = '.' + tok
     ids.push({ start: text.length, end: text.length + tok.length, noteIds: [...new Set(p.heads.flatMap((h) => h.noteIds))] })
     text += tok
@@ -99,7 +104,7 @@ export function emitAbc(inp: AbcInput): Emitted {
     s.ids.forEach((id, vi) => {
       const first = s.part.staves[0] === s.staff && vi === 0
       const v = s.staff.voices[vi]
-      head += `V:${id} clef=${s.staff.clef}${first ? ` name="${quoted(s.part.name)}"` : ''}${v.stem ? ` stem=${v.stem}` : ''}\n`
+      head += `V:${id} clef=${CLEF_TEXT[s.staff.clef]}${first ? ` name="${quoted(s.part.name)}"` : ''}${v.stem ? ` stem=${v.stem}` : ''}\n`
       // a `K:` straight after each `V:` sets that voice's key: none on a percussion staff (abcjs would draw the signature there).
       // Never write an inline `K:` in the music: it drops that voice's name, stems and bracket on that system.
       head += `K:${s.staff.clef === 'perc' ? 'none' : keyName(inp.key.fifths)}\n`

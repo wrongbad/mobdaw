@@ -19,6 +19,7 @@
     "@hocuspocus/provider": "^4.7.0",
     "@mobdaw/shared": "*",
     "abcjs": "^6.7.2",
+    "fflate": "^0.8.3",
     "hash-wasm": "^4.12.0",
     "solid-js": "^1.9.17",
     "vite-plugin-solid": "^2.11.14",

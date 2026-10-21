@@ -100,3 +100,19 @@ export function abcLetter(s: Spelled): string {
 const KEY_NAMES = ['Cb', 'Gb', 'Db', 'Ab', 'Eb', 'Bb', 'F', 'C', 'G', 'D', 'A', 'E', 'B', 'F#', 'C#']
 /** The major key name for a signature of `fifths` sharps (+) or flats (-). */
 export const keyName = (fifths: number) => KEY_NAMES[Math.max(-7, Math.min(7, fifths)) + 7]
+
+const LETTER_PC: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }
+const ACC_VALUE: Record<string, number> = { '': 0, '#': 1, b: -1, '##': 2, x: 2, bb: -2 }
+
+/**
+ * A written spelling ('F#4', 'Bb3', 'E#5', 'Cbb4'; the octave is the letter's, so 'B#3' is middle C) as a `Spelled`, or undefined when
+ * it is not one or does not name `pitch` (a hint that disagrees with its note is not trusted).
+ */
+export function parseSpell(text: string | undefined, pitch: number): Spelled | undefined {
+  const m = /^([A-G])(bb|##|b|#|x)?(-?\d+)$/.exec(text ?? '')
+  if (!m) return undefined
+  const acc = ACC_VALUE[m[2] ?? '']
+  const octave = Number(m[3])
+  if (12 * (octave + 1) + LETTER_PC[m[1]] + acc !== pitch) return undefined
+  return { letter: m[1], acc, octave }
+}
