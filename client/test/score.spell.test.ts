@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { abcLetter, accidentalFor, estimateKey, keyName, parseKey, spellPitch } from '../src/score/spell'
+import { abcLetter, accidentalFor, estimateKey, keyName, parseKey, parseSpell, spellPitch } from '../src/score/spell'
 import { chooseClef } from '../src/score/staves'
 
 const sp = (pitch: number, key: string) => {
@@ -72,4 +72,15 @@ test('clef: treble or bass by median, grand staff for a wide part with both hand
   expect(chooseClef([36, 40, 43, 48, 55, 64, 67, 72, 76, 79])).toBe('grand')
   expect(chooseClef([36, 40, 43, 48, 52, 55])).toBe('bass') // wide, but nothing above 63
   expect(chooseClef([58, 60, 62, 65, 70, 76, 81, 86])).toBe('treble') // wide but nothing at or below 55
+})
+
+test('parseSpell: written spellings, trusted only when they name the pitch', () => {
+  expect(parseSpell('F#4', 66)).toEqual({ letter: 'F', acc: 1, octave: 4 })
+  expect(parseSpell('Bb3', 58)).toEqual({ letter: 'B', acc: -1, octave: 3 })
+  expect(parseSpell('B#3', 60)).toEqual({ letter: 'B', acc: 1, octave: 3 })
+  expect(parseSpell('Cbb4', 58)).toEqual({ letter: 'C', acc: -2, octave: 4 })
+  expect(parseSpell('Fx4', 67)).toEqual({ letter: 'F', acc: 2, octave: 4 })
+  expect(parseSpell('F#4', 67)).toBeUndefined() // not that pitch
+  expect(parseSpell('H4', 60)).toBeUndefined()
+  expect(parseSpell(undefined, 60)).toBeUndefined()
 })

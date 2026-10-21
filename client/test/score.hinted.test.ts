@@ -103,10 +103,12 @@ test('a 3:2 triplet with a rest inside writes the rest at the group ratio', () =
   expect(voice(one(t2), 1)).toBe('[V:V1] (3:2:2C2z G4 |]')
 })
 
-test('segs: a dotted quarter at beat 1.5 of a 3/4 hemiola stays one dotted quarter; without segs it is split at the beat', () => {
+test('a dotted quarter at beat 1.5 of a 3/4 hemiola is one dotted quarter, with or without segs', () => {
   const notes = (segs: boolean): HN[] => [{ on: 0, len: 1.5, pitch: 60, ...(segs ? { segs: [1.5] } : {}) }, { on: 1.5, len: 1.5, pitch: 62, ...(segs ? { segs: [1.5] } : {}) }]
   expect(voice(one({ ...hinted(notes(true)) }), 1)).toBe('[V:V1] C3D3 |]')
-  expect(voice(one({ ...hinted(notes(false)) }), 1)).toBe('[V:V1] C3D- D2 |]')
+  expect(voice(one({ ...hinted(notes(false)) }), 1)).toBe('[V:V1] C3D3 |]') // no tie: one notatable value inside the bar
+  // not notatable as one value (5/4 of a quarter), or across a bar line: the splitting rules
+  expect(voice(one({ ...hinted([{ on: 0, len: 1.25, pitch: 60 }, { on: 1.25, len: 1.75, pitch: 62 }]) }), 1)).toBe('[V:V1] C-C/2D- D2 D/2 |]')
 })
 
 test('segs written verbatim and tied; a seg that crosses a bar line falls back to the splitting rules', () => {

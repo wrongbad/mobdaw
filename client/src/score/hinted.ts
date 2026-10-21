@@ -150,6 +150,11 @@ function fill(a: number, b: number, spans: readonly Tup[], bar: Bar, ppq: number
   return out
 }
 
+/** Whether `len` ticks is one note value: 1/32 to a whole note (or breve), plain, dotted or double-dotted. */
+function singleValue(len: number, ppq: number): boolean {
+  return [4, 2, 1, 0.5, 0.25, 0.125].some((x) => [1, 1.5, 1.75].some((m) => near(len, x * m * ppq)))
+}
+
 /** The pieces of one event within one bar. */
 function eventPieces(ev: HEv, bar: Bar, ppq: number, spans: readonly Tup[]): KPiece[] {
   const a = Math.max(ev.start, bar.startTick), b = Math.min(ev.end, bar.endTick)
@@ -177,6 +182,11 @@ function eventPieces(ev: HEv, bar: Bar, ppq: number, spans: readonly Tup[]): KPi
         return mk({ start: s.at, len: written }, ev.tup, s.i === 0, s.i > 0, s.i < placed.length - 1)
       })
     }
+  }
+  // a note that stays in the bar and is one printable value (plain, dotted, double-dotted; in written time) is one piece
+  if (ev.start >= bar.startTick - EPS && ev.end <= bar.endTick + EPS) {
+    const written = ev.tup ? ((ev.end - ev.start) * ev.tup.n) / ev.tup.of : ev.end - ev.start
+    if (singleValue(written, ppq)) return [mk({ start: ev.start, len: written }, ev.tup, true, false, false)]
   }
   const made = fill(a, b, spans, bar, ppq)
   return made.map((m, k) => mk(m.s, m.tup, k === 0 && ev.start >= bar.startTick - EPS, k > 0 || ev.start < bar.startTick - EPS, k < made.length - 1 || ev.end > bar.endTick + EPS))
