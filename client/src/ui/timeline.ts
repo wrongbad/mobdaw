@@ -304,12 +304,19 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, scorePane, chat.el, ...(hist ? [hist.el] : [])))
   // The score mode swaps the tracks for sheet music; the score mounts on first use and stays while hidden (it only draws while shown).
   let score: ScoreView | null = null
+  let needFit = false
+  let kept = [0, 0]
   const showScore = (on: boolean) => {
     scoreMode.save(s.projectId, on)
     setScoreOn(on)
+    if (on) kept = [scroll.scrollLeft, scroll.scrollTop] // (a hidden element may forget its scroll)
     scroll.hidden = on
     scorePane.hidden = !on
-    if (!on) return
+    if (!on) {
+      if (needFit) { needFit = false; zoom.fit() }
+      else [scroll.scrollLeft, scroll.scrollTop] = kept
+      return
+    }
     score ??= mountScore(scorePane, { doc, projectId: s.projectId })
     score.resize()
     score.setPosition(position())
@@ -1147,7 +1154,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     syncRec()
     measure()
     if (refreshPreviews()) ensurePreviewTick()
-    if (scoreOn()) showScore(true)
+    if (scoreOn()) { needFit = true; showScore(true) } // (the tracks are hidden, so they cannot be fitted until the score is left)
     zoom.fit() // (zoom is not remembered per project, so every open fits the song to the window)
     if (!s.snapshot && !future()) sweepUnusedTakes(rec.takeCtx())
     if (!s.snapshot && !future()) recoverTakes(rec.takeCtx()).then((n) => {

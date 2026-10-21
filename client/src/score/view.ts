@@ -64,6 +64,7 @@ export function mountScore(host: HTMLElement, deps: ScoreDeps): ScoreView {
   let disposed = false, raf = 0, rendering = false, again = false
   let sample = 0
   let place: Place | null = null
+  let lastLine = -1 // the line the highlight was last on (kept across re-renders, so an edit does not pull the view back)
 
   const input = (): ScoreInput => ({ tracks: getTracks(doc), clips: getClips(doc), notes: getNotes(doc), devices: getDevices(doc), map: getTimeMap(doc), key: getKey(doc), markers: getMarkers(doc) })
 
@@ -141,26 +142,30 @@ export function mountScore(host: HTMLElement, deps: ScoreDeps): ScoreView {
 
   /** The highlight of the bar the transport is in; `follow`: scroll its line into view when the line changed. */
   function placePlayhead(follow: boolean) {
-    if (!built || disposed) return
+    if (!built || disposed || !body.clientWidth) return // (hidden: the pane lays the bar out when it shows)
     const p = locate(built, getTimeMap(doc).sampleToTick(sample))
     if (p && place && p.bar === place.bar && !playbar.hidden) return // (the same bar: nothing moves)
     if (!p) return hidePlaybar()
-    const wasLine = place?.line
+    // The bar spans from the previous barline (or, in a line's first measure, the end of the clef / key / meter) to its own barline, over every
+    // staff of the system. abcjs gives each element `abcjs-l<line> abcjs-m<measure>` (the measure restarts on every line); a measure's own
+    // barline is in it, so a bar's left edge is the previous measure's barline.
+    const cls = (m: number) => `.abcjs-l${p.line}.abcjs-m${m}`
+    const rects = (q: string) => [...sheet.querySelectorAll<SVGGraphicsElement>(q)].map((e) => e.getBoundingClientRect()).filter((r) => r.width || r.height)
+    const bars = rects(`${cls(p.measure)}.abcjs-bar`)
+    const all = rects(`${cls(p.measure)}:not(.abcjs-tempo):not(.abcjs-staff-extra)`)
+    const mine = bars.length ? bars : all
+    if (!mine.length) return hidePlaybar()
+    const edge = p.measure ? rects(`${cls(p.measure - 1)}.abcjs-bar`) : rects(`${cls(0)}.abcjs-staff-extra`)
     place = p
-    const els = sheet.querySelectorAll<SVGGraphicsElement>(`.abcjs-l${p.line}.abcjs-m${p.measure}`)
-    if (!els.length) return void (playbar.hidden = true)
     const host0 = body.getBoundingClientRect()
-    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity
-    for (const e of els) {
-      const q = e.getBoundingClientRect()
-      if (!q.width && !q.height) continue
-      l = Math.min(l, q.left); r = Math.max(r, q.right); t = Math.min(t, q.top); b = Math.max(b, q.bottom)
-    }
-    if (!isFinite(l)) return void (playbar.hidden = true)
+    const t = Math.min(...mine.map((r) => r.top)), b = Math.max(...mine.map((r) => r.bottom)), r = Math.max(...mine.map((q) => q.right))
+    const l = edge.length ? Math.max(...edge.map((q) => q.right)) : Math.min(...all.map((q) => q.left)) - 8
     const x = l - host0.left + body.scrollLeft, y = t - host0.top + body.scrollTop
     playbar.style.cssText = `left:${x - 4}px;top:${y - 6}px;width:${r - l + 8}px;height:${b - t + 12}px`
     playbar.hidden = false
-    if (follow || wasLine !== p.line) {
+    const lineChanged = lastLine !== p.line
+    lastLine = p.line
+    if (follow || lineChanged) {
       const top = y - 6, bottom = y + (b - t) + 6
       if (top < body.scrollTop || bottom > body.scrollTop + body.clientHeight) body.scrollTop = Math.max(0, top - 12)
     }
