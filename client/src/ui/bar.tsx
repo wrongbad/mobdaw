@@ -76,11 +76,11 @@ export function Bar(p: BarProps) {
         <div class="bar-btns">
           <button class="bar-btn zoom" title="zoom out (ctrl + scroll)" on:click={() => p.onZoom(1 / 1.5)} innerHTML={iconHtml('zoomOut', 18)} />
           <button class="bar-btn zoom" title="zoom in (ctrl + scroll)" on:click={() => p.onZoom(1.5)} innerHTML={iconHtml('zoomIn', 18)} />
-          <Show when={p.score}>{(sc) => <button class="chat-btn" classList={{ on: sc().on() }} title="show the MIDI tracks as sheet music" on:click={sc().onToggle}>score</button>}</Show>
-          <button class="bar-btn" title="render the whole project to a file" on:click={p.onExport}>export</button>
+          <Show when={p.score}>{(sc) => <button class="chat-btn icon-btn" classList={{ on: sc().on() }} title="score: show the MIDI tracks as sheet music" aria-label="score" on:click={sc().onToggle} innerHTML={iconHtml('score', 18)} />}</Show>
+          <button class="bar-btn icon-btn" title="export: render the whole project to a file" aria-label="export" on:click={p.onExport} innerHTML={iconHtml('export', 18)} />
           <Show when={p.live}>
-            <Show when={p.history}>{(hist) => <button class="chat-btn" classList={{ on: hist().open() }} title="every change to the project, with revert and restore" on:click={hist().onToggle}>history</button>}</Show>
-            <button class="chat-btn" classList={{ on: p.chatOpen() }} title="chat" on:click={p.onChat}>{p.unread() ? `chat (${p.unread()})` : 'chat'}<Show when={p.mentions?.()}><span class="at-badge" title="unread messages that mention you">@</span></Show></button>
+            <Show when={p.history}>{(hist) => <button class="chat-btn icon-btn" classList={{ on: hist().open() }} title="history: every change to the project, with revert and restore" aria-label="history" on:click={hist().onToggle} innerHTML={iconHtml('history', 18)} />}</Show>
+            <button class="chat-btn icon-btn" classList={{ on: p.chatOpen() }} title={p.unread() ? `chat (${p.unread()} unread)` : 'chat'} aria-label="chat" on:click={p.onChat}><span innerHTML={iconHtml('chat', 18)} /><Show when={p.unread()}><span class="unread-badge">{p.unread()}</span></Show><Show when={p.mentions?.()}><span class="at-badge" title="unread messages that mention you">@</span></Show></button>
           </Show>
         </div>
       </div>

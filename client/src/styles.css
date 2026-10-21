@@ -84,6 +84,9 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .cpu.hot { color: var(--danger); }
 .bar-btn, .chat-btn { height: 36px; padding: 0 14px; border: 0; background: none; color: var(--dim); }
 .chat-btn.on { color: var(--fg); background: var(--raise); }
+.bar-btn.icon-btn, .chat-btn.icon-btn { min-width: 36px; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.bar-btn.icon-btn:hover, .chat-btn.icon-btn:hover { color: var(--fg); }
+.unread-badge { font-size: 11px; font-variant-numeric: tabular-nums; }
 .bar-btn.zoom { width: 36px; padding: 0; display: grid; place-items: center; }
 .bar-btn.zoom:hover { color: var(--fg); }
 .bar-btn.on { color: var(--bg); background: var(--accent); }

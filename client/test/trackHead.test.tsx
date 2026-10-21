@@ -179,7 +179,7 @@ describe('remote playheads and the bar', () => {
     t.setPeers([{ user: { username: 'ann.lee', color: 'red' } }])
     expect([...host.querySelectorAll('.dot')].map((d) => d.textContent)).toEqual(['M', 'AL'])
     expect(host.querySelector('.dot')).toBe(me)
-    expect(host.querySelector('.chat-btn')!.textContent).toBe('chat (2)')
+    expect(host.querySelector('.chat-btn')!.textContent).toBe('2')
     expect(host.querySelector('.pedal-st')!.hasAttribute('hidden')).toBe(true)
     expect(transport.querySelector('.metro')).not.toBeNull()
   })

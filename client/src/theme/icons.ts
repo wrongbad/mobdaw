@@ -54,6 +54,8 @@ const ICONS = {
   cloud: `<g transform="scale(.8)"><path d="M5.5 15.5a3.5 3.5 0 0 1-.4-6.98 5 5 0 0 1 9.7-.5A4 4 0 0 1 14.5 15.5z"/></g>`,
   zoomOut: `<g transform="scale(.8)" stroke-width="1.8"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 18 18M6 8.5h5"/></g>`,
   zoomIn: `<g transform="scale(.8)" stroke-width="1.8"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 18 18M6 8.5h5M8.5 6v5"/></g>`,
+  score: `<path d="M8.4 11.6V3.4C8.4 2.4 8 1.8 7.6 1.8 6.6 3 6.6 4.8 7.8 6.4"/><path d="M8.4 12C5.2 11.6 3.6 9 5.2 7 7 5 10.4 5.6 10.6 8.4c.2 2.4-3 3.4-4.2 1.6"/><path d="M8.4 11.6V13a1.5 1.5 0 1 1-1.5-1.5"/>`,
+  history: `<circle cx="8" cy="8" r="5.8"/><path d="M8 4.7V8l2.3 1.5"/>`,
   chat: `<path d="M3.2 3.2h9.6a1.2 1.2 0 0 1 1.2 1.2v5.8a1.2 1.2 0 0 1-1.2 1.2H7.6L4.6 13.8v-2.4H3.2A1.2 1.2 0 0 1 2 10.2V4.4a1.2 1.2 0 0 1 1.2-1.2Z"/>`,
   users: `<circle cx="6" cy="5.4" r="2.4"/><path d="M1.8 13.2a4.2 4.2 0 0 1 8.4 0"/><path d="M10.6 3.1a2.4 2.4 0 0 1 0 4.6M12.2 9.4a4.2 4.2 0 0 1 2 3.8"/>`,
   // track controls
