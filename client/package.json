@@ -18,6 +18,7 @@
     "@fontsource/pirata-one": "^5.3.0",
     "@hocuspocus/provider": "^4.7.0",
     "@mobdaw/shared": "*",
+    "abcjs": "^6.7.2",
     "hash-wasm": "^4.12.0",
     "solid-js": "^1.9.17",
     "vite-plugin-solid": "^2.11.14",
