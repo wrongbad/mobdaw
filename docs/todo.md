@@ -45,3 +45,8 @@
 - **A chat mention of an agent only counts while the agent is present.** `@k(api)` is parsed against the handles of the members plus whoever is in the awareness (`client/src/ui/chat.tsx`, `AgentHub.handles`), so a message typed while the agent is idle stores no `mentions` for it. `events` and `GET chat` re-parse the text for `mentionsMe`, so an agent that polls sees it, but any other consumer of `ChatMessage.mentions` (an unread badge for the api identity) does not.
 
 - **API-token WebSocket clients assert their own awareness and chat names.** A token may connect to the collab socket as "k (api)" (`onAuthenticate` in `server/src/collab.ts`), but awareness and chat authorship are written by the client, exactly as for humans: such a client can post chat or draw a dot under another name. The HTTP agent API and MCP do not have this (the server writes the name).
+
+- **The listen cache trusts `ANALYSIS_VERSION`.** `badmidi.audio.listen` caches `hear.hear_chords` results (`<sample cache>/analysis/<key>.json`, keyed by clips, options and grid) with a hand-kept `ANALYSIS_VERSION`. Changing `hear.py` (templates, penalties, onset detection) without bumping it serves stale chords from the cache. Fix: bump the constant with every behavioural change to `hear.py`, or derive the key from a hash of hear.py's source.
+
+- **Heard parts assume one beat unit and 16th slots.** `listen` takes the beat as the meter's 1/den note (a 6/8 bar is six eighths, not two dotted quarters) and sizes rhythm slots from the first bar's beat, so a take across a meter change with a different denominator gets mislabelled rhythm slots, and compound meters get chords per eighth (noisy). Fix: group compound-meter beats by three in `listen` and store the slot per bar in `Rhythm`.
+

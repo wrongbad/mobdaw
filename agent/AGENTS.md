@@ -589,9 +589,55 @@ badmidi push song.py --apply --label "violin 3 descant" --like Violin   # one hi
   looping, its notes becoming plain; put a `loop()` at a plain clip's start and the clip loops. A `loop()` that starts inside a
   clip, not at its start, has no clip to be and is refused. A new `p.loop()` becomes a looped clip. Dynamics inside a loop are
   read from its first pass and repeat in every pass. Partial-pass loops and `forever` clips are read-only.
-- Audio clips are left out of the pull. `pull` prints what it left out, and a meter hint when the project looks mis-metered.
+- Audio clips are left out of the pull unless you ask to hear them (`--listen`, below). `pull` prints what it left out, and a meter hint when the project looks mis-metered.
+- **New tracks get a sound** with `--like <track>`, `--preset <device type>` or `--patch bass` (a named finnwave sound, `badmidi/patches.py`;
+  `PART=NAME` targets one part). A patch is `addTrack {preset: "none"}` + `addDevice {params}` in the same batch. The bass patch was chosen from
+  the DSP code, not by ear: it needs a listening pass (`docs/listen/runs/*-bass-patch/report.md`).
 - One push is one history entry, so a person can revert it from the History panel. Say which checks you ran, and that the
   audio is unheard.
+
+## Making a part for a recording
+
+A track of audio (a guitar played to the project's click) can be heard: its chords and strum rhythm become read-only data in
+the piece, and you write the new part against them. Needs `pip install 'badmidi[audio]'`; analysis is local, the server only
+hands out the file.
+
+```
+badmidi listen "My Song" --track Guitar --bars 1-16      # the chart; exit 1 with advice if the take is off the click
+badmidi pull "My Song" --listen Guitar -o song.py         # as pull, plus "guitar (heard)" and HEARD in the piece
+```
+
+The chart is one bar per line with confidence, `<- unsure` with the runner-up, then tuning, key, the grid check and the strum
+rhythm (`x` strong, `o` weak, one character per 16th). In the piece:
+
+- `HEARD["guitar"]` is a `HeardPart`: `.chords` (`HeardChord(start, end, symbol, root, bass, quality, conf)`, times in quarters,
+  `bass` the pitch class the bass should play, so inversions are kept), `.rhythm` (`Rhythm`: onset strength per slot per bar),
+  `.bar`, `.key`. `"guitar (heard)"` is the same chords as block chords, so `grid`, `lens` and `check` hear them.
+- Heard parts are **not the project's**: push skips them and refuses an edit to one (say so, change another part). `push --guide`
+  sends them as muted MIDI tracks instead, which humans can then see and fix.
+- `bass.line(HEARD["guitar"], style=, key=, range=("E1", "G3"), kick=)` returns a draft `Motif` to edit, not a finished part.
+  Styles: `roots`, `root-fifth`, `pulse` (8ths, accented on the heard strong onsets), `walk` (quarters, approach notes into each change).
+  `kick=bass.kicks(score["drums"])` pulls onsets onto a drum part's kick.
+
+The loop, for a chat request ("make a bass for Guitar, bars 1-16"):
+
+1. `wait_for_events`; a chat message mentions you. If the track's sample is `incoming` say "waiting for the take to upload" and
+   wait for the `sample` event (`badmidi listen --wait 120` also waits).
+2. `badmidi listen ...`. If the grid check fails, say why (the output tells you) and stop. For a bar marked `<- unsure`, either ask
+   in chat ("bar 4: G or Em?") or take the one the key favours and say which.
+3. `badmidi pull ... --listen Guitar -o song.py`; add the part and draft it, then edit by taste:
+
+   ```python
+   heard = HEARD["guitar"]
+   bass_guitar = score.part("bass guitar")
+   bass_guitar.at(heard.bar, bass.line(heard, style="pulse", key=score.key))
+   ```
+   `badmidi song.py check`, `lens --parts "bass guitar,guitar (heard)"`: fix strong beats outside the heard chord and anything out of range.
+4. `badmidi push song.py --apply --label "bass for Guitar" --patch bass` (or `--like` an existing bass track): one history entry.
+5. `send_chat`: the chart you heard, what the bass does, the `unsure` choices, and how to revert. The audio is unheard: say so.
+
+Limits: chords only (`--as notes` for a sung line is not built); a take recorded off the click is refused; compound meters are
+heard per 1/8 beat; a power chord's major/minor is read from the key.
 
 ## Adding an example
 
@@ -639,6 +685,10 @@ badmidi/lilypond.py  LilyPond export, rendering, and verification against LilyPo
 badmidi/loops.py     which Part.loop() spans can be engraved as repeats
 badmidi/render.py    wav through fluidsynth
 badmidi/bridge.py    pull/push against a mobdaw project (state -> Score, Score diff -> one batch of ops)
+badmidi/heard.py     HeardChord, HeardPart, Rhythm: what a recording says, in score time (no numpy)
+badmidi/bass.py      bass.line(): draft bass parts (roots, root-fifth, pulse, walk) from heard chords
+badmidi/patches.py   named sounds for new tracks (`push --patch bass`)
+badmidi/audio/       the badmidi[audio] extra: source.py (fetch, decode, place), hear.py (chords, key, rhythm), listen.py (`badmidi listen`)
 badmidi/cli.py       the badmidi command
 ```
 

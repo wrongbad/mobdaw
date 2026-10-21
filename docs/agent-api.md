@@ -146,7 +146,9 @@ registered.
 `agent/badmidi/bridge.py` is a client for this API: `badmidi pull <project> -o piece.py` turns the state into a badmidi piece
 (every track, the timeline, markers) and `badmidi push piece.py --apply` sends the piece's note edits back as one batch, so a
 whole composing session is one history entry. See `agent/BRIDGE-PLAN.md` and `agent/AGENTS.md`; `agent/tests/e2e_live.py`
-runs the whole round trip against a local server.
+runs the whole round trip against a local server. For a recorded audio track, `badmidi listen` and `badmidi pull --listen` hear its
+chords on the project's beat grid and `badmidi.bass` drafts a bass part (`agent/AGENTS.md`, "Making a part for a recording"); new tracks
+can take a named sound with `push --patch bass`.
 
 ## A suggested agent loop
 1. `list_projects`; pick the project. `wait_for_events` (no `since`) to get a cursor.

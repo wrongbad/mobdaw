@@ -1,7 +1,7 @@
 # Listening: from a recorded take to an agent's bass track
 
 Plan of record for teaching the badmidi bridge to hear audio. Read `BRIDGE-PLAN.md` (pull/push) and `docs/agent-api.md`
-first. Status: **not started.**
+first. Status: phases 1-5 built (milestones 1-4; the bass patch needs a listening pass); phase 6 is documented in AGENTS.md, the e2e run is not.
 
 ## The goal, as a user sees it
 
