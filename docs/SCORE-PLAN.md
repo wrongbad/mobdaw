@@ -1,7 +1,7 @@
 # Score view: MIDI tracks as an ensemble score
 
 Plan of record for a sheet-music mode that shows a chosen set of MIDI tracks as one score, and later lets you edit
-it. Status: planned; nothing built. Open questions settled 2026-10-21 (see the end).
+it. Status: milestone 1 (view, end to end) built in `client/src/score/` and the `score` button in the top bar. Open questions settled 2026-10-21 (see the end).
 
 ## The goal, as a user sees it
 
