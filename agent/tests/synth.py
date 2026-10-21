@@ -126,6 +126,10 @@ class Clock:
         rate = bpm / 60 * (1 + rubato * np.sin(2 * np.pi * t / period)) * (1 + accel * np.minimum(t / (beats * 60 / bpm), 1.5))
         self.b = np.concatenate([[0], np.cumsum((rate[:-1] + rate[1:]) / 2 * dt)])
         self.t, self.offset, self.lag = t, offset, lag
+        self.args = (bpm, rubato, period, accel, offset, lag, beats)
+
+    def __repr__(self):
+        return "Clock%r" % (self.args,)
 
     def __call__(self, beat):
         return np.interp(beat, self.b, self.t) + self.offset + self.lag

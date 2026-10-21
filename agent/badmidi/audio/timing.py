@@ -328,7 +328,7 @@ def beats(x, hint_bpm: float | None = None) -> BeatTrack:
     peak = maximum_filter1d(o, 7)[idx]
     support = float(np.mean(peak > 0.3 * np.median(o[o > 0]))) if (o > 0).any() else 0.0
     alts, rival = _alternatives(P, bpms, bpm)
-    conf = float(np.clip((1 - rival) / 0.5, 0, 1)) * (0.5 + 0.5 * min(support, 1.0)) if not hint_bpm else 0.6 * (0.5 + 0.5 * support)
+    conf = float(np.clip((1 - rival) / 0.5, 0, 1)) * float(np.clip((support - 0.2) / 0.4, 0, 1)) if not hint_bpm else 0.6 * float(np.clip((support - 0.2) / 0.4, 0, 1))
     var = float(np.percentile(curve, 95) - np.percentile(curve, 5)) / 2 / bpm
     return BeatTrack(times, curve, bpm, conf, alts, var, support)
 
@@ -539,10 +539,44 @@ def _beat_coord(t: np.ndarray, ref: np.ndarray) -> np.ndarray:
     return np.interp(t, E, np.arange(len(E)) - pre)
 
 
-def _onset_curve(t: np.ndarray, w: np.ndarray, ref: np.ndarray, bpb: int) -> tuple[np.ndarray, np.ndarray, float]:
+def _smooth(v: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian smoothing that keeps a slope to the ends (the ends are reflected through their own points, not flattened)."""
+    k = min(int(4 * sigma) + 1, len(v) - 1)
+    if k < 1:
+        return v.copy()
+    p = np.r_[2 * v[0] - v[k:0:-1], v, 2 * v[-1] - v[-2:-k - 2:-1]]
+    return gaussian_filter1d(p, sigma)[k:-k]
+
+
+def _local_line(x: np.ndarray, y: np.ndarray, w: np.ndarray, at: np.ndarray, sigma: float) -> np.ndarray:
+    """Robust local-linear smoother: the weighted line through the points near each `at` (Gaussian, `sigma`), twice, the second time
+    without the points more than 25 ms off the first fit. nan where nothing is near."""
+    out = np.full(len(at), np.nan)
+    for i, c in enumerate(at):
+        k = np.exp(-0.5 * ((x - c) / sigma) ** 2) * w
+        if k.sum() < 0.2:
+            continue
+        v = np.nan
+        for rnd in range(2):
+            d = x - c
+            sw, sx, sxx = k.sum(), (k * d).sum(), (k * d * d).sum()
+            sy, sxy = (k * y).sum(), (k * d * y).sum()
+            det = sw * sxx - sx * sx
+            ridge = 0.3 * sw                                                   # a slope needs spread; with little, stay flat
+            b = (sw * sxy - sx * sy) / (det + ridge * sw) if det + ridge * sw > 1e-12 else 0.0
+            v = (sy - b * sx) / sw
+            if rnd == 0:
+                k = k * (np.abs(y - (v + b * d)) < 0.025)
+                if k.sum() < 0.2:
+                    break
+        out[i] = v
+    return out
+
+
+def _onset_curve(t: np.ndarray, w: np.ndarray, ref: np.ndarray, bpb: int, s0: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, float]:
     """Offset (in beats, per reference beat) of the on-beat onsets from the reference: in windows of 4 beats the phase that most
     onsets sit at (a circular comb), smooth from window to window (Viterbi on the circle), unwrapped so it can run away from the
-    grid by more than a beat, then refined from the onsets near it. Returns (offset in seconds per beat, weight of onsets per beat,
+    grid by more than a beat, then refined from the onsets near it (`s0`: a first curve in beats, instead of the comb). Returns (offset in seconds per beat, weight of onsets per beat,
     share of the onset weight that sits on the beats)."""
     n = len(ref)
     u = _beat_coord(t, ref)
@@ -559,6 +593,8 @@ def _onset_curve(t: np.ndarray, w: np.ndarray, ref: np.ndarray, bpb: int) -> tup
             E[i] = (w[m, None] * np.exp(-0.5 * (d / sig) ** 2)).sum(axis=0)
             tot[i] = w[m].sum()
     En = E / np.maximum(tot[:, None], 1e-9)
+    if s0 is not None:
+        En = np.zeros_like(En)
     dd = np.abs(_cdist(np.arange(nb)[:, None] / nb, np.arange(nb)[None] / nb)) * nb
     cost = 1.5 * (dd / 8) ** 2
     V = En[0] - 0.5 * np.abs(shifts) * 4
@@ -571,35 +607,19 @@ def _onset_curve(t: np.ndarray, w: np.ndarray, ref: np.ndarray, bpb: int) -> tup
     path[-1] = int(V.argmax())
     for i in range(n - 1, 0, -1):
         path[i - 1] = bp[i][path[i]]
-    s = np.unwrap(shifts[path] * 2 * np.pi) / (2 * np.pi)                    # beats, continuous
-    off = np.zeros(n)
-    got = np.zeros(n, bool)
-    on = 0.0
-    for i, c in enumerate(cs):
-        m = np.abs(u - c) <= 2.0
-        if not m.any():
-            continue
-        j = np.round(u[m] - s[i])                                           # the reference beat each onset belongs to
-        r = u[m] - j - s[i]
-        keep = np.abs(r) < 0.15
-        if keep.sum() >= 1:
-            jj = j[keep].astype(int)
-            ok = (jj >= -2) & (jj < n + 2)
-            if ok.any():
-                E_, pre = _extend(ref)
-                sec = t[m][keep][ok] - E_[jj[ok] + pre]
-                ww = w[m][keep][ok]
-                o = np.argsort(sec)
-                cw = np.cumsum(ww[o])
-                off[i] = sec[o][np.searchsorted(cw, cw[-1] / 2)]
-                got[i] = True
-    L = np.diff(ref)
-    L = np.r_[L, L[-1]]
-    guess = s * L
-    off = np.where(got, off, guess)
-    # smooth over about two bars
-    sm = gaussian_filter1d(off, max(bpb * 0.75, 1.0), mode="nearest")
-    share = float(w[np.abs(_cdist(u - np.interp(u, cs, s), 0.0)) < 0.1].sum() / max(w.sum(), 1e-9))
+    s = np.unwrap(shifts[path] * 2 * np.pi) / (2 * np.pi) if s0 is None else s0                  # beats, continuous
+    sb = np.interp(u, cs, s)                                                  # the comb's offset at each onset, beats
+    j = np.round(u - sb).astype(int)                                          # the reference beat each onset belongs to
+    keep = (np.abs(u - j - sb) < 0.15) & (j >= -2) & (j < n + 2)
+    E_, pre = _extend(ref)
+    jk, wk = j[keep], w[keep]
+    sec = t[keep] - E_[jk + pre]
+    sm = _local_line(jk.astype(float), sec, wk, np.arange(n, dtype=float), max(bpb * 0.5, 1.5))
+    miss = ~np.isfinite(sm)
+    if miss.any():
+        L = np.diff(ref)
+        sm[miss] = (s * np.r_[L, L[-1]])[miss]
+    share = float(w[np.abs(_cdist(u - sb, 0.0)) < 0.1].sum() / max(w.sum(), 1e-9))
     return sm, tot, share
 
 
@@ -654,8 +674,11 @@ def align(onset_times, ref_beats, audio_beats=None, strengths=None, beats_per_ba
     method = "onsets"
     conf = float(np.clip((share - 0.3) / 0.4, 0, 1) * min(1.0, len(t) / 20))
     if audio_beats is not None and len(audio_beats) >= 3 and np.abs(curve).max() > L / 3:
-        curve, method = _dtw_curve(np.asarray(audio_beats, float), ref), "beats"
-        curve = gaussian_filter1d(curve, 1.0, mode="nearest")
+        rough = _dtw_curve(np.asarray(audio_beats, float), ref)
+        curve, tot, share = _onset_curve(t, w, ref, beats_per_bar, rough / np.r_[np.diff(ref), np.diff(ref)[-1]])     # then the onsets pin it down
+        method = "beats"
+        if share < 0.3:
+            curve = _smooth(rough, 1.0)
         conf = min(conf + 0.2, 1.0) if conf > 0 else 0.3
     mean = float(curve.mean())
     rng = float(np.percentile(curve, 95) - np.percentile(curve, 5))
