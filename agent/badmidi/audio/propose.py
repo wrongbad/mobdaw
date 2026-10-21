@@ -130,10 +130,13 @@ def propose(beat_times, mt: Meter, t0: float = 0.0, ppq: int = PPQ) -> MapPropos
     D0 = float(B[d])
     # beats on a straight line: the tempo of the whole take
     a, b = np.polynomial.polynomial.polyfit(k[d:], B[d:], 1) if len(B) - d > 1 else (D0, 0.5)
-    down = float(a + b * d)
-    pickup = down if down >= MIN_PICKUP else 0.0
-    first_bar = 2 if pickup else 1
-    head = [{"id": "map1", "bar": 1, "kind": "free", "seconds": round(pickup, 3)}] if pickup else []
+    down_line = float(a + b * d)                                         # the first downbeat on the straight line, and as the (smoothed) beats have it
+    down_beats = float(sm[d])
+    first_bar = 2 if max(down_line, down_beats) >= MIN_PICKUP else 1
+
+    def head_for(down: float) -> list[dict]:
+        return [{"id": "map1", "bar": 1, "kind": "free", "seconds": round(max(down, MIN_PICKUP), 3)}] if first_bar == 2 else []
+
     mean_bpm = float(qpb * 60 / (b * bpb))
 
     def bar_starts(source) -> np.ndarray:
@@ -143,8 +146,8 @@ def propose(beat_times, mt: Meter, t0: float = 0.0, ppq: int = PPQ) -> MapPropos
         return np.array([source[i] if i < len(source) else source[-1] + (i - len(source) + 1) * iv for i in idx])
 
     S = bar_starts(sm)
-    S[0] = down if pickup else 0.0                                       # (without a free bar, bar 1 starts at second 0)
-    cands: list[tuple[str, list[dict]]] = [("steady", head + [_region(first_bar, mean_bpm, meter)])]
+    S[0] = down_beats if first_bar == 2 else 0.0                         # (without a free bar, bar 1 starts at second 0)
+    cands: list[tuple[str, list[dict]]] = [("steady", head_for(down_line) + [_region(first_bar, mean_bpm, meter)])]
     if nbars >= 4:
         for n in (8, 4, 2):
             if nbars <= n:
@@ -157,9 +160,9 @@ def propose(beat_times, mt: Meter, t0: float = 0.0, ppq: int = PPQ) -> MapPropos
                 v.append(float(np.clip(_next_tempo(v[-1], m), 0.5 * means[0], 2 * means[0])))
             regs = [_region(first_bar + kn, v[i], meter, v[i + 1]) for i, kn in enumerate(knots)]
             regs.append(_region(first_bar + nbars, v[-1], meter))                   # (a ramp ends at the next region, which carries on)
-            cands.append(("ramps", head + regs))
+            cands.append(("ramps", head_for(down_beats) + regs))
     per_bar = [_region(first_bar + j, float(qpb * 60 / (S[j + 1] - S[j])), meter) for j in range(nbars)]
-    cands.append(("per-bar", head + per_bar))
+    cands.append(("per-bar", head_for(down_beats) + per_bar))
     best = None
     for kind, regs in cands:
         p95, worst = check(regs, sm, d, bpb, qpb, first_bar, ppq)
@@ -169,4 +172,6 @@ def propose(beat_times, mt: Meter, t0: float = 0.0, ppq: int = PPQ) -> MapPropos
             best = (kind, regs, p95, worst)
             break
     kind, regs, p95, worst = best
+    pickup = regs[0]["seconds"] if regs[0]["kind"] == "free" else 0.0
+    down = pickup or max(0.0, down_line if kind == "steady" else down_beats)
     return MapProposal(regs, kind, round(mean_bpm, 2), meter, round(pickup, 3), round(down, 3), worst, p95, nbars, first_bar)
