@@ -17,7 +17,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 from scipy.ndimage import maximum_filter1d, median_filter, uniform_filter1d
 from scipy.signal import resample_poly
 
-from ..core import pc_name
+from ..core import dur_suffix, pc_name
 
 SR = 22050
 LOW, HIGH = 33, 96            # semitone filterbank range, MIDI A1..C7
@@ -505,7 +505,7 @@ def hear_chords(x: np.ndarray, sr: int, grid: Grid) -> Heard:
     edges = grid.edges()
     chroma = _beat_mean(_fold(L, LOW, HIGH), t, edges)
     bass = _beat_mean(_fold(Lb, LOW, BASS_TOP), t, edges)
-    rms = np.array([np.sqrt(np.mean(x[max(int(a * SR), 0):max(int(b * SR), 1)] ** 2) + 1e-12)
+    rms = np.array([np.sqrt(np.mean(np.r_[x[max(int(a * SR), 0):max(int(b * SR), 1)], 0.0] ** 2) + 1e-12)
                     for a, b in zip(edges[:-1], edges[1:])])
     silent = rms < max(0.05 * np.percentile(rms, 90), 1e-4)
     key = estimate_key(chroma[~silent] if (~silent).any() else chroma, bass[~silent] if (~silent).any() else bass)
@@ -692,7 +692,7 @@ def decide(track: F0Track) -> Decision:
     v, c = float(voiced.sum() / snd.sum()), float(clear.sum() / snd.sum())
     if c >= 0.6:
         return Decision("notes", f"one clear pitch in {c * 100:.0f}% of the sound", v, c)
-    return Decision("chords", f"no single clear pitch in the sound ({c * 100:.0f}% clear, {v * 100:.0f}% voiced)", v, c)
+    return Decision("chords", f"no single clear pitch, {c * 100:.0f}% of the sound", v, c)
 
 
 def _tuning_from_pitch(m: np.ndarray, w: np.ndarray) -> float:
@@ -785,10 +785,10 @@ def hear_notes(x: np.ndarray, sr: int, grid: Grid, snap: int = 4, track: F0Track
     shift = gc.mean_offset if gc.on_grid else 0.0
     ref = np.percentile([r[3] for r in raw], 90) if raw else 0.0
     notes = _quantize(raw, grid, snap, shift, ref)
-    rh = rhythm(Onsets(starts, [min(1.0, max(0.3, n.velocity / 110)) for n in notes][:len(starts)] if len(notes) == len(starts) else [1.0] * len(starts)),
-                grid, snap, shift)
+    on = Onsets(starts, [1.0] * len(starts))
+    rh = rhythm(on, grid, snap, shift)
     key = _key_of_notes(notes)
-    return Heard(cents, key, gc, guess_chords(notes, grid, key), rh, Onsets(starts, [1.0] * len(starts)), notes, "notes")
+    return Heard(cents, key, gc, guess_chords(notes, grid, key), rh, on, notes, "notes")
 
 
 def _quantize(raw, grid: Grid, snap: int, shift: float, ref_db: float) -> list[HeardNote]:
@@ -897,18 +897,38 @@ def hear(x: np.ndarray, sr: int, grid: Grid, mode: str = "auto", snap: int = 4) 
 # --- text -----------------------------------------------------------------------------------------
 
 
-def format_chart(h: Heard, grid: Grid, name: str = "audio", first_bar: int = 1, mode: str | None = None) -> str:
+def _bar_notes(h: Heard, a: int, b: int, beat_q: Fraction, flats: bool) -> str:
+    """The notes of beats [a, b) in badmidi notation: `A3.q C4.e R.e G4.h~`; `?` marks an unsure pitch, `~` a note that goes on."""
+    out, t = [], Fraction(a)
+    for n in h.notes:
+        if n.end_beat <= a or n.start_beat >= b:
+            continue
+        s, e = max(n.start_beat, Fraction(a)), min(n.end_beat, Fraction(b))
+        if s > t:
+            out.append("R" + dur_suffix((s - t) * beat_q))
+        out.append(f"{pc_name(n.pitch % 12, flats)}{n.pitch // 12 - 1}{dur_suffix((e - s) * beat_q)}"
+                   + ("~" if n.end_beat > b else "") + ("?" if n.confidence < 0.5 else ""))
+        t = e
+    return " ".join(out) if out else "R" + dur_suffix((b - a) * beat_q)
+
+
+def format_chart(h: Heard, grid: Grid, name: str = "audio", first_bar: int = 1, mode: str | None = None,
+                 beat_q: Fraction = Fraction(1)) -> str:
     """One bar per line with confidence, a runner-up where unsure; then tuning, key, grid check, rhythm (bars with the
-    same pattern share a line). `first_bar` numbers the bars; `mode` ('chords') is named in the header."""
+    same pattern share a line). `first_bar` numbers the bars; `mode` ('chords', 'notes') is named in the header, with the
+    reason when it was chosen by ear. A line heard as notes prints the notes of each bar (`beat_q`: quarters per beat) and
+    a guess at the chord, which is not heard."""
     bars = grid.bars()
     gc = h.grid_check
     span = f"{len(bars)} bars" + (f" ({first_bar}-{first_bar + len(bars) - 1})" if first_bar != 1 else "")
-    lines = [f"{name}, {span}, " + (f"heard as {mode}, " if mode else "") + f"tuning {h.tuning_cents:+.0f} c, key {h.key.name}, "
+    why = f" (auto: {h.decision.why})" if h.decision else ""
+    lines = [f"{name}, {span}, " + (f"heard as {mode}{why}, " if mode else "") + f"tuning {h.tuning_cents:+.0f} c, key {h.key.name}, "
              + (f"on the grid ({gc.mean_offset * 1000:+.0f} ms)" if gc.on_grid else
                 f"OFF the grid (mean {gc.mean_offset * 1000:+.0f} ms, drift {gc.drift * 1000:+.0f} ms, spread {gc.spread * 1000:.0f} ms)")]
+    notes = h.mode == "notes"
     for n, (a, b) in enumerate(bars, first_bar):
         cells = []
-        for c in h.chords:
+        for c in ([] if notes else h.chords):
             if c.end_beat <= a or c.start_beat >= b:
                 continue
             unsure = c.runner_up is not None and (c.confidence < 0.5 or c.runner_up[1] > 0.5 * c.confidence)
@@ -916,7 +936,13 @@ def format_chart(h: Heard, grid: Grid, name: str = "audio", first_bar: int = 1, 
             if c.quality == "5" and c.implied:
                 cell += " (power chord, minor by key)"
             cells.append(cell)
+        if notes:
+            g = next((c for c in h.chords if c.start_beat == a and c.src == "melody"), None)
+            cells = [_bar_notes(h, a, b, beat_q, _flats(h.key)) + (f"   | guess: {g.symbol}" if g and g.quality != "N" else "")]
         lines.append(f"{n:>3}  " + "  ".join(cells))
+    if notes:
+        lines.append("(guess: the key's triad covering most of the bar's notes, strong beats counting more; a rough starting point "
+                     "for bass.line, NOT heard. ? = unsure pitch, ~ = tied on)")
     if h.rhythm.bars:
         spb = h.rhythm.slots_per_beat
         runs: list[list] = []                                    # [first bar, last bar, text]
@@ -941,6 +967,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--bpm", type=float, required=True)
     ap.add_argument("--meter", default="4/4")
     ap.add_argument("--offset", type=float, default=0.0, help="seconds from the file start to beat 1")
+    ap.add_argument("--as", dest="mode", default="auto", choices=("auto", "chords", "notes"))
     a = ap.parse_args(argv)
     x, sr = sf.read(a.file, dtype="float32", always_2d=True)
     x = prepare(x, sr)
@@ -949,7 +976,8 @@ def main(argv: list[str] | None = None) -> int:
     n = int((len(x) / SR - a.offset) / beat)
     n = n // per_bar * per_bar or n                  # whole bars; the reverb tail is not a bar
     grid = Grid([a.offset + i * beat for i in range(n)], [i % per_bar == 0 for i in range(n)], a.offset + n * beat)
-    print(format_chart(hear_chords(x, SR, grid), grid, a.file))
+    h = hear(x, SR, grid, a.mode)
+    print(format_chart(h, grid, a.file, 1, h.mode, Fraction(4, int(a.meter.split("/")[1]))))
     return 0
 
 

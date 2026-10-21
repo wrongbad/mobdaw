@@ -28,7 +28,7 @@ def _num(x) -> str:
 class HeardChord(NamedTuple):
     """A chord heard from `start` to `end` (quarters). `bass` is the pitch class the bass plays under it (an inversion if
     it is not the root); `conf` 0..1; `alt` the runner-up symbol when unsure; `implied` is 'm' for a power chord that the
-    key reads as minor. quality 'N' is no chord (silence)."""
+    key reads as minor; `src` is 'melody' for a chord guessed from a melody's notes (not heard). quality 'N' is no chord."""
     start: Fraction
     end: Fraction
     symbol: str
@@ -38,6 +38,7 @@ class HeardChord(NamedTuple):
     conf: float = 1.0
     alt: str = ""
     implied: str = ""
+    src: str = ""
 
     @property
     def dur(self) -> Fraction:
@@ -60,8 +61,26 @@ class HeardChord(NamedTuple):
         return None if self.silent else (self.root + (6 if self.quality == "dim" else 7)) % 12
 
     def __repr__(self) -> str:
-        extra = "".join(f', {k}="{v}"' for k, v in (("alt", self.alt), ("implied", self.implied)) if v)
+        extra = "".join(f', {k}="{v}"' for k, v in (("alt", self.alt), ("implied", self.implied), ("src", self.src)) if v)
         return f'HeardChord({_num(self.start)}, {_num(self.end)}, "{self.symbol}", {self.root}, {self.bass}, "{self.quality}", {self.conf:.2f}{extra})'
+
+
+class HeardNote(NamedTuple):
+    """A note heard from `start` to `end` (quarters, quantized), MIDI `pitch` (tuning-shifted), `vel` 1..127, `conf` 0..1;
+    `raw` is where it was heard before quantizing, in quarters (a float)."""
+    start: Fraction
+    end: Fraction
+    pitch: int
+    vel: int = 90
+    conf: float = 1.0
+    raw: float = 0.0
+
+    @property
+    def dur(self) -> Fraction:
+        return self.end - self.start
+
+    def __repr__(self) -> str:
+        return f"HeardNote({_num(self.start)}, {_num(self.end)}, {self.pitch}, {self.vel}, {self.conf:.2f}, {self.raw:.3f})"
 
 
 @dataclass
@@ -112,29 +131,40 @@ class HeardPart:
     chords: list[HeardChord]
     rhythm: Rhythm | None = None
     mode: str = "chords"
+    notes: list[HeardNote] = field(default_factory=list)
 
     def __getitem__(self, k: str):
-        if k not in ("chords", "rhythm", "key", "tuning", "track", "bar", "grid", "mode", "part"):
+        if k not in ("chords", "rhythm", "key", "tuning", "track", "bar", "grid", "mode", "part", "notes"):
             raise KeyError(k)
         return getattr(self, k)
 
     @property
     def end(self) -> Fraction:
-        return self.chords[-1].end if self.chords else Fraction(0)
+        return max([c.end for c in self.chords[-1:]] + [n.end for n in self.notes[-1:]], default=Fraction(0))
 
     def source(self, var: str) -> str:
         """The constructor call as lines of a piece, an entry of the HEARD dict (see source.to_source)."""
         ind = "        "
         chords = "".join(f"\n{ind}    {c!r}," for c in self.chords)
         rhythm = "None" if self.rhythm is None else self.rhythm.source(ind)
+        notes = "".join(f"\n{ind}    {n!r}," for n in self.notes)
+        tail = f",\n{ind}notes=[{notes}\n{ind}]" if self.mode == "notes" else ""
         return (f'    "{var}": HeardPart(\n{ind}track="{self.track}", part="{self.part}", key="{self.key}", tuning={self.tuning:.0f}, '
-                f'bar={self.bar}, mode="{self.mode}",\n{ind}grid="{self.grid}",\n{ind}chords=[{chords}\n{ind}],\n{ind}rhythm={rhythm}),')
+                f'bar={self.bar}, mode="{self.mode}",\n{ind}grid="{self.grid}",\n{ind}chords=[{chords}\n{ind}],\n{ind}rhythm={rhythm}{tail}),')
 
     def add_to(self, score: Score, instrument: str | None = None) -> Part:
         """The chords as a part of `score` named `self.part`: one block chord per span, voiced in a middle register with the
-        bass pitch class lowest, tied across barlines. Silence is a rest."""
+        bass pitch class lowest, tied across barlines. Silence is a rest. A line heard as notes is its notes instead."""
         inst = instrument or _instrument(self.track)
         part = score.part(self.part, inst)
+        if self.mode == "notes":
+            t = self.notes[0].start if self.notes else Fraction(0)
+            for n in self.notes:
+                if n.start > t:
+                    t = _place(score, part, t, n.start, [])
+                _place(score, part, n.start, n.end, [n.pitch])
+                t = n.end
+            return part
         for c in self.chords:
             notes = voicing(c)
             t = c.start
@@ -145,6 +175,16 @@ class HeardPart:
                 part._place(t, [Motif(Note(notes, stop - t, tied=not last and bool(notes)))])
                 t = stop
         return part
+
+
+def _place(score: Score, part: Part, t: Fraction, end: Fraction, pitches: list[int]) -> Fraction:
+    """Notes (or a rest) from t to end, tied across barlines."""
+    while t < end:
+        bar, _ = score.position(t)
+        stop = min(end, score.bar_start(bar + 1))
+        part._place(t, [Motif(Note(pitches, stop - t, tied=stop < end and bool(pitches)))])
+        t = stop
+    return end
 
 
 def _instrument(track: str) -> str:

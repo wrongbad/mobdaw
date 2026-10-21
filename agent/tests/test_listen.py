@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from fractions import Fraction
 from unittest import mock
 
 try:
@@ -91,7 +92,7 @@ class TestListen(unittest.TestCase):
     def test_the_chart(self):
         txt = self.res.chart()
         self.assertTrue(self.res.ok, txt)
-        self.assertRegex(txt.splitlines()[0], r"^Guitar \(audio, 1 take\), 4 bars, heard as chords, tuning \+\d+ c, key A minor, on the grid")
+        self.assertRegex(txt.splitlines()[0], r"^Guitar \(audio, 1 take\), 4 bars, heard as chords \(auto: no single clear pitch, \d+% of the sound\), tuning \+\d+ c, key A minor, on the grid")
         for n, sym in enumerate(PROG, 1):
             self.assertRegex(txt, rf"\n +{n}  {sym} 0\.\d\d")
         self.assertIn("rhythm bar 1: | x... ..x. ", txt)           # strums on slots 0, 6, 8, 12
@@ -117,9 +118,44 @@ class TestListen(unittest.TestCase):
         with self.assertRaises(SampleIncoming):
             L.listen(c2.__class__({}, incoming=1), "pid", self.state, "Guitar", (1, 2), cache_dir=os.path.join(self.tmp, "other"))
 
-    def test_notes_mode_is_refused_for_now(self):
-        with self.assertRaisesRegex(BridgeError, "not built yet"):
-            L.listen(self.client, "pid", self.state, "Guitar", mode="notes", cache_dir=self.cache)
+    def test_unknown_mode_is_refused(self):
+        with self.assertRaisesRegex(BridgeError, "unknown mode"):
+            L.listen(self.client, "pid", self.state, "Guitar", mode="duet", cache_dir=self.cache)
+
+    def test_the_last_bar_is_left_out_when_the_audio_only_rings_into_it(self):
+        def bars(extra):
+            return L.audio_bars(L.Timeline(state_for(self.hash, self.bars_seconds + extra)), state_for(self.hash, self.bars_seconds + extra)["tracks"][0]["clips"])
+        self.assertEqual(bars(0.0), (1, 4))
+        self.assertEqual(bars(1.0), (1, 4), "a tail of under half a bar (1.2 s here) is the previous bar's decay")
+        self.assertEqual(bars(1.5), (1, 5), "more than half a bar of audio is a bar")
+        st = state_for(self.hash, self.bars_seconds + 1.0)
+        res = L.listen(self.client, "pid", st, "Guitar", cache_dir=self.cache)
+        self.assertEqual(res.bars, (1, 4))
+        self.assertEqual([c.symbol for c in res.part.chords], PROG, "no extra chord for the tail")
+        self.assertEqual(L.listen(self.client, "pid", st, "Guitar", (1, 5), cache_dir=self.cache).bars, (1, 5), "--bars asks for it")
+
+    def test_the_cache_key_follows_the_code(self):
+        grid = self.res.grid
+        clips = self.state["tracks"][0]["clips"]
+        a = L._key(clips, "auto", grid, 0.0)
+        with mock.patch.object(L, "_code_version", return_value="edited"):
+            self.assertNotEqual(a, L._key(clips, "auto", grid, 0.0))
+        self.assertEqual(a, L._key(clips, "auto", grid, 0.0))
+        self.assertNotEqual(a, L._key(clips, "auto", grid, 0.0, 8), "snap is an option")
+
+    def test_compound_meter_hears_the_dotted_quarter(self):
+        # 6/8 at 80 quarters a minute: a bar is 2.25 s, and the chords change once a bar
+        x = th.render(PROG, th.pluck_note, (0, 8), tempo=640 / 6)
+        wav = os.path.join(self.tmp, "six8.wav")
+        sf.write(wav, x, th.SR, subtype="PCM_16")
+        h = sha(wav)
+        st = state_for(h, 4 * 2.25)
+        st["regions"] = [{"id": "default", "bar": 1, "kind": "metered", "bpm": 80, "meter": "6/8", "beatTicks": PPQ // 2, "barTicks": 3 * PPQ}]
+        res = L.listen(FakeClient({h: wav}), "pid", st, "Guitar", mode="chords", cache_dir=self.cache)
+        self.assertEqual(len(res.grid.beats), 8, "two beats a bar, not six")
+        self.assertEqual(res.part.rhythm.beat, Fraction(3, 2))
+        self.assertEqual(len(res.part.rhythm.bars[0]), 12, "six 16ths in each dotted quarter")
+        self.assertEqual([(c.symbol, c.start) for c in res.part.chords], [(s, 3 * i) for i, s in enumerate(PROG)])
 
     def run_cli(self, client, *args):
         cache = tempfile.mkdtemp(dir=self.tmp)

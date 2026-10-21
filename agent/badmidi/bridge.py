@@ -247,17 +247,25 @@ class Timeline:
         b = s.bpm0 * math.exp(ds * self.ppq * (s.bpm1 - s.bpm0) / (60 * total))
         return float(s.tick0) + (b - s.bpm0) * total / (s.bpm1 - s.bpm0)
 
-    def beat_grid(self, from_bar: int, to_bar: int) -> list[tuple[float, Fraction, bool]]:
+    def beat_grid(self, from_bar: int, to_bar: int, compound: bool = False) -> list[tuple[float, Fraction, bool]]:
         """Every beat of bars [from_bar, to_bar) as (seconds, tick, is_bar_start). A beat is a 1/den note (`beatTicks`); a free
-        bar has just its bar line."""
+        bar has just its bar line. `compound`: in 6/8, 9/8, 12/8 (groups of three, or none given) a beat is the dotted quarter,
+        a group of three 1/8s, which is how such a bar is felt (and how chords change)."""
         out = []
         for bar in range(from_bar, to_bar):
             s = self.spans[max(0, bisect_right(self._bar0, bar) - 1)]
             t0 = self.bar_start(bar)
-            for k in range(1 if s.free else math.ceil(s.bar_ticks / s.beat_ticks - Fraction(1, 10**9))):
+            step = 3 if compound and self._compound(s) else 1
+            for k in range(0, 1 if s.free else math.ceil(s.bar_ticks / s.beat_ticks - Fraction(1, 10**9)), step):
                 t = t0 + k * s.beat_ticks
                 out.append((self.seconds_at(t), t, k == 0))
         return out
+
+    def _compound(self, s: _Span) -> bool:
+        if s.free or s.num < 6 or s.num % 3 or s.beat_ticks * 2 != self.ppq:
+            return False
+        r = next((r for r in self.regions if r["bar"] == s.bar), None)
+        return all(g == 3 for g in (r or {}).get("groups") or [3])
 
 
 def _meter_text(r: dict) -> str:
@@ -612,8 +620,9 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None, heard:
         h.add_to(score)
         hp[_unique(_clean_name(h.track) or "track", set(hp))] = h
         marks.append({"part": h.part, "track": h.track, "sig": _sig(score, h.part)})
-        report.append(f"heard: {h.part!r} from audio track {h.track!r}: {len(h.chords)} chord spans, key {h.key}, {h.grid}; "
-                      "read-only (HEARD in the piece has the chords and rhythm; push skips it, --guide pushes it muted)")
+        what = (f"{len(h.notes)} notes (a line; the chords are a guess from the melody)" if h.mode == "notes" else f"{len(h.chords)} chord spans")
+        report.append(f"heard: {h.part!r} from audio track {h.track!r}: {what}, key {h.key}, {h.grid}; "
+                      f"read-only (HEARD in the piece has the {'notes, guessed chords' if h.mode == 'notes' else 'chords'} and rhythm; push skips it, --guide pushes it muted)")
     return Pulled(score, _snapshot(state, project, filter_info, tracks, parts_by_track, baseline, score.bars if score.parts else 0, marks), report, hp)
 
 
@@ -968,7 +977,8 @@ def pull_main(argv: list[str]) -> int:
     ap.add_argument("--bars", help="bar range such as 17-32: only notes touching them (push then only edits those bars)")
     ap.add_argument("--phrase", type=int, default=4, help="bars per at() call (default 4)")
     ap.add_argument("--listen", action="append", default=[], metavar="TRACK",
-                    help="an audio track to hear as chords: a read-only '<track> (heard)' part and HEARD in the piece (needs badmidi[audio]); repeatable")
+                    help="an audio track to hear as chords or notes: a read-only '<track> (heard)' part and HEARD in the piece (needs badmidi[audio]); repeatable")
+    ap.add_argument("--as", dest="mode", default="auto", choices=("auto", "chords", "notes"), help="--listen: chords, notes (a sung or single-note line) or auto (default)")
     ap.add_argument("--wait", type=float, default=0, metavar="SECONDS", help="--listen: wait this long for a take that is still uploading")
     args = ap.parse_args(argv)
     from .views import has_errors
@@ -987,7 +997,7 @@ def pull_main(argv: list[str]) -> int:
             raise BridgeError("--listen needs numpy, scipy and soundfile: pip install 'badmidi[audio]'") from None
         for tr in args.listen:
             try:
-                got = listen(c, pid, c.state(pid, [tr]), tr, bars, "chords", args.wait)
+                got = listen(c, pid, c.state(pid, [tr]), tr, bars, args.mode, args.wait)
             except SampleIncoming:
                 raise BridgeError(f"the take on {tr!r} is still uploading from the recorder's device; try again in a minute, or pass --wait 120") from None
             if not got.ok:
