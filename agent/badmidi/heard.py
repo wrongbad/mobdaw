@@ -60,7 +60,7 @@ class HeardChord(NamedTuple):
         return None if self.silent else (self.root + (6 if self.quality == "dim" else 7)) % 12
 
     def __repr__(self) -> str:
-        extra = "".join(f", {k}={v!r}" for k, v in (("alt", self.alt), ("implied", self.implied)) if v)
+        extra = "".join(f', {k}="{v}"' for k, v in (("alt", self.alt), ("implied", self.implied)) if v)
         return f'HeardChord({_num(self.start)}, {_num(self.end)}, "{self.symbol}", {self.root}, {self.bass}, "{self.quality}", {self.conf:.2f}{extra})'
 
 

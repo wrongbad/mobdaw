@@ -705,8 +705,8 @@ def _reconcile_clips(score: Score, t: dict, parts: list[str], loops: list, ppq: 
 
 
 def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, preset: str | None = None,
-         patch: dict[str, str] | str | None = None, guide: bool = False) -> PushPlan:
-    """The ops that turn the snapshot's project into the piece. Heard parts (audio as chords) are not the project's: they
+         sound: dict[str, str] | str | None = None, guide: bool = False) -> PushPlan:
+    """The ops that turn the snapshot's project into the piece (`sound`: a patch name, or {part: name}, for new tracks). Heard parts (audio as chords) are not the project's: they
     are skipped, and refused if edited; `guide` sends them as muted tracks instead."""
     check_timeline(score, snap)
     heard = {h["part"]: h for h in snap.get("heard", [])}
@@ -850,7 +850,7 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
         drums = score[names[0]].drums
         is_guide = guide and names[0] in heard
         src = None if is_guide else (like.get(root) or like.get("*")) if isinstance(like, dict) else like
-        pat = None if is_guide else (patch.get(root) or patch.get("*")) if isinstance(patch, dict) else patch
+        pat = None if is_guide else (sound.get(root) or sound.get("*")) if isinstance(sound, dict) else sound
         if sum(map(bool, (src, preset, pat))) > 1:
             raise BridgeError(f"new part {root!r}: --like, --preset and --patch are alternatives; give one")
         if drums and not (src or preset):
