@@ -15,6 +15,7 @@ Needs numpy, scipy and soundfile (the `badmidi[audio]` extra) and `npx tsx`.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -26,11 +27,17 @@ import soundfile as sf
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from badmidi.audio import source  # noqa: E402
+from badmidi import patches  # noqa: E402
+from badmidi.core import as_pitch  # noqa: E402
 from badmidi.bridge import Client, SampleIncoming  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "examples"))
+import bass_for_take  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BPM, BARS, SR = 120, 4, 44100          # a new project is 120 bpm 4/4: a bar is 2 s
-CHORDS = [("A2", [0, 7, 12, 15, 19]), ("F2", [0, 7, 12, 16, 19]), ("C3", [0, 7, 12, 16, 19]), ("G2", [0, 7, 12, 16, 19])]   # Am F C G
+# Am F C G, strummed like open-position guitar chords (root, fifth, octave, third, fifth, and the third again an octave up)
+CHORDS = [("A2", [0, 7, 12, 15, 19, 27]), ("F2", [0, 7, 12, 16, 19, 28]), ("C3", [0, 7, 12, 16, 19, 28]), ("G2", [0, 7, 12, 16, 19, 28])]
 
 
 def midi_hz(m):
@@ -49,17 +56,17 @@ def pluck(hz, seconds, rng):
     return out
 
 
-def make_take(path, seed=1):
-    """4 bars of strummed chords, one per bar (Am F C G), each strummed on the downbeat and again on beat 3."""
+def make_take(path, seed=1, bpm=BPM):
+    """4 bars of strummed chords, one per bar (Am F C G), each strummed on the downbeat and again on beat 3, at `bpm`."""
     rng = np.random.default_rng(seed)
-    bar = 60 / BPM * 4
+    bar = 60 / bpm * 4
     x = np.zeros(int(SR * bar * BARS))
     for b, (root, intervals) in enumerate(CHORDS):
         base = {"A2": 45, "F2": 41, "C3": 48, "G2": 43}[root]
         for beat in (0, 2):
-            t0 = int(SR * (b * bar + beat * 60 / BPM))
+            t0 = int(SR * (b * bar + beat * 60 / bpm))
             for k, iv in enumerate(intervals):             # strum: each string 15 ms after the last
-                s = pluck(midi_hz(base + iv), 60 / BPM * 2, rng)
+                s = pluck(midi_hz(base + iv), 60 / bpm * 2, rng)
                 i = t0 + int(SR * 0.015 * k)
                 x[i:i + len(s)] += s[:len(x) - i] * 0.2
     sf.write(path, np.clip(x, -1, 1).astype(np.float32), SR, subtype="PCM_16")
@@ -73,6 +80,18 @@ def seed(*args):
     print("$ seed-take", " ".join(a for a in args if not a.startswith("--password")), "\n" + r.stdout.rstrip() + ("\n" + r.stderr.rstrip() if r.stderr.strip() else ""))
     assert r.returncode == 0, f"seed-take exited {r.returncode}"
     return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def cli(*args, ok=True):
+    """Run the real CLI as an agent would (MOBDAW_URL and MOBDAW_TOKEN from the environment); returns stdout+stderr."""
+    r = subprocess.run([sys.executable, "-m", "badmidi", *args], cwd=os.path.join(ROOT, "agent"), capture_output=True, text=True)
+    print("$ badmidi", " ".join(args), "\n" + r.stdout.rstrip() + ("\n" + r.stderr.rstrip() if r.stderr.strip() else ""))
+    assert (r.returncode == 0) == ok, f"badmidi {args} exited {r.returncode}"
+    return r.stdout + r.stderr
+
+
+def history(c, pid):
+    return c._call("GET", f"/projects/{pid}/history?since=0&limit=100")
 
 
 def events(c, pid, since=None, wait=0):
@@ -154,9 +173,79 @@ def main(pid=None):
     assert t02 == 4 and len(sig2) == len(signal), (t02, len(sig2))
     assert np.allclose(sig2, source.decode(wav2)[:len(sig2)], atol=1e-6)
 
-    # --- 3. (later milestones) `badmidi listen <pid> --track Guitar` must report Am | F | C | G; then write a Bass track, push it
-    #        with `badmidi push ... --apply`, and check it against the heard chords. Extend here: `pid`, `c` and the seeded
-    #        take (`wav`, 4 bars at 120 bpm, one chord per bar, strummed on beats 1 and 3) are ready.
+    # --- 3. the CLI as an agent runs it: listen, pull --listen, draft a bass, push --patch bass
+    chart = cli("listen", pid, "--track", "Guitar", "--bars", "1-4")
+    assert "on the grid" in chart and "heard as chords" in chart, chart
+    roots = re.findall(r"^\s*(\d+)\s+(\S+)", chart, re.M)
+    assert roots == [("1", "Am"), ("2", "F"), ("3", "C"), ("4", "G")], roots
+
+    piece = os.path.join(tmp, "piece.py")
+    out = cli("pull", pid, "--listen", "Guitar", "-o", piece)
+    assert "guitar (heard)" in out or "heard" in out, out
+    src = open(piece).read()
+    assert 'HEARD = {' in src and '"guitar"' in src, "the piece has no HEARD"
+    with open(piece, "a") as f:
+        f.write('\nbass_guitar = score.part("bass guitar")\n'
+                'bass_guitar.at(HEARD["guitar"].bar, bass.line(HEARD["guitar"], style="root-fifth", key=score.key))\n')
+    cli(piece, "check")
+    grid = cli(piece, "grid", "--bars", "1-4")
+    assert all(sym in grid for sym in ("Am", "F", "C", "G")), grid
+
+    n_hist = len(history(c, pid))
+    dry = cli("push", piece, "--patch", "bass")
+    assert "dry run" in dry and "new track 'bass guitar'" in dry and "heard" not in dry, dry
+    assert len(history(c, pid)) == n_hist, "a dry run changed the project"
+    applied = cli("push", piece, "--patch", "bass", "--apply", "--label", "bass for Guitar")
+    assert "pushed as history entry" in applied, applied
+    hist = history(c, pid)
+    assert len(hist) == n_hist + 1 and hist[-1]["text"] == "bass for Guitar", hist[-3:]
+
+    state = c.state(pid)
+    assert not any("heard" in t["name"] for t in state["tracks"]), [t["name"] for t in state["tracks"]]
+    bass_track = next(t for t in state["tracks"] if t["name"] == "bass guitar")
+    (dev,) = [d for d in bass_track["devices"] if d["type"] == "finnwave"]
+    for k, v in patches.get("bass").params.items():
+        assert abs(dev["params"][k] - v) < 1e-6, (k, v, dev["params"])
+    (bclip,) = [x for x in bass_track["clips"] if x["kind"] == "midi"]
+    notes = bclip["notes"]
+    ppq = state["meta"]["ppq"]
+    assert notes and all(as_pitch("E1").midi <= as_pitch(n["p"]).midi <= as_pitch("G3").midi for n in notes), [n["p"] for n in notes]
+    for bar, root in enumerate((9, 5, 0, 7)):                   # A F C G on beat 1 of bars 1-4 (4/4, so a bar is 4 * ppq ticks)
+        at = [n for n in notes if n["t"] == bar * ppq * 4]
+        assert at, f"no bass note on beat 1 of bar {bar + 1}: {[(n['p'], n['t']) for n in notes]}"
+        assert as_pitch(at[0]["p"]).midi % 12 == root, (bar + 1, at[0]["p"], root)
+    print("bass:", " ".join(f"{n['p']}@{n['t'] / ppq:g}" for n in notes))
+
+    # --- d. a take that is not on the click is refused with advice, not guessed at
+    drift = os.path.join(tmp, "drift.wav")
+    make_take(drift, seed=3, bpm=BPM * 1.03)
+    seed(*who, "--project", pid, "--wav", drift, "--track", "Drift", "--bar", "1")
+    bad = cli("listen", pid, "--track", "Drift", "--bars", "1-4", ok=False)
+    assert "OFF the grid" in bad and "drifts from the project's beats" in bad and "Re-record" in bad, bad
+
+    # --- e. the chat loop: a person asks in chat, the example agent listens, drafts, pushes, and answers in chat
+    n_hist = len(history(c, pid))
+    agent = subprocess.Popen([sys.executable, "-u", os.path.join(ROOT, "agent", "examples", "bass_for_take.py"), pid, "--track", "Guitar",
+                              "--style", "walk", "--watch", "--once"], cwd=os.path.join(ROOT, "agent"), stdout=subprocess.PIPE, text=True)
+    try:
+        assert "waiting" in agent.stdout.readline(), "the agent did not start waiting"      # it holds an event cursor now
+        seed(*who, "--project", pid, "--chat", f"@{user}(api) bass for Guitar, bars 1-4, walk")
+        until(lambda: agent.poll() is not None, "the agent to answer", 90)
+    finally:
+        if agent.poll() is None:
+            agent.kill()
+        rest = agent.stdout.read()
+    print(rest.rstrip())
+    assert agent.returncode == 0, f"bass_for_take exited {agent.returncode}"
+    chat = c._call("GET", f"/projects/{pid}/chat?since=0")["messages"]
+    replies = [m for m in chat if m["username"] == f"{user} (api)"]
+    assert any("heard: Am | F | C | G" in m["text"] for m in replies), [m["text"] for m in replies]
+    hist = history(c, pid)
+    assert len(hist) == n_hist + 1 and hist[-1]["text"] == "bass for Guitar", hist[-2:]
+    assert f"revert with history seq {hist[-1]['seq']}" in replies[-1]["text"], replies[-1]["text"]
+    print("chat reply:", replies[-1]["text"].replace("\n", " / "))
+    state = c.state(pid)
+    assert [t["name"] for t in state["tracks"]].count("bass guitar 2") == 1, [t["name"] for t in state["tracks"]]
 
     print(f"\nOK: end to end (project {pid})")
 

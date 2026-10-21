@@ -119,6 +119,14 @@ class Client:
         """The signed download URL of a project sample: absolute (S3) or a path on the server (local storage)."""
         return self._call("GET", f"/projects/{pid}/samples/{hash}/url")["url"]
 
+    def events(self, pid: str, since: int | None = None, wait: float = 0) -> dict:
+        """{cursor, events, gap?}: long-poll the project's events (chat, history, presence, samples). Without `since`: from now."""
+        return self._call("GET", f"/projects/{pid}/events?wait={wait:g}" + ("" if since is None else f"&since={since}"))
+
+    def chat(self, pid: str, text: str) -> dict:
+        """Say something in the project's chat as this token's user ("name (api)")."""
+        return self._call("POST", f"/projects/{pid}/chat", {"text": text})
+
     def ops(self, pid: str, ops: list[dict], label: str) -> dict:
         return self._call("POST", f"/projects/{pid}/ops", {"label": label[:40], "ops": ops})
 

@@ -1,7 +1,8 @@
 # Listening: from a recorded take to an agent's bass track
 
 Plan of record for teaching the badmidi bridge to hear audio. Read `BRIDGE-PLAN.md` (pull/push) and `docs/agent-api.md`
-first. Status: phases 1-5 built (milestones 1-4; the bass patch needs a listening pass); phase 6 is documented in AGENTS.md, the e2e run is not.
+first. Status: phases 1-6 built (milestones 1-5; the bass patch needs a listening pass). The chat loop runs end to end in `tests/e2e_audio_live.sh` against
+`examples/bass_for_take.py`; milestone 6 (monophonic) is open.
 
 ## The goal, as a user sees it
 

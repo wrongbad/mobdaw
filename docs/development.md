@@ -45,10 +45,16 @@ The API and the `/collab` WebSocket share one port (8787); Vite proxies both in 
   `audit [--fix]` (reconcile storage with the DB: leaked objects, broken uploads, orphan library links,
   `bytes_used` drift; exits non-zero on findings; `--fix` deletes leaked objects and
   recomputes `bytes_used`). Reads `.env`; operates on `DB_PATH` and the configured storage.
-- **End-to-end audio test:** `agent/tests/e2e_audio_live.sh` starts a throwaway local server (own port, db and storage in a temp
-  dir), makes a user, seeds a generated take into a project with `tools/seed-take.ts` (options in its header: it logs in, uploads
+- **End-to-end audio test:** `agent/tests/e2e_audio_live.sh` (about 30 s) starts a throwaway local server (own port, db and storage in a temp
+  dir), makes a user, seeds generated takes into a project with `tools/seed-take.ts` (options in its header: it logs in, uploads
   through the session routes and adds the sample and clip to the collab document, as a recording does; `--mint-token` prints an
-  API token for `MOBDAW_TOKEN`), runs `agent/tests/e2e_audio_live.py` against it and stops the server.
+  API token for `MOBDAW_TOKEN`; `--chat "text"` posts a chat message as that user), runs `agent/tests/e2e_audio_live.py` against it
+  and stops the server. The run covers: the agent view of a take, fetching and decoding it, an `incoming` take and its `sample`
+  event; then the CLI as an agent drives it: `listen` (chart Am F C G, "on the grid"), `pull --listen`, a bass drafted with
+  `bass.line` in the piece, `check`/`grid`, `push --patch bass` dry run then `--apply` (a finnwave track with the patch params, beat 1
+  of each bar on the chord root, E1-G3, one history entry, the heard part not pushed), a take 3% fast refused with advice, and the
+  chat loop: `examples/bass_for_take.py --watch --once` waits, the seed tool posts "@e2e(api) bass for Guitar, bars 1-4, walk", and
+  the reply in chat carries the chart ("heard: Am | F | C | G?") and "revert with history seq N", with one more history entry.
 
 ## Layout
 `shared/` Yjs schema helpers + API types (consumed as TS source) · `server/` Hono API +

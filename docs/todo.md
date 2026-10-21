@@ -50,3 +50,5 @@
 
 - **Heard parts assume one beat unit and 16th slots.** `listen` takes the beat as the meter's 1/den note (a 6/8 bar is six eighths, not two dotted quarters) and sizes rhythm slots from the first bar's beat, so a take across a meter change with a different denominator gets mislabelled rhythm slots, and compound meters get chords per eighth (noisy). Fix: group compound-meter beats by three in `listen` and store the slot per bar in `Rhythm`.
 
+
+- **`examples/bass_for_take.py` guesses "unsure" from half of the chart's rule.** A `HeardChord` keeps the runner-up's name (`alt`, set even when the chord is clear) but not its score, so the script calls a chord unsure when `conf < 0.5`, while `hear.format_chart` also uses `runner_up score > 0.5 * conf`. Chat can therefore say a bar is fine that the chart marks `<- unsure`. Fix: keep the runner-up's score in `HeardChord` (e.g. `alt_conf`) and share one `is_unsure` helper between `format_chart` and the example. Also: the e2e's expected chords ("Am | F | C | G?") depend on `hear.py`'s current thresholds; the G bar is at 0.46.

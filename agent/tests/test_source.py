@@ -12,7 +12,7 @@ from badmidi.source import to_source, write_source
 from badmidi.views import has_errors
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXAMPLES = sorted(glob.glob(os.path.join(ROOT, "examples", "*.py")))
+EXAMPLES = [p for p in sorted(glob.glob(os.path.join(ROOT, "examples", "*.py"))) if not p.endswith("bass_for_take.py")]   # a tool, not a piece
 
 
 def sounding(p):

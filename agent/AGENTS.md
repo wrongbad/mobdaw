@@ -636,6 +636,13 @@ The loop, for a chat request ("make a bass for Guitar, bars 1-16"):
 4. `badmidi push song.py --apply --label "bass for Guitar" --patch bass` (or `--like` an existing bass track): one history entry.
 5. `send_chat`: the chart you heard, what the bass does, the `unsure` choices, and how to revert. The audio is unheard: say so.
 
+`examples/bass_for_take.py` is this loop as a script with no taste in it: `MOBDAW_TOKEN=... python examples/bass_for_take.py "My Song"
+--track Guitar [--style walk] [--bars 1-16]` does steps 2-5 once (listen, `bass.line` draft, check, `push` with the `bass` patch as one
+entry "bass for Guitar", a chat reply with `heard: Am | F | C | G?` and "revert with history seq N"), and `--watch [--once]` waits
+for a chat mention such as "@you(api) bass for Guitar, bars 1-8, walk" and does it for each (it says "waiting for the take to
+upload" if the sample is `incoming`, and relays the advice if the take is off the click). It uses the bridge and listen Python APIs
+directly; read it as the skeleton and replace `draft()` with a part you wrote by ear.
+
 Limits: chords only (`--as notes` for a sung line is not built); a take recorded off the click is refused; compound meters are
 heard per 1/8 beat; a power chord's major/minor is read from the key.
 
