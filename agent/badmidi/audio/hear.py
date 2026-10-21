@@ -1044,18 +1044,18 @@ def _bar_notes(h: Heard, a: int, b: int, beat_q: Fraction, flats: bool) -> str:
 
 
 def format_chart(h: Heard, grid: Grid, name: str = "audio", first_bar: int = 1, mode: str | None = None,
-                 beat_q: Fraction = Fraction(1)) -> str:
+                 beat_q: Fraction = Fraction(1), where: str | None = None) -> str:
     """One bar per line with confidence, a runner-up where unsure; then tuning, key, grid check, rhythm (bars with the
     same pattern share a line). `first_bar` numbers the bars; `mode` ('chords', 'notes') is named in the header, with the
     reason when it was chosen by ear. A line heard as notes prints the notes of each bar (`beat_q`: quarters per beat) and
-    a guess at the chord, which is not heard."""
+    a guess at the chord, which is not heard. `where` replaces the grid check's words in the header (how the take sits on the beats)."""
     bars = grid.bars()
     gc = h.grid_check
     span = f"{len(bars)} bars" + (f" ({first_bar}-{first_bar + len(bars) - 1})" if first_bar != 1 else "")
     why = f" (auto: {h.decision.why})" if h.decision else ""
     lines = [f"{name}, {span}, " + (f"heard as {mode}{why}, " if mode else "") + f"tuning {h.tuning_cents:+.0f} c, key {h.key.name}, "
-             + (f"on the grid ({gc.mean_offset * 1000:+.0f} ms)" if gc.on_grid else
-                f"OFF the grid (mean {gc.mean_offset * 1000:+.0f} ms, drift {gc.drift * 1000:+.0f} ms, spread {gc.spread * 1000:.0f} ms)")]
+             + (where or (f"on the grid ({gc.mean_offset * 1000:+.0f} ms)" if gc.on_grid else
+                          f"OFF the grid (mean {gc.mean_offset * 1000:+.0f} ms, drift {gc.drift * 1000:+.0f} ms, spread {gc.spread * 1000:.0f} ms)"))]
     notes = h.mode == "notes"
     for n, (a, b) in enumerate(bars, first_bar):
         cells = []

@@ -7,7 +7,9 @@
 
 Styles: `roots` (the bass note of each chord, struck again on every bar line), `root-fifth` (a root, then a fifth, on every
 beat), `pulse` (8ths on the root; heard strong onsets that fall between 8ths are added, and every strong one is accented),
-`walk` (a beat each: root, chord tones, then an approach note, chromatic or from `key`, into the next change). The note
+`walk` (a beat each: root, chord tones, then an approach note, chromatic or from `key`, into the next change). `swing=` (default:
+the heard take's, `HEARD[..].timing`, when it was a swing feel) puts the off-beat 8ths of `pulse` where the take played them, e.g. 0.62 of
+the beat (rounded to 1/48 of it, whole ticks at 960 ppq); a triplet feel (3 or 6 slots to the beat in the heard rhythm) pulses in triplet 8ths. The note
 under a chord is its `bass` pitch class, so inversions are kept; each pitch is the octave nearest the one before, inside
 `range`. A `kick` (onset times, or a drum Part) pulls onsets onto the kick: added in `pulse`, snapped to in the others.
 The Motif starts at the first chord; place it at that bar (`heard.bar`).
@@ -48,6 +50,13 @@ class _Voice:
         return self.prev
 
 
+def _step(rhythm: Rhythm | None) -> Fraction:
+    """The pulse's step in quarters: an 8th, or a third of the beat when the heard rhythm is in thirds (a triplet feel)."""
+    if rhythm and rhythm.slot and rhythm.beat / rhythm.slot in (3, 6):
+        return rhythm.beat / 3
+    return Fraction(1, 2)
+
+
 def _bars(t0: Fraction, end: Fraction, rhythm: Rhythm | None) -> list[tuple[Fraction, Fraction]]:
     if rhythm and rhythm.bars:
         return rhythm.bar_spans()
@@ -76,12 +85,14 @@ def _approach(v: _Voice, target_pc: int, scale: Scale | None, avoid: int | None)
     return min(cands, key=lambda m: (abs(m - ref), m)) if cands else None
 
 
-def line(chords, rhythm: Rhythm | None = None, style: str = "roots", key=None, range=("E1", "G3"), kick=None) -> Motif:
-    """A draft bass Motif for the chords (HeardChords, or a HeardPart, which also gives the rhythm and key)."""
+def line(chords, rhythm: Rhythm | None = None, style: str = "roots", key=None, range=("E1", "G3"), kick=None, swing: float | None = None) -> Motif:
+    """A draft bass Motif for the chords (HeardChords, or a HeardPart, which also gives the rhythm, key and swing)."""
     if style not in STYLES:
         raise ValueError(f"unknown bass style {style!r}; known: {', '.join(STYLES)}")
     if isinstance(chords, HeardPart):
         rhythm, key = rhythm or chords.rhythm, key or chords.key
+        if swing is None and chords.timing is not None and chords.timing.feel == "swing8":
+            swing = chords.timing.swing
         chords = chords.chords
     chords = sorted(chords, key=lambda c: c.start)
     if not chords:
@@ -94,6 +105,14 @@ def line(chords, rhythm: Rhythm | None = None, style: str = "roots", key=None, r
     t0, end = chords[0].start, chords[-1].end
     beat = rhythm.beat if rhythm else Fraction(1)
     bars = _bars(t0, end, rhythm)
+    step = _step(rhythm)
+    sw = Fraction(min(max(round((swing or 0.5) * 48), 24), 40), 48)            # where the off-beat 8th falls in its beat
+
+    def swung(t: Fraction) -> Fraction:
+        """An off-beat 8th (halfway through a beat of the bar) moved to where the take swung it."""
+        u = (t - _bar_start(t, bars)) / beat
+        return t + (sw - Fraction(1, 2)) * beat if sw != Fraction(1, 2) and u - (u.numerator // u.denominator) == Fraction(1, 2) else t
+
     v = _Voice(lo, hi)
     out: list[tuple[Fraction, int | None, bool]] = []         # (onset, midi or None for a rest, accent)
 
@@ -118,12 +137,13 @@ def line(chords, rhythm: Rhythm | None = None, style: str = "roots", key=None, r
             t = c.start
             while t < c.end:
                 grid.append(t)
-                t += Fraction(1, 2)
+                t += step
             heard = rhythm.onsets(c.start, c.end, STRONG) if rhythm else []
             hits = {t for t, _ in heard} | {k for k in kick if c.start <= k < c.end}
             pitch = v.pick(c.bass)
-            for t in sorted(set(grid) | hits):
-                out.append((t, pitch, t in hits))
+            on = {(t if t in kick else swung(t)): t in hits for t in set(grid) | hits}
+            for t in sorted(on):
+                out.append((t, pitch, on[t]))
         else:                                                  # walk
             n = max(1, -((c.start - c.end) // beat))
             third, fifth = c.third(), c.fifth()

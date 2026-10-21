@@ -14,7 +14,7 @@ from .core import (ARTICULATIONS, BAR, CRESC, DIM, DURATIONS, DYNAMICS, HAIRPIN_
                    PED, PED_UP, Bar, Chord, Event, M, Mark, Motif, Note, Pitch, R, as_pitch, duration,
                    dyn, isorhythm, spelling, text)
 from . import bass
-from .heard import HeardChord, HeardNote, HeardPart, Rhythm
+from .heard import HeardChord, HeardNote, HeardPart, HeardTiming, Rhythm
 from .ingest import (ImportReport, Source, SourceNote, SourceTrack, build_score, import_midi,
                      load_midi, score_from_source)
 from .musicxml import import_musicxml, load_musicxml
@@ -24,7 +24,7 @@ from .scale import MODES, Scale, key
 from .score import INSTRUMENTS, Meter, Part, Score
 from .source import to_source, write_source
 
-__all__ = ["HeardChord", "HeardNote", "HeardPart", "Rhythm", "ARTICULATIONS", "BAR", "Bar", "CRESC", "Chord", "DIM", "DURATIONS", "DYNAMICS", "Event",
+__all__ = ["HeardChord", "HeardNote", "HeardPart", "HeardTiming", "Rhythm", "ARTICULATIONS", "BAR", "Bar", "CRESC", "Chord", "DIM", "DURATIONS", "DYNAMICS", "Event",
            "HAIRPIN_END", "INSTRUMENTS", "M", "MODES", "Mark", "Meter", "Motif", "PED", "PED_UP",
            "dyn", "text", "Note", "Part", "Pitch", "R", "Scale", "Score", "as_pitch",
            "duration", "interval_vector", "isorhythm", "key", "normal_order", "observe", "prime_form",

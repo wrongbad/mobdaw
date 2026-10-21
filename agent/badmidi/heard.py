@@ -134,6 +134,40 @@ class Rhythm:
 
 
 @dataclass
+class HeardTiming:
+    """What the listening decided about time, as data a piece can read (`HEARD["guitar"].timing`).
+
+    `case` 'a': the project has a timing reference (a click track, or MIDI notes): its time map is the truth, the take was aligned
+    to its beats (`alignment`: tight | feel | drifting; `offset_ms`, + is behind the beat; `drift_ms`) and every heard position is
+    on the project's grid. Case 'b': audio only, so the audio defined the map: the detected `bpm`, `meter`, first downbeat
+    (`downbeat_s`, project seconds) and `pickup_s` (the free bar before it, 0 for none), with `map` the proposed regions (the
+    agent view's region dicts; `push` sends them in the same batch as the bass, `--keep-map` does not). `feel`: straight16 |
+    triplet8 | triplet16 | swing8 with `swing` the off-beat 8th's place in its beat (0.5 straight, 0.667 triplet). `conf`: confidences
+    by name (alignment, feel, tempo, meter, downbeat); `warnings`: what is a guess, naming the other reading."""
+    case: str
+    reference: str = ""
+    feel: str = "straight16"
+    swing: float = 0.5
+    summary: str = ""
+    alignment: str = ""
+    offset_ms: float = 0.0
+    drift_ms: float = 0.0
+    bpm: float = 0.0
+    meter: str = ""
+    downbeat_s: float = 0.0
+    pickup_s: float = 0.0
+    conf: dict = field(default_factory=dict)
+    warnings: list = field(default_factory=list)
+    map: list = field(default_factory=list)
+    keep_map: bool = False
+
+    def __repr__(self) -> str:
+        d = {k: getattr(self, k) for k in self.__dataclass_fields__ if getattr(self, k) not in ("", 0.0, 0, [], {}, False) or k in ("case", "feel", "swing")}
+        ind = "            "
+        return "HeardTiming(\n" + "".join(f"{ind}{k}={v!r},\n" for k, v in d.items()) + ind[:-4] + ")"
+
+
+@dataclass
 class HeardPart:
     """A track as heard: chords per span and the rhythm, plus what the analysis said about the take. `part` is the name of
     the read-only part in the Score ("guitar (heard)"). `bar` is the first bar heard."""
@@ -147,9 +181,10 @@ class HeardPart:
     rhythm: Rhythm | None = None
     mode: str = "chords"
     notes: list[HeardNote] = field(default_factory=list)
+    timing: HeardTiming | None = None
 
     def __getitem__(self, k: str):
-        if k not in ("chords", "rhythm", "key", "tuning", "track", "bar", "grid", "mode", "part", "notes"):
+        if k not in ("chords", "rhythm", "key", "tuning", "track", "bar", "grid", "mode", "part", "notes", "timing"):
             raise KeyError(k)
         return getattr(self, k)
 
@@ -164,6 +199,8 @@ class HeardPart:
         rhythm = "None" if self.rhythm is None else self.rhythm.source(ind)
         notes = "".join(f"\n{ind}    {n!r}," for n in self.notes)
         tail = f",\n{ind}notes=[{notes}\n{ind}]" if self.mode == "notes" else ""
+        if self.timing is not None:
+            tail += f",\n{ind}timing={self.timing!r}"
         return (f'    "{var}": HeardPart(\n{ind}track="{self.track}", part="{self.part}", key="{self.key}", tuning={self.tuning:.0f}, '
                 f'bar={self.bar}, mode="{self.mode}",\n{ind}grid="{self.grid}",\n{ind}chords=[{chords}\n{ind}],\n{ind}rhythm={rhythm}{tail}),')
 

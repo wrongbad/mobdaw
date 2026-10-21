@@ -17,7 +17,10 @@ are left out (said in the report); notes in looped clips are shown as stored and
 What is pushed: only notes. A note is identified by (track, onset, pitch): new ones become `addNotes` (into the
 clip that covers them, else a new clip), missing ones `removeNotes`, a changed length `updateNotes`; a part the
 snapshot doesn't know becomes a new track (`--like <track>` copies another track's whole device chain). Meter,
-tempo, markers and the key are the project's: if the piece's timeline differs, push refuses. It also refuses
+tempo, markers and the key are the project's: if the piece's timeline differs, push refuses. The one exception is an
+audio-only project (no click track, no MIDI notes) pulled with `--listen`: the audio defines the time map, so the pull
+puts the proposed map in the piece and the snapshot, and push sends its region ops FIRST in the same batch as the notes
+(one history entry; `--keep-map` leaves the map alone). The piece must still match exactly that map. It also refuses
 when the project moved since the pull (someone else edited), so pull again.
 """
 from __future__ import annotations
@@ -501,10 +504,10 @@ def _baseline(score: Score, parts_by_track: dict[str, list[str]], tracks: list[_
 
 
 def _snapshot(state: dict, project: str, filter_info: dict | None, tracks: list[_Track], parts_by_track: dict, baseline: list[dict], bars: int,
-              heard: list[dict] | None = None) -> dict:
+              heard: list[dict] | None = None, map_ops: list[dict] | None = None, map_text: str = "") -> dict:
     return {
         "project": project, "rev": state.get("rev"), "ppq": state["meta"]["ppq"], "regions": state["regions"], "filter": filter_info or {},
-        "bars": bars, "notes": baseline, "heard": heard or [],
+        "bars": bars, "notes": baseline, "heard": heard or [], "map_ops": map_ops or [], "map_text": map_text,
         "tracks": [{"id": tr.info["id"], "name": tr.info["name"], "drums": tr.drums, "parts": parts_by_track.get(tr.info["id"], []), "clips": tr.clips}
                    for tr in tracks],
     }
@@ -516,11 +519,21 @@ def _sig(score: Score, part: str) -> str:
     return hashlib.sha1(json.dumps(ev).encode()).hexdigest()
 
 
-def pull(state: dict, project: str = "", filter_info: dict | None = None, heard: list[HeardPart] | None = None) -> Pulled:
+def pull(state: dict, project: str = "", filter_info: dict | None = None, heard: list[HeardPart] | None = None, proposal=None) -> Pulled:
     """A Score and a snapshot from a project state (see the module docstring). `heard`: audio tracks as heard
-    (badmidi.audio.listen): each becomes a read-only part "<track> (heard)" and an entry of the piece's HEARD."""
+    (badmidi.audio.listen): each becomes a read-only part "<track> (heard)" and an entry of the piece's HEARD. `proposal`: the time
+    map an audio-only project gets from its audio (`Listened.proposal`: `.regions`, `.ops(current regions)`, `.describe()`): the
+    Score is built on that map, and the snapshot holds it as the map the piece must match plus the ops that make the project have it,
+    which `plan` puts first in the batch."""
     ppq = state["meta"]["ppq"]
     report: list[str] = []
+    map_ops, map_text = [], ""
+    if proposal is not None:
+        map_ops = proposal.ops(state["regions"])
+        map_text = proposal.describe()
+        state = {**state, "regions": proposal.regions}
+        report.append(f"time map: the project had no click or MIDI notes, so the audio defines it: {map_text} "
+                      + (f"({len(map_ops)} region ops, sent first in the same push as the bass: one history entry, a revert undoes both)" if map_ops else "(the project already has it)"))
     score, keyed = _start_score(state)
     _timeline_into(score, state, report)
     tracks = _collect(state, report)
@@ -623,7 +636,11 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None, heard:
         what = (f"{len(h.notes)} notes (a line; the chords are a guess from the melody)" if h.mode == "notes" else f"{len(h.chords)} chord spans")
         report.append(f"heard: {h.part!r} from audio track {h.track!r}: {what}, key {h.key}, {h.grid}; "
                       f"read-only (HEARD in the piece has the {'notes, guessed chords' if h.mode == 'notes' else 'chords'} and rhythm; push skips it, --guide pushes it muted)")
-    return Pulled(score, _snapshot(state, project, filter_info, tracks, parts_by_track, baseline, score.bars if score.parts else 0, marks), report, hp)
+        if h.timing:
+            report.append(f"timing of {h.track!r} (case {h.timing.case.upper()}): {h.timing.summary}")
+            report += [f"warning ({h.track!r}): {w}" for w in h.timing.warnings]
+    return Pulled(score, _snapshot(state, project, filter_info, tracks, parts_by_track, baseline, score.bars if score.parts else 0, marks, map_ops, map_text),
+                  report, hp)
 
 
 # --- push: Score + snapshot -> ops ---------------------------------------------------
@@ -734,7 +751,9 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
                                   "Put your changes in another part (HEARD has the chords), or push it as a muted track you can then edit with --guide")
     ppq = snap["ppq"]
     tl = Timeline({"meta": {"ppq": ppq}, "regions": snap["regions"]})
-    pl = PushPlan()
+    pl = PushPlan(ops=list(snap.get("map_ops") or []))
+    if pl.ops:
+        pl.summary.append(f"time map: {snap.get('map_text') or 'from the audio'} ({len(pl.ops)} region ops, first in the batch)")
     known = {n for t in snap["tracks"] for n in t["parts"]}
     # a voice line added to a known part's staff (part.voice(...)) belongs to that part's track
     extra: dict[str, list[str]] = defaultdict(list)
@@ -980,6 +999,9 @@ def pull_main(argv: list[str]) -> int:
                     help="an audio track to hear as chords or notes: a read-only '<track> (heard)' part and HEARD in the piece (needs badmidi[audio]); repeatable")
     ap.add_argument("--as", dest="mode", default="auto", choices=("auto", "chords", "notes"), help="--listen: chords, notes (a sung or single-note line) or auto (default)")
     ap.add_argument("--wait", type=float, default=0, metavar="SECONDS", help="--listen: wait this long for a take that is still uploading")
+    ap.add_argument("--case", default="auto", choices=("auto", "a", "b"),
+                    help="--listen: a = follow the project's time map (it has a click track or MIDI notes), b = the audio defines the map; default auto")
+    ap.add_argument("--keep-map", action="store_true", help="--listen, audio-only project: do not change the project's time map (the bass is placed on the old map's ticks)")
     args = ap.parse_args(argv)
     from .views import has_errors
     c = Client()
@@ -989,23 +1011,25 @@ def pull_main(argv: list[str]) -> int:
     state = c.state(pid, tracks, bars)
     name = next((p["name"] for p in c.projects() if p["id"] == pid), "project")
     state["name"] = name
-    heard, charts = [], []
+    heard, charts, proposal = [], [], None
     if args.listen:
         try:
             from .audio.listen import listen
         except ImportError:
             raise BridgeError("--listen needs numpy, scipy and soundfile: pip install 'badmidi[audio]'") from None
+        whole = c.state(pid)                  # the case is decided from the whole project (its click track and MIDI notes), whatever --tracks says
         for tr in args.listen:
             try:
-                got = listen(c, pid, c.state(pid, [tr]), tr, bars, args.mode, args.wait)
+                if proposal is None:
+                    got = listen(c, pid, whole, tr, bars, args.mode, args.wait, case=args.case, keep_map=args.keep_map)
+                else:                         # a second track is heard against the map the first one proposed
+                    got = listen(c, pid, {**whole, "regions": proposal.regions}, tr, bars, args.mode, args.wait, case="a")
             except SampleIncoming:
                 raise BridgeError(f"the take on {tr!r} is still uploading from the recorder's device; try again in a minute, or pass --wait 120") from None
-            if not got.ok:
-                print(got.chart().splitlines()[0])
-                raise BridgeError(f"{tr}: {got.problem()}")
+            proposal = proposal or got.proposal
             heard.append(got.part)
             charts.append(got.chart())
-    pulled = pull(state, pid, {k: v for k, v in (("tracks", tracks), ("fromBar", bars and bars[0]), ("toBar", bars and bars[1])) if v}, heard)
+    pulled = pull(state, pid, {k: v for k, v in (("tracks", tracks), ("fromBar", bars and bars[0]), ("toBar", bars and bars[1])) if v}, heard, proposal)
     out = args.out or re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_").lower() + ".py"
     write_pulled(pulled, out, "\n".join([f"pulled from mobdaw project {name!r} ({pid}) at rev {state.get('rev')}", *pulled.report]), args.phrase)
     n = len(pulled.snapshot["notes"])
