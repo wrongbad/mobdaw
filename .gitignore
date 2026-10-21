@@ -21,3 +21,4 @@ docs/listen/*/*.flac
 docs/listen/*/*.mp3
 docs/listen/*/*.ogg
 docs/listen/*/*.m4a
+__pycache__/

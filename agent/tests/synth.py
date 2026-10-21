@@ -109,14 +109,6 @@ PATTERNS = {
 }
 
 
-@dataclass
-class Strike:
-    t: float                  # seconds, of the first string
-    down: bool
-    vel: float
-    chord: int                # index of the chord segment
-
-
 def render(bars, bpm: float = 100, per_bar: int = 4, pattern: str | list | None = None, detune: float = 0.0, seed: int = 1,
            sr: int = SR, drive: float = 0.0, wet: float = 0.12, noise: float = 0.003, tail: float = 1.0,
            body: float = 1.0, offset: float = 0.0) -> np.ndarray:
