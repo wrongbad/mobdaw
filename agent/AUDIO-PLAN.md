@@ -1,8 +1,12 @@
 # Listening: from a recorded take to an agent's bass track
 
 Plan of record for teaching the badmidi bridge to hear audio. Read `BRIDGE-PLAN.md` (pull/push) and `docs/agent-api.md`
-first. Status: phases 1-6 built (milestones 1-5; the bass patch needs a listening pass). The chat loop runs end to end in `tests/e2e_audio_live.sh` against
-`examples/bass_for_take.py`; milestone 6 (monophonic) is open.
+first. Status: phases 1-6 built (milestones 1-5; the bass patch needs a listening pass), milestone 6 (monophonic) built. The chat loop runs end to
+end in `tests/e2e_audio_live.sh` against `examples/bass_for_take.py`, on a take of open-position guitar shapes (`tests/synth.py`: six
+Karplus-Strong strings, strum, body, room). The chord hearing was hardened against such playing (single thirds are not power chords,
+the key comes from the chord sequence, confidence compares rival roots and families, `HeardChord.alt_conf` and one `is_unsure()`),
+and `tools/listen-eval.py` scores it against labelled takes. Everything above is measured on synthetic guitar only: **the next step is
+real recordings** through `tools/listen-eval.py`, then refitting the constants in `hear.py` marked in `docs/todo.md`.
 
 ## The goal, as a user sees it
 
@@ -162,7 +166,7 @@ The agent runs wherever the user's Claude Code runs (laptop or a cloud session w
 - **Synthetic audio (fast):** badmidi already renders WAV. Render known progressions with harmonic-rich voices (saw
   pads, plucked strings, a sung-like formant tone), add noise and reverb, detune by 15 cents, and assert >= 90% of beats
   get the right chord root and >= 80% the right quality; monophonic lines -> notes within one 16th and the right pitch.
-- **Real recordings (tool, not test):** `tools/listen-eval` runs `listen` over a folder of short takes with hand-written
+- **Real recordings (tool, not test):** `tools/listen-eval.py` (built) runs the hearing over a folder of short takes with hand-written
   chord charts (`*.chords.txt`, committed) and writes `docs/listen/runs/<date>-<label>/report.md` with per-take accuracy.
   The WAVs stay out of git (per CLAUDE.md); keep them backed up elsewhere. Start with: clean electric guitar strummed,
   distorted power chords, fingerpicked acoustic, piano comping, a sung melody.

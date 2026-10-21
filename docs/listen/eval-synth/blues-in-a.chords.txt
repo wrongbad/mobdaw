@@ -1,0 +1,20 @@
+# Synthetic take made by tools/listen-eval.py --make-synth (tests/synth.py); 12 bars with 7ths.
+# synth: pattern=default seed=109 detune=-8
+bpm: 100
+meter: 4/4
+offset: 0
+key: A major / A minor
+tuning: -8
+
+A7
+A7
+A7
+A7
+D7
+D7
+A7
+A7
+E7
+D7
+A7
+E7

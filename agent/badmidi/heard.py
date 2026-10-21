@@ -35,9 +35,9 @@ def is_unsure(conf: float, alt_conf: float, alt: str | bool = True) -> bool:
 class HeardChord(NamedTuple):
     """A chord heard from `start` to `end` (quarters). `bass` is the pitch class the bass plays under it (an inversion if
     it is not the root); `conf` 0..1 is how much better it fits than any chord of another root or family; `alt` is that best
-    rival (empty if none) and `alt_conf` its confidence in the same terms (`is_unsure()` compares them); `implied` is 'm' for a
-    power chord that the key reads as minor; `src` is 'melody' for a chord guessed from a melody's notes (not heard). quality
-    'N' is no chord."""
+    rival (empty when the chord is clear and nothing comes near) and `alt_conf` its confidence in the same terms (`is_unsure()`
+    compares them); `implied` is 'm' for a power chord that the key reads as minor; `src` is 'melody' for a chord guessed from a
+    melody's notes (not heard). quality 'N' is no chord."""
     start: Fraction
     end: Fraction
     symbol: str

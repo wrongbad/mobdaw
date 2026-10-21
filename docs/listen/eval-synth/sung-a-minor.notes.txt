@@ -1,0 +1,12 @@
+# Synthetic take made by tools/listen-eval.py --make-synth (tests/synth.py); a sung line with vibrato.
+# synth: voice=tests/test_hear_notes.sung seed=7
+bpm: 90
+meter: 4/4
+offset: 0
+key: A minor
+tuning: 15
+
+A3.q C4.e E4.e A4.qd G4.e
+F4.q E4.q D4.q C4.q
+E4.e E4.e D4.q C4.h
+A3.q A4.q A3.q A3.q

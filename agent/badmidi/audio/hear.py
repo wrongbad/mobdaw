@@ -172,11 +172,13 @@ def _stft(x: np.ndarray, n: int, hop: int, pad_to: int | None = None) -> np.ndar
 
 
 def tuning_offset(x: np.ndarray) -> float:
-    """Cents the recording sits above 12-TET A440 (-50..50), from the strong spectral peaks."""
+    """Cents the recording sits above 12-TET A440 (-50..50), from the strong spectral peaks between 100 and 800 Hz: the low
+    partials. A string is stiff, so its upper partials are sharp of the harmonic series (by 10 cents or more around the tenth),
+    and the peaks above that would pull the estimate up."""
     n, nfft = 4096, 16384
     S = _stft(x, n, 2048, nfft)
     df = SR / nfft
-    k0, k1 = int(100 / df), int(1000 / df)
+    k0, k1 = int(100 / df), int(800 / df)
     mid = S[:, k0:k1]
     pk = (mid[:, 1:-1] > mid[:, :-2]) & (mid[:, 1:-1] >= mid[:, 2:]) & (mid[:, 1:-1] > 0.05 * S.max(axis=1, keepdims=True)) \
         & (mid[:, 1:-1] > 0.01 * S.max())
@@ -311,6 +313,29 @@ def rhythm(x_or_onsets, grid: Grid, slots_per_beat: int = 4, shift: float = 0.0)
     return Rhythm(slots_per_beat, [acc[a * slots_per_beat:b * slots_per_beat].round(3).tolist() for a, b in grid.bars()])
 
 
+def _drift(t: np.ndarray, off: np.ndarray, slot: float) -> float:
+    """Seconds the onsets' offset from the grid changes across the take. The offsets are phases of the slot (they wrap when the
+    playing runs away from the grid), so take the circular mean of each stretch of 8 slots, dropping its stray onsets (the later
+    strings of a slow strum land a long way from the slot), unwrap those and fit a line."""
+    win = np.floor((t - t[0]) / (8 * slot)).astype(int)
+    tw, aw = [], []
+    for w in np.unique(win):
+        m = win == w
+        if m.sum() < 2:
+            continue
+        ang, tt = off[m] / slot * 2 * np.pi, t[m]
+        for _ in range(2):
+            keep = np.abs(np.angle(np.exp(1j * (ang - np.angle(np.exp(1j * ang).mean()))))) < np.pi / 2
+            if keep.any():
+                ang, tt = ang[keep], tt[keep]
+        tw.append(tt.mean())
+        aw.append(np.angle(np.exp(1j * ang).mean()))
+    if len(tw) < 2:
+        return 0.0
+    un = np.unwrap(aw) / (2 * np.pi) * slot
+    return float(np.polyfit(tw, un, 1)[0] * (t[-1] - t[0]))
+
+
 def grid_check(onset_times, grid: Grid, strengths=None, slots_per_beat: int = 4,
                max_offset: float = 0.03, max_spread: float = 0.03) -> GridCheck:
     """Do the onsets sit on the 16th-note slots? Mean offset, drift across the take, robust spread."""
@@ -325,11 +350,9 @@ def grid_check(onset_times, grid: Grid, strengths=None, slots_per_beat: int = 4,
     j = np.where(np.abs(slots[j] - t) < np.abs(slots[j - 1] - t), j, j - 1)
     off = t - slots[j]
     slot = float(np.median(np.diff(slots)))
-    un = np.unwrap(off / slot * 2 * np.pi) / (2 * np.pi) * slot
     mean = float(np.median(off))
     spread = float(1.4826 * np.median(np.abs(off - mean)))
-    slope = np.polyfit(t, un, 1)[0]
-    drift = float(slope * (t[-1] - t[0]))
+    drift = _drift(t, off, slot)
     return GridCheck(mean, drift, spread, bool(abs(mean) <= max_offset and spread <= max_spread and abs(drift) <= max_offset), len(t))
 
 

@@ -607,11 +607,14 @@ badmidi listen "My Song" --track Guitar --bars 1-16      # the chart; exit 1 wit
 badmidi pull "My Song" --listen Guitar -o song.py         # as pull, plus "guitar (heard)" and HEARD in the piece
 ```
 
-The chart is one bar per line with confidence, `<- unsure` with the runner-up, then tuning, key, the grid check and the strum
+The chart is one bar per line with confidence, `<- unsure` with the rival (another root or family: G against Em, Am against a power
+chord A5; Am against Am7 is not a rival), then tuning, key, the grid check and the strum
 rhythm (`x` strong, `o` weak, one character per 16th). In the piece:
 
-- `HEARD["guitar"]` is a `HeardPart`: `.chords` (`HeardChord(start, end, symbol, root, bass, quality, conf)`, times in quarters,
-  `bass` the pitch class the bass should play, so inversions are kept), `.rhythm` (`Rhythm`: onset strength per slot per bar),
+- `HEARD["guitar"]` is a `HeardPart`: `.chords` (`HeardChord(start, end, symbol, root, bass, quality, conf, alt, alt_conf)`, times in
+  quarters, `bass` the pitch class the bass should play, so inversions are kept; `conf` is how much better the chord fits than the
+  best chord of another root or family, `alt` that rival and `alt_conf` its confidence; `c.is_unsure()` is the chart's `<- unsure`
+  rule, use it rather than your own threshold), `.rhythm` (`Rhythm`: onset strength per slot per bar),
   `.bar`, `.key`. `"guitar (heard)"` is the same chords as block chords, so `grid`, `lens` and `check` hear them.
 - Heard parts are **not the project's**: push skips them and refuses an edit to one (say so, change another part). `push --guide`
   sends them as muted MIDI tracks instead, which humans can then see and fix.
@@ -642,6 +645,15 @@ entry "bass for Guitar", a chat reply with `heard: Am | F | C | G?` and "revert 
 for a chat mention such as "@you(api) bass for Guitar, bars 1-8, walk" and does it for each (it says "waiting for the take to
 upload" if the sample is `incoming`, and relays the advice if the take is off the click). It uses the bridge and listen Python APIs
 directly; read it as the skeleton and replace `draft()` with a part you wrote by ear.
+
+Checking the hearing on real takes: `tools/listen-eval.py DIR --label NAME` scores a folder of recordings against hand-written
+labels and writes `docs/listen/runs/<date>-NAME/report.md` (accuracy per take, key, tuning, confusions, how well the confidence
+tracks the errors). To make a set, record a few takes of 4-16 bars to a click (a phone memo is fine, any wav/flac/mp3), put each in
+the folder as `take.wav` with `take.chords.txt` beside it: header lines `bpm: 100`, `meter: 4/4`, `offset: 0.35` (seconds from the
+start of the file to the first downbeat), optionally `key: A minor`, then one bar per line, chord symbols separated by spaces (`Am`,
+`F`, `C7`, `E5`; `Am E` splits the bar; `N` is silence). A sung line gets `take.notes.txt` with notes instead (`A3.q C4.e R.e G4.h`).
+Keep the audio out of git (the ignore rules cover `docs/listen/*/*.wav` etc.) and commit the labels and `report.md`; the synthetic
+set `docs/listen/eval-synth/` (made by `tools/listen-eval.py --make-synth`) shows the format.
 
 Limits: a take recorded off the click is refused; a power chord's major/minor is read from the key; compound meters (6/8, 9/8,
 12/8) are heard per dotted quarter, but a take across meter changes with different denominators gets mislabelled rhythm slots.

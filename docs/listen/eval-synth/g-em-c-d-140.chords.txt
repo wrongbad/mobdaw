@@ -1,0 +1,16 @@
+# Synthetic take made by tools/listen-eval.py --make-synth (tests/synth.py).
+# synth: pattern=quarters seed=111 detune=15
+bpm: 140
+meter: 4/4
+offset: 0
+key: G major
+tuning: 15
+
+G
+Em
+C
+D
+G
+Em
+C
+D

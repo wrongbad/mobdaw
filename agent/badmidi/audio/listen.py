@@ -175,9 +175,13 @@ def listen(client: Client, pid: str, state: dict, track: str, bars: tuple[int, i
 def _part(h: hear.Heard, grid: hear.Grid, bg, end_tick, ppq: int, track: str, first: int, mode: str) -> HeardPart:
     """The analysis in score time (quarter notes). `mode` is what was asked for; the part says what was heard."""
     q = [Fraction(t) / ppq for _, t, _ in bg] + [Fraction(end_tick) / ppq]
+    def rival(c: hear.ChordSpan) -> tuple[str, float]:
+        """The runner-up worth naming: none (empty) when the chord is clear and nothing else comes near."""
+        sym, p = c.runner_up if c.runner_up else ("", 0.0)
+        return ("", 0.0) if p < 0.05 and c.confidence >= 0.5 else (sym, round(p, 2))
+
     chords = [HeardChord(q[c.start_beat], q[c.end_beat], c.symbol, c.root_pc, c.bass_pc, c.quality, round(c.confidence, 2),
-                         c.runner_up[0] if c.runner_up else "", round(c.runner_up[1], 2) if c.runner_up else 0.0, c.implied, c.src)
-              for c in h.chords]
+                         *rival(c), c.implied, c.src) for c in h.chords]
 
     def at(b: Fraction) -> Fraction:                           # a (fractional) beat in quarters
         i = min(int(b), len(q) - 2)

@@ -199,6 +199,28 @@ class TestHearUnits(unittest.TestCase):
         self.assertEqual(hear.estimate_key(v).name, "A minor")
         self.assertEqual(hear.estimate_key(np.roll(v, 1, axis=1)).name, "A# minor" if False else "Bb minor")
 
+    def test_key_from_the_chord_sequence(self):
+        """Relative keys share every chord; the opening chord, the time on the tonic and a V-I cadence decide."""
+        for prog, key in (("Am F C G", "A minor"), ("C G Am F", "C major"), ("Em C G D", "E minor"), ("G Em C D", "G major"),
+                          ("Am Dm E Am", "A minor"), ("D A Bm G", "D major"), ("A7 D7 A7 E7 D7 A7", "A major")):
+            syms = (prog.split() * 2)
+            spans, rows = [], []
+            for i, sym in enumerate(syms):
+                r, q = synth.parse(sym)
+                spans.append(hear.ChordSpan(i * 4, i * 4 + 4, sym, r, q, r, 1.0))
+                rows.append(sum(hear._TEMPLATES[r * len(hear.NAMES) + hear.NAMES.index(q)] for _ in range(4)))
+            chroma = np.array(rows)
+            self.assertEqual(hear.key_from_chords(spans, chroma).name, key, prog)
+
+    def test_grid_check_ignores_the_late_strings_of_a_slow_strum(self):
+        grid = Grid.regular(90, 4, 16)
+        slot = 60 / 90 / 4
+        t = [i * slot * 4 + 0.008 for i in range(16)]
+        t += [x + 0.075 for x in t[::3]]                  # a late string every third strum: nearly half a slot out
+        g = hear.grid_check(sorted(t), grid)
+        self.assertTrue(g.on_grid, g)
+        self.assertLess(abs(g.drift), 0.03)
+
     def test_grid_check_on_clicks(self):
         grid = Grid.regular(120, 4, 16)
         on = [i * 0.125 + 0.01 for i in range(60)]
@@ -209,6 +231,8 @@ class TestHearUnits(unittest.TestCase):
         self.assertAlmostEqual(g.mean_offset, 0.05, delta=0.005)
         stretched = [i * 0.125 * 1.03 for i in range(60)]
         self.assertFalse(hear.grid_check(stretched, grid).on_grid)
+        faster = [i * 0.125 / 1.03 for i in range(60)]
+        self.assertFalse(hear.grid_check(faster, grid).on_grid)
 
     def test_onsets_of_clicks(self):
         x = np.zeros(SR * 3, np.float32)

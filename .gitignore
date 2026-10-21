@@ -14,3 +14,10 @@ docs/*/runs/*/*
 !docs/*/runs/*/config.yaml
 !docs/*/runs/*/best.json
 !docs/*/runs/*/run.sh
+
+# Listening eval takes: the audio stays out of git (keep it backed up elsewhere); only the *.chords.txt / *.notes.txt labels are tracked.
+docs/listen/*/*.wav
+docs/listen/*/*.flac
+docs/listen/*/*.mp3
+docs/listen/*/*.ogg
+docs/listen/*/*.m4a

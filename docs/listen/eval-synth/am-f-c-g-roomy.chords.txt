@@ -1,0 +1,16 @@
+# Synthetic take made by tools/listen-eval.py --make-synth (tests/synth.py).
+# synth: pattern=default seed=113 wet=0.45 noise=0.01
+bpm: 100
+meter: 4/4
+offset: 0
+key: A minor
+tuning: 0
+
+Am
+F
+C
+G
+Am
+F
+C
+G

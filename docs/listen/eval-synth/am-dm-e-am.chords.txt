@@ -1,0 +1,16 @@
+# Synthetic take made by tools/listen-eval.py --make-synth (tests/synth.py); harmonic minor: a major E.
+# synth: pattern=ballad seed=108
+bpm: 90
+meter: 4/4
+offset: 0
+key: A minor
+tuning: 0
+
+Am
+Dm
+E
+Am
+Am
+Dm
+E
+Am
