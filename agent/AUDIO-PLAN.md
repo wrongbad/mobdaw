@@ -1,7 +1,7 @@
 # Listening: from a recorded take to an agent's bass track
 
 Plan of record for teaching the badmidi bridge to hear audio. Read `BRIDGE-PLAN.md` (pull/push) and `docs/agent-api.md`
-first. Status: Phase 7 (timing follows the audio, no refusals) planned, not built; phases 1-6 built (milestones 1-5; the bass patch needs a listening pass), milestone 6 (monophonic) built. The chat loop runs end to
+first. Status: Phase 7 (timing follows the audio, no refusals) built (`audio/timing.py`, `audio/propose.py`, `audio/listen.py`); phases 1-6 built (milestones 1-5; the bass patch needs a listening pass), milestone 6 (monophonic) built. The chat loop runs end to
 end in `tests/e2e_audio_live.sh` against `examples/bass_for_take.py`, on a take of open-position guitar shapes (`tests/synth.py`: six
 Karplus-Strong strings, strum, body, room). The chord hearing was hardened against such playing (single thirds are not power chords,
 the key comes from the chord sequence, confidence compares rival roots and families, `HeardChord.alt_conf` and one `is_unsure()`),
@@ -162,7 +162,23 @@ The agent runs wherever the user's Claude Code runs (laptop or a cloud session w
 
 ## Phase 7: timing follows the audio
 
-Design rule (from Kyle): always follow what the audio contains, no refusals. Two cases, decided from the pulled state:
+Design rule (from Kyle): always follow what the audio contains, no refusals. Two cases, decided from the pulled state.
+
+**What "has a click" means (decided, built).** The metronome track is created lazily: `clickTrack()` in `client/src/ui/timeline.ts` calls
+`addClickTrack` the first time the metronome is switched on, and afterwards the button only mutes and unmutes it; a user can delete it. A
+new project has none (the `empty` template has no click; the templates that add one also add MIDI tracks). So the rule is exactly:
+**a track with `role: 'click'` exists (muted or not) or any MIDI clip has notes -> case A; otherwise case B.** The mute state is not
+used, an empty MIDI clip is not a reference, and the view marks the track (`AgentTrack.role`, `docs/agent-api.md`) so the decision can
+be made from the state alone (`listen.timing_reference`). `--case a|b` overrides it for odd projects.
+
+As built: `listen.py` runs `timing.align` / `feel` / `to_grid` / `played_grid` for case A and `timing.analyze` / `audio_grid` /
+`propose.propose` for case B; `HEARD[..].timing` (a `HeardTiming`) carries the case, feel, alignment or detected tempo/meter/downbeat
+with confidences, warnings and the proposed map; `pull(.., proposal)` builds the Score on the proposed map and stores its region ops in
+the snapshot, `plan` puts them first in the batch, and `check_timeline` (now also comparing tempo marks and free bars) holds the piece to
+exactly that map. The map proposal tries one region, then `rampTo` chains (knots every 8, 4, 2 bars), then a region a bar, and keeps the
+first whose beats (computed with `bridge.Timeline`) are within 20 ms (95th percentile; 40 ms worst) of the smoothed beats the tracker
+found. The free pickup bar is the whole time before the first downbeat, including the silence before the clip starts (a lead-in under
+20 ms is not a bar). Everything is tested on synthetic guitar only (`tests/test_listen_timing.py`, `tests/e2e_audio_live.sh`).
 
 **A. The project has a timing reference**: a click track (`role: 'click'`) or any MIDI track with notes. The project's
 time map is then the truth for the meter and bar lines of every MIDI track, including the new bass. Nothing about the

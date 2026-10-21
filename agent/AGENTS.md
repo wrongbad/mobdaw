@@ -569,8 +569,10 @@ badmidi push song.py --apply --label "violin 3 descant" --like Violin   # one hi
 - A part the project doesn't have becomes a new track. It gets the default synth unless you say `--like <track>` (copies that
   track's whole device chain, fader and colour) or `--preset <device type>`.
 - Push sends **notes only**. A note is its track, onset and pitch: edits to length become `updateNotes`, moved notes are a remove
-  plus an add. Tempo, meter, markers and key belong to the project: if your piece's bars differ from the project's, push
-  refuses and says where. Change those with the mobdaw `apply_ops` tool (`setRegion`, `addMarker`), then pull again.
+  plus an add. Tempo, meter, markers and key belong to the project: if your piece's bars or tempo differ from the project's, push
+  refuses and says where. Change those with the mobdaw `apply_ops` tool (`setRegion`, `addMarker`), then pull again. (The one
+  exception: an audio-only project pulled with `--listen` gets the time map proposed from its audio; push sends exactly that, with the
+  bass. See "Timing follows the audio".)
 - Push refuses if the project moved since the pull (someone else edited): pull again, redo your edit in the new piece.
 - **Dynamics.** `pull` reads each part's velocities back as dynamics (the velocity less the metric accent, smoothed over three notes,
   as the nearest of `ppp`..`fff`; a mark where it changes), so `p`, `f` and friends in the piece mean what the project plays.
@@ -598,36 +600,41 @@ badmidi push song.py --apply --label "violin 3 descant" --like Violin   # one hi
 
 ## Making a part for a recording
 
-A track of audio (a guitar played to the project's click) can be heard: its chords and strum rhythm become read-only data in
-the piece, and you write the new part against them. Needs `pip install 'badmidi[audio]'`; analysis is local, the server only
-hands out the file.
+A track of audio (a guitar, keys, a voice) can be heard: its chords and strum rhythm become read-only data in the piece, and you
+write the new part against them. Needs `pip install 'badmidi[audio]'`; analysis is local, the server only hands out the file.
 
 ```
-badmidi listen "My Song" --track Guitar --bars 1-16      # the chart; exit 1 with advice if the take is off the click
+badmidi listen "My Song" --track Guitar --bars 1-16      # the chart: chords, timing line, warnings (always exit 0 when it could read the audio)
 badmidi pull "My Song" --listen Guitar -o song.py         # as pull, plus "guitar (heard)" and HEARD in the piece
 ```
 
 The chart is one bar per line with confidence, `<- unsure` with the rival (another root or family: G against Em, Am against a power
-chord A5; Am against Am7 is not a rival), then tuning, key, the grid check and the strum
-rhythm (`x` strong, `o` weak, one character per 16th). In the piece:
+chord A5; Am against Am7 is not a rival), then tuning, key, how the take sits on the beats and the strum
+rhythm (`x` strong, `o` weak, one character per slot of the feel: 16ths, triplet 8ths or swung 8ths). Under the header comes a
+`timing:` line and one `warning:` line per guess. **Listening never refuses a take for its timing**: it follows what the audio
+contains and says how sure it is (see "Timing follows the audio" below). In the piece:
 
 - `HEARD["guitar"]` is a `HeardPart`: `.chords` (`HeardChord(start, end, symbol, root, bass, quality, conf, alt, alt_conf)`, times in
   quarters, `bass` the pitch class the bass should play, so inversions are kept; `conf` is how much better the chord fits than the
   best chord of another root or family, `alt` that rival and `alt_conf` its confidence; `c.is_unsure()` is the chart's `<- unsure`
   rule, use it rather than your own threshold), `.rhythm` (`Rhythm`: onset strength per slot per bar),
   `.bar`, `.key`. `"guitar (heard)"` is the same chords as block chords, so `grid`, `lens` and `check` hear them.
+- `HEARD["guitar"].timing` is a `HeardTiming`: `case` ('a'/'b'), `feel` + `swing`, `alignment` / `offset_ms` / `drift_ms` (case A) or
+  `bpm` / `meter` / `downbeat_s` / `pickup_s` / `map` (case B), `conf` and `warnings`.
 - Heard parts are **not the project's**: push skips them and refuses an edit to one (say so, change another part). `push --guide`
   sends them as muted MIDI tracks instead, which humans can then see and fix.
 - `bass.line(HEARD["guitar"], style=, key=, range=("E1", "G3"), kick=)` returns a draft `Motif` to edit, not a finished part.
   Styles: `roots`, `root-fifth`, `pulse` (8ths, accented on the heard strong onsets), `walk` (quarters, approach notes into each change).
-  `kick=bass.kicks(score["drums"])` pulls onsets onto a drum part's kick.
+  `kick=bass.kicks(score["drums"])` pulls onsets onto a drum part's kick. `swing=` (default: the take's, when it swung) puts `pulse`'s
+  off-beat 8ths where the take played them (0.62 of the beat, rounded to 1/48 so they are whole ticks); a triplet-feel take pulses in
+  triplet 8ths because the heard rhythm is in thirds.
 
 The loop, for a chat request ("make a bass for Guitar, bars 1-16"):
 
 1. `wait_for_events`; a chat message mentions you. If the track's sample is `incoming` say "waiting for the take to upload" and
    wait for the `sample` event (`badmidi listen --wait 120` also waits).
-2. `badmidi listen ...`. If the grid check fails, say why (the output tells you) and stop. For a bar marked `<- unsure`, either ask
-   in chat ("bar 4: G or Em?") or take the one the key favours and say which.
+2. `badmidi listen ...`. Pass its `warning:` lines on in the reply (the offset and how to fix it, a guessed tempo or meter and the
+   other reading). For a bar marked `<- unsure`, either ask in chat ("bar 4: G or Em?") or take the one the key favours and say which.
 3. `badmidi pull ... --listen Guitar -o song.py`; add the part and draft it, then edit by taste:
 
    ```python
@@ -636,15 +643,19 @@ The loop, for a chat request ("make a bass for Guitar, bars 1-16"):
    bass_guitar.at(heard.bar, bass.line(heard, style="pulse", key=score.key))
    ```
    `badmidi song.py check`, `lens --parts "bass guitar,guitar (heard)"`: fix strong beats outside the heard chord and anything out of range.
-4. `badmidi push song.py --apply --label "bass for Guitar" --patch bass` (or `--like` an existing bass track): one history entry.
-5. `send_chat`: the chart you heard, what the bass does, the `unsure` choices, and how to revert. The audio is unheard: say so.
+4. `badmidi push song.py --apply --label "bass for Guitar" --patch bass` (or `--like` an existing bass track): one history entry (in an
+   audio-only project it also carries the time map, see below).
+5. `send_chat`: the chart you heard, what the bass does, the `unsure` choices, the timing warnings, and how to revert. The audio is
+   unheard: say so. In an audio-only project say that you set the tempo ("set the project tempo to 92 bpm 4/4 (pickup 0.4 s) to
+   match the take") and that a revert undoes the tempo and the bass together.
 
 `examples/bass_for_take.py` is this loop as a script with no taste in it: `MOBDAW_TOKEN=... python examples/bass_for_take.py "My Song"
 --track Guitar [--style walk] [--bars 1-16]` does steps 2-5 once (listen, `bass.line` draft, check, `push` with the `bass` patch as one
 entry "bass for Guitar", a chat reply with `heard: Am | F | C | G?` and "revert with history seq N"), and `--watch [--once]` waits
 for a chat mention such as "@you(api) bass for Guitar, bars 1-8, walk" and does it for each (it says "waiting for the take to
-upload" if the sample is `incoming`, and relays the advice if the take is off the click). It uses the bridge and listen Python APIs
-directly; read it as the skeleton and replace `draft()` with a part you wrote by ear.
+upload" if the sample is `incoming`; the reply carries the timing warnings and, in an audio-only project, the tempo it set). It
+takes `--case a|b` and `--keep-map` like `listen`. It uses the bridge and listen Python APIs directly; read it as the skeleton and
+replace `draft()` with a part you wrote by ear.
 
 Checking the hearing on real takes: `tools/listen-eval.py DIR --label NAME` scores a folder of recordings against hand-written
 labels and writes `docs/listen/runs/<date>-NAME/report.md` (accuracy per take, key, tuning, confusions, how well the confidence
@@ -655,8 +666,40 @@ start of the file to the first downbeat), optionally `key: A minor`, then one ba
 Keep the audio out of git (the ignore rules cover `docs/listen/*/*.wav` etc.) and commit the labels and `report.md`; the synthetic
 set `docs/listen/eval-synth/` (made by `tools/listen-eval.py --make-synth`) shows the format.
 
-Limits: a take recorded off the click is refused; a power chord's major/minor is read from the key; compound meters (6/8, 9/8,
-12/8) are heard per dotted quarter, but a take across meter changes with different denominators gets mislabelled rhythm slots.
+### Timing follows the audio (two cases, no refusals)
+
+The case is decided from the pulled project, not from the take: **case A** when the project has a timing reference, that is a
+track with `role: "click"` in the agent view (the metronome track; the metronome button creates it the first time it is switched
+on, after which the button only mutes it, so it counts muted or not, and a new project has none) **or any MIDI clip with notes**;
+otherwise **case B**. `--case a|b` (on `listen`, `pull`, the example) overrides it: `b` to let the audio redefine the map of a project
+whose click you don't want to follow, `a` to keep a default map you do want.
+
+- **Case A, the project's time map is the truth and is never touched.** The take is aligned to the project's beats and read on the
+  beats *as played* (a late, early, rushing or dragging take still gets one chord per beat it played); every heard position is then
+  the project tick of the beat and subdivision slot it was played as (`timing.to_grid`, with the feel's slots: 16ths, triplet 8ths, or
+  swung 8ths), so **the bass is on the project's grid and never copies the take's offset or drift**. The `warning:` says how the take sits
+  and what to do about the audio: `the take sits +35 ms behind the beats: move the clip 35 ms earlier`; `rushes to -120 ms by bar 12 ... about
+  3% faster than the project's 100 bpm ... set the project's tempo to about 103 bpm`; `wanders between -40 and +95 ms`. The feel
+  (`swing 62%`, `triplet feel`) is in the `timing:` line and `HEARD[..].timing`.
+- **Case B, audio only: the audio defines the map.** Tempo, meter and the first downbeat are tracked from the audio; the chart's
+  `map:` line shows the proposal: one region at the detected tempo (steady within ~2%), else `rampTo` regions or a region a bar following
+  the tempo (the simplest that keeps every beat within ~20 ms of the audio's), and the time before the first downbeat (a pickup, and
+  the silence before the clip starts) as a free bar. Heard positions are ticks of that proposed map. `pull --listen` puts the proposed map
+  in the piece (the Score and the snapshot use it) and `push` sends its `addRegion` / `removeRegion` ops **first in the same batch as the
+  bass**: one history entry, one revert undoes both. `push` still refuses any change to the piece's meter or tempo beyond that map.
+  **`--keep-map`** (on `listen` / `pull`) opts out: the map is left alone, heard positions are whole ticks of where the audio was played on the
+  old map, and a warning says the bass will not sit on its bar lines. Pull and push only change a project's map this way; edit it yourself
+  with `setRegion` / `addRegion` if the guess is wrong, then pull again.
+- **Warnings name the other reading** when a guess has confidence under 0.5: `tempo 92 bpm, or 184: tell me if it's double`, `meter 3/4,
+  could be 6/8`, a first bar line that could be N beats later, `rubato: the tempo moves about ±6%; the proposed map follows it`, `the
+  swing feel is a guess: it could be straight 16ths`. If the audio has no steady beat at all (silence, one sound) it is read on the
+  project's own map and says so. A person's answer ("it's double") means: `badmidi listen ... --case b` again after fixing the tempo with
+  `setRegion`, or write the part from the map you set.
+
+Limits: a power chord's major/minor is read from the key; compound meters (6/8, 9/8, 12/8) are heard per dotted quarter (their rhythm is
+in 8ths), but a take across meter changes with different denominators gets mislabelled rhythm slots; the meter is read as 2, 3 or 4 beats
+a bar (5/4, 7/8 come out as the nearest, with a low confidence); a time map proposed from audio is only as good as the beat tracking
+(synthetic guitar so far: see `docs/todo.md`). The bass of a pickup bar sits in the free bar at the position the take played it.
 
 ### A sung or single-note line (`--as notes`)
 

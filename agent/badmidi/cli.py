@@ -21,7 +21,8 @@
     badmidi pull PROJECT -o piece.py     a mobdaw project as a piece (+ piece.mobdaw.json); see bridge.py
     badmidi push piece.py [--apply]      the piece's note edits back to the project, as ONE history entry
     badmidi pull PROJECT --listen Guitar -o piece.py   also hear an audio track: a read-only "guitar (heard)" part and HEARD (--as notes for a sung line)
-    badmidi listen PROJECT --track Guitar [--bars 1-16] [--as auto|chords|notes] [--wait 60]   the chord or note chart of a recorded track (needs badmidi[audio])
+    badmidi listen PROJECT --track Guitar [--bars 1-16] [--as auto|chords|notes] [--wait 60] [--case a|b] [--keep-map]
+                                         the chord or note chart of a recorded track, following its timing (needs badmidi[audio])
     badmidi projects                     (MOBDAW_URL, MOBDAW_TOKEN in the environment)
 
     badmidi import song.mid [-o song.py] import MIDI or MusicXML as a badmidi piece to edit
