@@ -643,8 +643,28 @@ for a chat mention such as "@you(api) bass for Guitar, bars 1-8, walk" and does 
 upload" if the sample is `incoming`, and relays the advice if the take is off the click). It uses the bridge and listen Python APIs
 directly; read it as the skeleton and replace `draft()` with a part you wrote by ear.
 
-Limits: chords only (`--as notes` for a sung line is not built); a take recorded off the click is refused; compound meters are
-heard per 1/8 beat; a power chord's major/minor is read from the key.
+Limits: a take recorded off the click is refused; a power chord's major/minor is read from the key; compound meters (6/8, 9/8,
+12/8) are heard per dotted quarter, but a take across meter changes with different denominators gets mislabelled rhythm slots.
+
+### A sung or single-note line (`--as notes`)
+
+`listen` and `pull --listen` take `--as auto|chords|notes` (default `auto`). Auto hears the track as **notes** when most of its
+sound is one clear, steady pitch (a voice, a whistle, a single-note guitar or bass line) and as chords otherwise; the chart header
+says which and why, and `--as notes` / `--as chords` override it. `--snap 8` quantizes to eighths (default 16ths).
+
+```
+Voice (audio, 1 take), 4 bars, heard as notes (auto: one clear pitch in 95% of the sound), tuning +16 c, key A minor, on the grid (+0 ms)
+  1  A3.q C4.e E4.e A4.qd G4.e   | guess: Am
+  2  F4.q E4.q D4.q C4.q   | guess: Dm
+```
+
+One bar per line, in badmidi notation (`R.q` rest, `~` tied into the next bar, `?` unsure pitch). `HEARD["voice"]` has `.notes`
+(`HeardNote(start, end, pitch, vel, conf, raw)`: quarters, quantized, with `raw` the unquantized onset) and `"voice (heard)"` is the
+melody as a read-only part (same rules as heard chords: push skips it, `--guide` pushes it muted so people can fix it).
+`.chords` of a melody are **a guess**, one triad per bar (`src="melody"`, confidence <= 0.4): the key's diatonic triad covering
+most of the bar's notes. They are there so `bass.line(HEARD["voice"], ...)` works; check them against the notes before you trust
+them, and say in your reply that the harmony is inferred. Pitch is exact only for a clear, in-tune line: notes marked `?` and very
+breathy or fast short notes are the first to be wrong.
 
 ## Adding an example
 

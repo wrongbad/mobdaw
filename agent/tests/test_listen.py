@@ -13,6 +13,7 @@ try:
     import numpy as np
     import soundfile as sf
     import test_hear as th
+    import test_hear_notes as thn
     from badmidi.audio import listen as L
 except ImportError:                                       # the audio extra is optional
     np = None
@@ -280,6 +281,112 @@ class TestHeardInThePiece(unittest.TestCase):
         self.assertEqual(pl.ops[0]["name"], "Guitar (heard)")
         self.assertEqual(pl.ops[1], {"op": "updateTrack", "id": "$0", "muted": True})
         self.assertEqual(pl.guided, ["guitar (heard)"])
+
+
+@unittest.skipIf(np is None, "numpy/scipy/soundfile not installed")
+class TestListenNotes(unittest.TestCase):
+    """A sung line: listen (auto and --as notes), pull --listen, HEARD, bass.line, push."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.cache = os.path.join(cls.tmp, "cache")
+        cls.wav = os.path.join(cls.tmp, "voice.wav")
+        sf.write(cls.wav, thn.sung(th.BPM), th.SR, subtype="PCM_16")
+        cls.hash = sha(cls.wav)
+        cls.state = state_for(cls.hash, 4 * 4 * 60 / th.BPM)
+        cls.state["tracks"][0]["name"] = "Voice"
+        cls.client = FakeClient({cls.hash: cls.wav})
+        cls.client._state = cls.state
+        cls.res = L.listen(cls.client, "pid", cls.state, "Voice", cache_dir=cls.cache)
+
+    tearDownClass = classmethod(lambda cls: shutil.rmtree(cls.tmp))
+
+    def test_auto_hears_a_notes_chart(self):
+        txt = self.res.chart()
+        self.assertTrue(self.res.ok, txt)
+        self.assertRegex(txt.splitlines()[0], r"^Voice \(audio, 1 take\), 4 bars, heard as notes \(auto: one clear pitch in \d+% of the sound\), tuning \+1\d c, key A minor, on the grid")
+        self.assertRegex(txt, r"\n  1  A3\.q C4\.e E4\.e A4\.qd G4\.e +\| guess: Am")
+        self.assertRegex(txt, r"\n  4  A3\.q A4\.q A3\.q A3\.q")
+        self.assertIn("NOT heard", txt)
+        self.assertIn("rhythm bar 1:", txt)
+
+    def test_the_part_in_score_time(self):
+        p = self.res.part
+        self.assertEqual((p.mode, p.part, p.bar, p.key), ("notes", "voice (heard)", 1, "A minor"))
+        self.assertEqual([(n.start, n.end, n.pitch) for n in p.notes[:4]], [(0, 1, 57), (1, Fraction(3, 2), 60), (Fraction(3, 2), 2, 64), (2, Fraction(7, 2), 69)])
+        self.assertTrue(all(abs(n.raw - float(n.start)) < 0.25 for n in p.notes), "the raw onset is kept beside the quantized one")
+        self.assertEqual(len(p.chords), 4)
+        self.assertTrue(all(c.src == "melody" and c.conf <= 0.4 for c in p.chords))
+        self.assertEqual([c.symbol for c in p.chords][:1], ["Am"])
+
+    def test_explicit_modes_and_cache(self):
+        calls = self.client.calls
+        again = L.listen(self.client, "pid", self.state, "Voice", cache_dir=self.cache)
+        self.assertEqual(again.part.notes, self.res.part.notes)
+        self.assertEqual(self.client.calls, calls, "cached, with Fractions round-tripped through the json")
+        notes = L.listen(self.client, "pid", self.state, "Voice", mode="notes", cache_dir=self.cache)
+        self.assertIsNone(notes.heard.decision)
+        self.assertNotIn("(auto", notes.chart().splitlines()[0])
+        chords = L.listen(self.client, "pid", self.state, "Voice", mode="chords", cache_dir=self.cache)
+        self.assertEqual(chords.part.mode, "chords")
+        self.assertEqual(chords.part.notes, [])
+
+    def test_cli(self):
+        buf = io.StringIO()
+        with mock.patch.object(L, "Client", return_value=self.client), mock.patch.dict(os.environ, {"BADMIDI_CACHE": self.cache}), \
+                contextlib.redirect_stdout(buf):
+            self.assertEqual(L.main(["Take", "--track", "Voice", "--as", "notes", "--snap", "8"]), 0)
+        self.assertIn("heard as notes, ", buf.getvalue())
+        self.assertRegex(buf.getvalue(), r"\n  1  A3\.q C4\.e E4\.e A4\.qd G4\.e")
+        self.assertIn("rhythm bar 1: | x. xx x. .x |", buf.getvalue(), "--snap 8: a slot is an eighth")
+        with self.assertRaises(SystemExit) as e:
+            with mock.patch.object(L, "Client", return_value=self.client):
+                L.main(["Take", "--track", "Voice", "--snap", "5"])
+        self.assertIn("does not divide", str(e.exception))
+
+    def piece(self):
+        p = pull(self.state, "P", None, [self.res.part])
+        path = os.path.join(self.tmp, "melody.py")
+        write_pulled(p, path, "test")
+        self.addCleanup(lambda: [os.remove(f) for f in (path, snapshot_path(path)) if os.path.exists(f)])
+        return p, path
+
+    def test_pull_writes_the_notes_and_a_bass_can_be_drafted(self):
+        p, path = self.piece()
+        self.assertIn("heard: 'voice (heard)'", "\n".join(p.report))
+        self.assertIn("notes", "\n".join(p.report))
+        src = read(path)
+        self.assertIn("HeardNote(0, 1, 57, ", src)
+        self.assertIn('mode="notes"', src)
+        self.assertIn('src="melody"', src)
+        score = load_score(path)
+        self.assertFalse(has_errors(score), score.check())
+        import runpy
+        heard = runpy.run_path(path, run_name="__badmidi__")["HEARD"]["voice"]
+        self.assertEqual(heard.notes, self.res.part.notes)
+        self.assertEqual(heard.chords, self.res.part.chords)
+        ev = [(on, [q.midi for q in n.pitches]) for on, n in score["voice (heard)"].events() if not n.is_rest]
+        self.assertEqual(ev[0], (0, [57]))
+        self.assertEqual(len(ev), len(heard.notes))
+        score.part("bass guitar").at(heard.bar, bass.line(heard, style="roots", key=score.key))
+        self.assertFalse(has_errors(score), score.check())
+        pl = plan(score, read_snapshot(snapshot_path(path)), sound="bass")
+        self.assertEqual(pl.new_tracks, 1, "the heard part is not a new track")
+        self.assertEqual(pl.ops[0]["name"], "bass guitar")
+
+    def test_push_skips_guards_and_guides_the_heard_notes(self):
+        _, path = self.piece()
+        snap = read_snapshot(snapshot_path(path))
+        self.assertTrue(plan(load_score(path), snap).empty)
+        score = load_score(path)
+        score["voice (heard)"].clear(2, 2).at(2, "A3.w |")
+        with self.assertRaisesRegex(BridgeError, "what the recording says"):
+            plan(score, snap)
+        pl = plan(load_score(path), snap, guide=True)
+        self.assertEqual(pl.ops[0]["name"], "Voice (heard)")
+        self.assertEqual(pl.ops[1], {"op": "updateTrack", "id": "$0", "muted": True})
+        self.assertEqual(sum(len(o["notes"]) for o in pl.ops if o["op"] == "addNotes"), len(self.res.part.notes))
 
 
 if __name__ == "__main__":

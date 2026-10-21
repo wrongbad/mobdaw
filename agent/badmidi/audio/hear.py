@@ -531,6 +531,7 @@ GATE = 0.03                   # frames quieter than this share of the loud ones 
 SPLIT_CENTS = 0.7             # a note ends when the pitch moves this many semitones ...
 SPLIT_FRAMES = 6              # ... and stays there this many frames (60 ms)
 MIN_NOTE = 0.05               # seconds
+HARMONIC_RATIOS = sorted({q / p for q in range(2, 7) for p in range(1, q)})   # f of a partial over the f of its fundamental: q/p, q <= 6
 
 
 @dataclass
@@ -596,9 +597,10 @@ def _candidates(c: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.n
         if e - s > 1:                                              # a dip at a harmonic (a third, an octave up) of a far
             gap = midi[s:e][None, :] - midi[s:e][:, None]            # deeper dip is that note's partial, not a pitch
             mult = np.zeros((e - s, e - s), bool)
-            for n in (2, 3, 4, 5, 6):
-                mult |= np.abs(gap + 12 * np.log2(n)) < 0.5            # row i, column j: j is n times the lag of i? (j lower)
-            far = (v[:, None] - v[None, :] > 0.04) & (v[None, :] < 0.08 * v[:, None]) & (v[None, :] < 0.03)
+            for r in HARMONIC_RATIOS:
+                mult |= np.abs(gap + 12 * np.log2(r)) < 0.35           # row i, column j: i is j's q-th partial over p (j lower)
+            d = v[:, None] - v[None, :]
+            far = ((d > 0.04) & (v[None, :] < 0.08 * v[:, None]) & (v[None, :] < 0.03)) | ((d > 0.15) & (v[None, :] < 0.2 * v[:, None]))
             v = np.where((mult & far).any(axis=1), CAND_TOP, v)
         prev = np.r_[CAND_TOP, np.minimum.accumulate(v)[:-1]]
         mass[s:e] = np.where(v >= CAND_TOP, 0, np.clip((np.minimum(prev, CAND_TOP) - v) / CAND_TOP, 0, 1))
@@ -623,7 +625,7 @@ def f0_track(x: np.ndarray) -> F0Track:
     lv, lu = np.log(obs), np.log(unv)
     k = np.arange(-JUMP, JUMP + 1)
     lk = np.log(np.exp(-np.abs(k) / 1.5) / np.exp(-np.abs(k) / 1.5).sum() * 0.98)
-    l_vu, l_uv, l_uu = np.log(0.02), np.log(0.02 / N_BINS), np.log(0.98)
+    l_vu, l_uv, l_uu = np.log(0.05), np.log(0.05), np.log(0.95)
     v, u = lv[0] + l_uv, lu[0]
     back_v = np.zeros((n, N_BINS), np.int8)               # offset to the previous bin; 127: came from the unvoiced state
     back_u = np.zeros(n, np.int32)                        # -1: stayed unvoiced, else the voiced bin it came from
@@ -755,6 +757,7 @@ def hear_notes(x: np.ndarray, sr: int, grid: Grid, snap: int = 4, track: F0Track
     m = _smooth(tr.midi)
     m[~tr.sounding] = np.nan
     db = 20 * np.log10(tr.rms + 1e-9)
+    m[db < maximum_filter1d(db, 25) - 14] = np.nan                 # a release or attack far below its neighbours: its pitch is not to be trusted
     cents = _tuning_from_pitch(m, tr.rms)
     mt = m - cents / 100
     ons = onsets(x)
@@ -780,6 +783,8 @@ def hear_notes(x: np.ndarray, sr: int, grid: Grid, snap: int = 4, track: F0Track
             t0 = min(near, key=lambda t: abs(t - t0))
         raw.append((t0, b * hop, pitch, float(np.percentile(db[a:b], 80)), max(0.0, min(1.0, conf))))
     raw.sort()
+    raw = [r for i, r in enumerate(raw) if not (i and r[1] - r[0] < 0.11 and raw[i - 1][1] >= r[0] - 0.03       # an octave blip on a note's fade
+                                                and (r[2] - raw[i - 1][2]) in (12, 19, 24))]
     starts = [r[0] for r in raw]
     gc = grid_check(starts, grid, None)
     shift = gc.mean_offset if gc.on_grid else 0.0
