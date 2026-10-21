@@ -1,14 +1,14 @@
 # Score view: MIDI tracks as an ensemble score
 
 Plan of record for a sheet-music mode that shows a chosen set of MIDI tracks as one score, and later lets you edit
-it. Status: planned; nothing built.
+it. Status: planned; nothing built. Open questions settled 2026-10-21 (see the end).
 
 ## The goal, as a user sees it
 
 1. In a project, switch the main area from **tracks** to **score** (a toggle in the top bar). Transport, chat and
    presence stay as they are.
-2. The score shows every MIDI track with notes (click and drum tracks are left out by default) as staves of one
-   system, in track order, bracketed, with the project's meters, key, tempo and markers. Chips above the score pick
+2. The score shows every MIDI track with notes, drum tracks included (on a percussion staff) and the click track
+   left out, as staves of one system, in track order, bracketed, with the project's meters, key, tempo and markers. Chips above the score pick
    which tracks are shown; the choice is yours only (it is not written to the project).
 3. While playing, the current bar is highlighted and the view follows. A collaborator's edit in the piano roll shows
    up in the score at once.
@@ -48,8 +48,8 @@ Y.Doc ──1 flatten──▶ Performance ──2 interpret──▶ Notation �
 1. **Flatten** (`client/src/score/flatten.ts`). For the chosen tracks: every MIDI clip's notes in absolute ticks
    (`clip.startTick + note.tick`), loop repeats written out (`patternTicks`, `isLooping`; repeats carry
    `repeat: n` and are read-only), clipped to the clip's end. Overlapping same-pitch notes are cut at the later onset.
-   Output per track: `{ id, tick, dur, pitch, velocity, noteId, repeat }[]`, plus the track's name, kind (`isDrum`
-   via `trackKind.ts`), and the project's `TimeMap`, key (`getKey`) and markers.
+   Output per track: `{ id, tick, dur, pitch, velocity, noteId, repeat }[]`, plus the track's name, kind (drums by `trackKind.ts`; its drum devices,
+   `isDrum`, give each key a name), the click track (`role: 'click'`) never offered, and the project's `TimeMap`, key (`getKey`) and markers.
 2. **Interpret** (`client/src/score/interpret/`), the guesswork, each step its own small module with its own tests:
    - `measures.ts`: bars from the `TimeMap` spans: tick range, `num/den`, beat `groups` (2+2+3) for beaming, tempo and
      ramp (`accel.`/`rit.` text), markers as rehearsal marks. A free region becomes one unmetered bar of its nominal
@@ -63,6 +63,12 @@ Y.Doc ──1 flatten──▶ Performance ──2 interpret──▶ Notation �
    - `staves.ts`: clef from the track's pitch range (treble, bass, treble_8/bass_8 for extremes); a wide part (e.g.
      piano, range over ~2.5 octaves with both hands busy) becomes a grand staff split at a moving point between the
      hands, starting from middle C.
+   - `drums.ts`: a drum track is one five-line percussion staff (abcjs `clef=perc` and `%%percmap`). Each key gets a
+     line or space and a notehead from its drum device's name (kick bottom space, snare third space, toms between,
+     hats and cymbals above the staff with `x` heads; `addDrum` names them `kick`, `rim`, `snare`, `clap`, `tom`,
+     `hat`, `open hat`, `perc`), unknown names in key order between them. Drum notes have no length on the page:
+     each is written as the time to the next onset in its voice, capped at a beat; kick goes stems down in voice 2,
+     the rest stems up in voice 1. No spelling, no key signature.
    - `spell.ts`: key from `meta.key`, else a Krumhansl-Schmuckler estimate over the shown tracks (port of
      `ingest.estimate_key`); each pitch spelled on the line of fifths nearest the key and its neighbours (a rising
      chromatic line sharps, falling flats). Accidentals per bar and per staff.
@@ -93,7 +99,7 @@ Y.Doc ──1 flatten──▶ Performance ──2 interpret──▶ Notation �
 | chord vs. voices | same onset+length → chord, else trim | two voices; voice hint stored per note |
 | spelling | key + line of fifths | spelling hint per note (`spell?: 'F#4'`) |
 | piano split | moving split point | per-track staff setting |
-| drums | hidden by default | percussion staff from the drum devices' keys |
+| drums | percussion staff, position and head by drum name, two voices (feet down) | per-drum position override; a drum key legend |
 | loops | written out, repeats read-only | repeat barlines when a clip loops whole bars |
 | free bars, ramps | unmetered bar; `accel.` text | — |
 | grace notes, very short notes | snap to one step | grace notes below a threshold |
@@ -103,7 +109,7 @@ schema-version entry in `docs/todo.md` before adding them.
 
 ## Milestones
 
-1. **View, end to end.** Score mode toggle, track chips (local, per project, `localStorage`), flatten → measures →
+1. **View, end to end.** Score mode toggle, drum tracks on a percussion staff, track chips (local, per project, `localStorage`), flatten → measures →
    quantize → chords/trim → clef → spelling → rhythm → ABC → abcjs. Playhead bar highlight and follow. Unit tests for
    each interpret module and the emitter (vitest, plain data in, plain data out); one Playwright smoke test that a demo
    project renders with the right number of staves and bars. Done when the demo project and an imported MIDI file read
@@ -113,8 +119,7 @@ schema-version entry in `docs/todo.md` before adding them.
    letter at a cursor. One history entry per gesture.
 3. **Better guesses.** Two voices per staff, grand-staff split, beaming by groups, tuplets beyond triplets, per-track
    quantize override, swing.
-4. **Hints, export, polish.** Stored notation hints, MusicXML export (and print via the browser), percussion staff,
-   repeat barlines. Re-evaluate abcjs vs. Verovio here with the real failures in hand.
+4. **Hints, export, polish.** Stored notation hints, MusicXML export (and print via the browser), repeat barlines. Re-evaluate abcjs vs. Verovio here with the real failures in hand.
 
 ## Spike notes (2026-10-21)
 
@@ -129,10 +134,9 @@ Same content in each library, headless Chromium, 1000 px wide, warm re-render ti
 Watch with abcjs: render cost on long scores (measure on a 200-bar, 10-track project in milestone 1; if it is slow,
 render only the systems in view or re-render only changed lines), and collisions between dense voices.
 
-## Open questions
+## Settled questions
 
-- Score as a full-page mode (planned) or also as a per-clip drawer next to the piano roll?
-- Is the track choice per person (planned) or a shared, named "score layout" in the project?
-- Editing writes the touched note at its notated tick (planned). OK, or should edits keep a note's offset from the
-  grid?
-- Drum tracks: hidden (planned), or a rhythm-only staff from milestone 1?
+- Score is a full-page mode, not a per-clip drawer.
+- The track choice is per person, kept in this browser (`localStorage`, per project), not in the project.
+- Editing a note in the score writes it at its notated tick and length; its neighbours keep their timing.
+- Drum tracks are shown from milestone 1 (percussion staff); the click track is never shown.
