@@ -5,6 +5,9 @@ description = "Music as code: motifs as values, transformations as functions, te
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+audio = ["numpy", "scipy", "soundfile"]
+
 [project.scripts]
 badmidi = "badmidi.cli:main"
 
@@ -13,4 +16,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["badmidi"]
+packages = ["badmidi", "badmidi.audio"]
