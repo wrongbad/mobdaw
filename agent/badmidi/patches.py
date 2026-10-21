@@ -23,7 +23,7 @@ class Patch:
 # of the fundamental: round, a little reedy at the attack, mellowing as the note decays to its sustain.
 PATCHES: dict[str, Patch] = {
     "bass": Patch("finnwave", {"rolloff": 0.5, "env→rolloff": 0.5, "attack": 3, "decay": 180, "sustain": 0.5,
-                               "release": 90, "gain": 0.8},
+                               "release": 90, "gain": 1.4},
                   "round electric bass: 3 ms attack, 180 ms decay to half level, short release, dark and mellowing"),
 }
 
