@@ -116,6 +116,18 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .api-tokens .token-cmd { display: block; overflow-wrap: anywhere; user-select: all; padding: 6px 8px; background: var(--panel); }
 .body { display: flex; flex: 1; min-height: 0; }
 .scroll { flex: 1; min-width: 0; overflow: auto; min-height: 0; }
+/* score mode (ui/timeline.ts swaps .scroll for .score-pane; score/view.ts fills it). abcjs draws in currentColor, so ink follows --fg */
+.scroll[hidden], .score-pane[hidden], .score-playbar[hidden], .score-hint[hidden] { display: none; }
+.score-pane { flex: 1; min-width: 0; min-height: 0; }
+.score { display: flex; flex-direction: column; color: var(--fg); background: var(--bg); }
+.score-chips { flex: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.score-chip { height: 24px; padding: 0 10px; border: 1px solid var(--line); border-radius: 12px; background: none; color: var(--dim); font-size: 12px; }
+.score-chip.on { color: var(--fg); background: var(--raise); border-color: var(--line-strong); }
+.score-chip-hint { margin-left: 6px; font-size: 10px; opacity: .7; }
+.score-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; }
+.score-sheet svg { display: block; }
+.score-hint { padding: 48px 12px; text-align: center; font-size: 13px; }
+.score-playbar { position: absolute; z-index: 1; pointer-events: none; background: var(--accent-soft); border-radius: var(--r-sm); }
 .content { position: relative; min-width: 100%; }
 .ruler { display: flex; height: 40px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
 /* the ruler's bottom line is a pseudo-element under the playhead copies (a real border would draw over them) */

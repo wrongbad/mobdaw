@@ -34,13 +34,16 @@ M:4/4
 Q:1/4=120
 %%score [ V1 V2 (V3 V4) ]
 V:V1 clef=treble name="Flute"
-V:V2 clef=bass name="Bass"
-V:V3 clef=perc name="Drums" stem=up
-V:V4 clef=perc stem=down
 K:D
+V:V2 clef=bass name="Bass"
+K:D
+V:V3 clef=perc name="Drums" stem=up
+K:none
+V:V4 clef=perc stem=down
+K:none
 [V:V1] D2 EF A4 | D2 zC- Cz A,2 |]
 [V:V2] E,,4 A,,4 | D,,8 |]
-[V:V3] [K:none clef=perc] !style=x!g2 c2 z!style=x!g c2 | z8 |]
+[V:V3] !style=x!g2 c2 z!style=x!g c2 | z8 |]
 [V:V4] F2 x2 F2 x2 | x8 |]
 `)
   expect(r.bars.map((b) => b.bar)).toEqual([1, 2])
@@ -75,7 +78,7 @@ test('hiding a track drops its staff but not the key', () => {
   const both = build(inp)
   const one = buildScore(inp, { show: new Set(['t0']), width: 800 })
   expect(parse(one).staves).toBe(1)
-  const key = (a: string) => /^K:(\S+)/m.exec(a)?.[1]
+  const key = (a: string) => /^K:(?!none)(\S+)/m.exec(a)?.[1]
   expect(key(one.abc)).toBe(key(both.abc))
   expect(key(one.abc)).toBeDefined()
 })
@@ -167,7 +170,7 @@ test('a score of several systems keeps clefs, key and a signature-free perc staf
   const kicks: [number, number, number][] = Array.from({ length: 32 }, (_, i) => [i * Q, 100, 36])
   const r = build(fixture([{ notes: eighths }, { notes: eighths.map(([t, d, p]) => [t, d, p - 24] as [number, number, number]) }, { notes: kicks, drumNames: { 36: 'kick' } }], { key: 'D' }), 420)
   expect(r.lines.length).toBeGreaterThan(1)
-  expect(r.abc.match(/\[K:none/g)!.length).toBe(1)
+  expect(r.abc).not.toMatch(/\[K:/)
   const p = parse(r)
   for (const s of p.systems) {
     const st = s.staff as unknown as { clef: { type: string }; key: { accidentals: unknown[] } }[]

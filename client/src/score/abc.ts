@@ -99,11 +99,11 @@ export function emitAbc(inp: AbcInput): Emitted {
       const first = s.part.staves[0] === s.staff && vi === 0
       const v = s.staff.voices[vi]
       head += `V:${id} clef=${s.staff.clef}${first ? ` name="${quoted(s.part.name)}"` : ''}${v.stem ? ` stem=${v.stem}` : ''}\n`
+      // a `K:` straight after each `V:` sets that voice's key: none on a percussion staff (abcjs would draw the signature there).
+      // Never write an inline `K:` in the music: it drops that voice's name, stems and bracket on that system.
+      head += `K:${s.staff.clef === 'perc' ? 'none' : keyName(inp.key.fifths)}\n`
     })
   }
-  // the key is the header's; a percussion staff's first voice opens with `[K:none]` so abcjs draws no signature on it (on its second voice the parser crashes). (An inline `K:` on
-  // a pitched voice makes abcjs drop that staff's name.)
-  head += `K:${keyName(inp.key.fifths)}\n`
 
   // every voice's bars as text
   const flat = staves.flatMap((s) => s.staff.voices.map((voice, vi) => ({ s, voice, id: s.ids[vi] })))
@@ -128,7 +128,6 @@ export function emitAbc(inp: AbcInput): Emitted {
   lines.forEach((ln, li) => {
     flat.forEach((f, fi) => {
       let line = `[V:${f.id}] `
-      if (li === 0 && f.s.staff.clef === 'perc' && f.id === f.s.ids[0]) line += '[K:none clef=perc] '
       for (let bi = ln.first; bi <= ln.last; bi++) {
         const r = rendered[fi][bi]
         const base = abc.length + line.length
