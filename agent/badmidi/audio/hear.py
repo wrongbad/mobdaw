@@ -201,7 +201,7 @@ def _filterbank(n: int, cents: float, lo: int = LOW, hi: int = HIGH) -> np.ndarr
     return W / np.maximum(W.sum(axis=1, keepdims=True), 1e-9)
 
 
-HARMONICS = ((19, .9), (28, .6), (34, .3), (38, 0.0))   # (semitones above the note, share subtracted): 3rd, 5th, 7th, 9th
+HARMONICS = ((19, 1.2), (28, .5), (34, .3), (38, 0.0))   # (semitones above the note, share subtracted): 3rd, 5th, 7th, 9th
 
 
 def _whiten(L: np.ndarray) -> np.ndarray:
@@ -344,15 +344,20 @@ QUALITIES: dict[str, tuple[str, list[tuple[int, float]], float]] = {
     "5": ("5", [(0, 1), (7, .8)], 0.99),
 }
 NAMES = list(QUALITIES)
+# chords that differ only inside a family (Am / Am7, G / G7 / Gmaj7) are one answer for confidence; a different root or family is a rival
+FAMILIES = {"maj": "M", "7": "M", "maj7": "M", "min": "m", "m7": "m", "sus2": "sus2", "sus4": "sus4", "dim": "dim", "5": "5"}
+FAMILY_NAMES = sorted(set(FAMILIES.values()))
 N_SCORE = 0.5            # how well "no chord" matches a sounding beat
 BASS_W = 0.15            # bonus for a chord whose root is what the bass plays
 BETA = 12.0              # emission scale for Viterbi
 CHANGE = 1.6             # change penalty (emission units) on a weak beat
 CONF_T = 40.0            # softmax temperature for confidence
+FLOOR_PCT = 25           # a beat's noise floor: this percentile of its 12 chroma values
+COMPRESS = 2.5           # chroma above the floor is compressed log1p(x / COMPRESS): a lone third counts, not its share of the root
 
 
 def _build_templates() -> None:
-    global _TEMPLATES, _ROOT, _QUAL, _PRIOR
+    global _TEMPLATES, _ROOT, _QUAL, _PRIOR, _FAM_COLS
     _TEMPLATES = np.zeros((12 * len(NAMES), 12))
     for qi, q in enumerate(NAMES):
         for r in range(12):
@@ -362,6 +367,7 @@ def _build_templates() -> None:
     _ROOT = np.repeat(np.arange(12), len(NAMES))
     _QUAL = np.tile(np.arange(len(NAMES)), 12)
     _PRIOR = np.array([QUALITIES[q][2] for q in NAMES])[_QUAL]
+    _FAM_COLS = {f: [i for i, q in enumerate(NAMES) if FAMILIES[q] == f] for f in FAMILY_NAMES}
 
 
 _build_templates()
@@ -376,24 +382,75 @@ def _flats(key: Key) -> bool:
     return key.tonic in (_FLAT_MAJOR if key.mode == "major" else _FLAT_MINOR)
 
 
-def estimate_key(chroma: np.ndarray, bass: np.ndarray | None = None, first=None, last=None) -> Key:
-    """Krumhansl-Schmuckler on summed beat chroma (the bass chroma counts extra, it names the tonic).
-    `first`/`last` are the opening/closing chords as (root, minor?): a small nudge that settles
-    relative-key ties (Am F C G is A minor, not C major)."""
+def _key_corr(chroma: np.ndarray, bass: np.ndarray | None = None) -> dict[tuple[int, str], float]:
+    """Krumhansl-Schmuckler correlation of the summed beat chroma (the bass chroma counts extra, it names the tonic) with each key."""
     v = chroma.sum(axis=0) / max(chroma.sum(), 1e-9)
     if bass is not None:
         v = v + 0.5 * bass.sum(axis=0) / max(bass.sum(), 1e-9)
-    res = []
-    for mode, prof in (("major", MAJOR_PROFILE), ("minor", MINOR_PROFILE)):
-        for t in range(12):
-            r = float(np.corrcoef(v, np.roll(prof, t))[0, 1])
-            for w, c in ((0.08, first), (0.05, last)):
-                if c and c[0] == t and (c[1] is None or c[1] == (mode == "minor")):     # minor? None: either mode
-                    r += w
-            res.append((r, t, mode))
-    res.sort(reverse=True)
+    return {(t, mode): float(np.corrcoef(v, np.roll(prof, t))[0, 1])
+            for mode, prof in (("major", MAJOR_PROFILE), ("minor", MINOR_PROFILE)) for t in range(12)}
+
+
+def _make_key(res: list[tuple[float, int, str]]) -> Key:
+    res = sorted(res, reverse=True)
     (s, t, mode), nxt = res[0], res[1]
     return Key(t, mode, f"{pc_name(t, t in (_FLAT_MAJOR if mode == 'major' else _FLAT_MINOR))} {mode}", s, s - nxt[0])
+
+
+def estimate_key(chroma: np.ndarray, bass: np.ndarray | None = None, first=None, last=None) -> Key:
+    """Krumhansl-Schmuckler on summed beat chroma. `first`/`last` are the opening/closing chords as (root, minor?): a small
+    nudge toward them as the tonic (used for a melody's first and last notes; chords use `key_from_chords`)."""
+    res = []
+    for (t, mode), r in _key_corr(chroma, bass).items():
+        for w, c in ((0.08, first), (0.05, last)):
+            if c and c[0] == t and (c[1] is None or c[1] == (mode == "minor")):     # minor? None: either mode
+                r += w
+        res.append((r, t, mode))
+    return _make_key(res)
+
+
+# degree (semitones above the tonic) -> the triads a key has there; a major V and a diminished vii are the minor key's harmonic scale
+_DIATONIC = {"major": {0: ("maj",), 2: ("min",), 4: ("min",), 5: ("maj",), 7: ("maj",), 9: ("min",), 11: ("dim",)},
+             "minor": {0: ("min",), 2: ("dim",), 3: ("maj",), 5: ("min",), 7: ("min", "maj"), 8: ("maj",), 10: ("maj",), 11: ("dim",)}}
+_TRIAD = {"maj": "maj", "7": "maj", "maj7": "maj", "min": "min", "m7": "min", "dim": "dim"}
+_ROOT_ONLY = ("5", "sus2", "sus4")           # chords with no third: only their root says anything
+KEY_W = dict(fit=1.0, tonic=0.5, start=0.5, end=0.25, cadence=0.2, chroma=0.6)
+
+
+def key_from_chords(spans: list[ChordSpan], chroma: np.ndarray, bass: np.ndarray | None = None) -> Key:
+    """The key that the chord sequence says, with the chroma profile as one vote among several. A chord counts for a key by how
+    well it is one of the key's triads (a dominant 7th and a major V of a minor key included), by time on the key's tonic chord,
+    by opening on it, by closing on it, and by a V-I or V7-I cadence into the end. That is what separates relative keys
+    (Am F C G is A minor, C G Am F is C major), which the chroma alone cannot."""
+    sounding = [c for c in spans if c.quality != "N"]
+    corr = _key_corr(chroma, bass)
+    if not sounding:
+        return _make_key([(r, t, m) for (t, m), r in corr.items()])
+    dur = np.array([c.end_beat - c.start_beat for c in sounding], float)
+    dur /= dur.sum()
+    res = []
+    for (t, mode), r in corr.items():
+        tri = _DIATONIC[mode]
+
+        def is_tonic(c: ChordSpan) -> bool:
+            return (c.root_pc - t) % 12 == 0 and (c.quality in _ROOT_ONLY or _TRIAD[c.quality] in tri[0])
+
+        fit = 0.0
+        for c, d in zip(sounding, dur):
+            deg = (c.root_pc - t) % 12
+            if deg not in tri:
+                m = 0.0
+            elif c.quality in _ROOT_ONLY or _TRIAD[c.quality] in tri[deg]:
+                m = 0.75 if c.quality == "7" and deg != 7 else 1.0        # a 7th chord off the dominant: blues or mixolydian
+            else:
+                m = 0.3
+            fit += d * m
+        tonic = sum(d for c, d in zip(sounding, dur) if is_tonic(c))
+        cad = len(sounding) > 1 and is_tonic(sounding[-1]) and (sounding[-2].root_pc - t) % 12 == 7
+        score = (KEY_W["fit"] * fit + KEY_W["tonic"] * tonic + KEY_W["start"] * is_tonic(sounding[0]) + KEY_W["end"] * is_tonic(sounding[-1])
+                 + KEY_W["cadence"] * cad + KEY_W["chroma"] * r)
+        res.append((score, t, mode))
+    return _make_key(res)
 
 
 def _scale(key: Key) -> np.ndarray:
@@ -436,12 +493,21 @@ def _viterbi(E: np.ndarray, pen: np.ndarray) -> np.ndarray:
     return path
 
 
+def _presence(chroma: np.ndarray) -> np.ndarray:
+    """Per-beat chroma as evidence that a pitch class sounds: the excess over the beat's noise floor, log-compressed. A chord's
+    third is often one string against a root on three (an open C, an F barre), so as a share of the root it is small, but it is
+    clearly above the floor; matching templates on this keeps a power chord for beats whose third is really absent."""
+    fl = np.percentile(chroma, FLOOR_PCT, axis=1, keepdims=True)
+    return np.log1p(np.maximum(chroma - fl, 0) / COMPRESS)
+
+
 def hear_chords_from_chroma(chroma: np.ndarray, bass: np.ndarray, silent: np.ndarray, grid: Grid,
                             key: Key | None = None) -> tuple[list[ChordSpan], Key]:
     """Chord spans from per-beat chroma (B x 12), bass chroma (B x 12) and a silent-beat mask."""
     B = len(chroma)
     key = key or estimate_key(chroma[~silent] if (~silent).any() else chroma, bass)
-    cn = chroma / np.maximum(np.linalg.norm(chroma, axis=1, keepdims=True), 1e-9)
+    pr = _presence(chroma)
+    cn = pr / np.maximum(np.linalg.norm(pr, axis=1, keepdims=True), 1e-9)
     bn = bass / np.maximum(bass.sum(axis=1, keepdims=True), 1e-9)
     sc = cn @ _TEMPLATES.T
     sc = sc * _PRIOR + BASS_W * bn[:, _ROOT]
@@ -459,36 +525,40 @@ def hear_chords_from_chroma(chroma: np.ndarray, bass: np.ndarray, silent: np.nda
         while j + 1 < B and path[j + 1] == path[i]:
             j += 1
         mean = full[i:j + 1].mean(axis=0)
-        p = np.exp(CONF_T * (mean - mean.max()))
+        grp = np.append(np.stack([mean[:-1].reshape(12, -1)[:, _FAM_COLS[f]].max(axis=1) for f in FAMILY_NAMES], axis=1).ravel(), mean[-1])
+        p = np.exp(CONF_T * (grp - grp.max()))
         p /= p.sum()
         s = int(path[i])
+        gs = len(grp) - 1 if s == len(_ROOT) else int(_ROOT[s]) * len(FAMILY_NAMES) + FAMILY_NAMES.index(FAMILIES[NAMES[_QUAL[s]]])
         if s == len(_ROOT):
-            spans.append(ChordSpan(i, j + 1, "N", 0, "N", 0, float(p[s])))
+            spans.append(ChordSpan(i, j + 1, "N", 0, "N", 0, float(p[gs])))
         else:
             r, q = int(_ROOT[s]), NAMES[_QUAL[s]]
             bpc = int(np.argmax(bn[i:j + 1].mean(axis=0)))
             bass_pc = bpc if bn[i:j + 1].mean(axis=0)[bpc] > 0.4 else r
             sym = symbol(r, q, None, flats)
-            order = np.argsort(-mean)
             ru = None
-            for o in order:
+            for o in np.argsort(-grp):                              # the best answer of another root or family
                 o = int(o)
-                if o == s:
+                if o == gs:
                     continue
-                osym = "N" if o == len(_ROOT) else symbol(int(_ROOT[o]), NAMES[_QUAL[o]], None, flats)
-                if osym != sym:
-                    ru = (osym, float(p[o]))
-                    break
+                if o == len(grp) - 1:
+                    ru = ("N", float(p[o]))
+                else:
+                    rr, ff = divmod(o, len(FAMILY_NAMES))
+                    cols = _FAM_COLS[FAMILY_NAMES[ff]]
+                    qq = cols[int(np.argmax(mean[:-1].reshape(12, -1)[rr, cols]))]
+                    ru = (symbol(rr, NAMES[qq], None, flats), float(p[o]))
+                break
             implied = ""
             if q == "5":
                 implied = "m" if _scale(key)[(r + 3) % 12] > _scale(key)[(r + 4) % 12] else ""
-            spans.append(ChordSpan(i, j + 1, sym, r, q, bass_pc, float(p[s]), ru, implied))
+            spans.append(ChordSpan(i, j + 1, sym, r, q, bass_pc, float(p[gs]), ru, implied))
         i = j + 1
     sounding = [c for c in spans if c.quality != "N"]
     if sounding:
-        mn = lambda c: c.quality in ("min", "m7", "dim")
-        rest = (cn[~silent], bn[~silent]) if (~silent).any() else (cn, bn)
-        key = estimate_key(*rest, (sounding[0].root_pc, mn(sounding[0])), (sounding[-1].root_pc, mn(sounding[-1])))
+        live = ~silent if (~silent).any() else np.ones(B, bool)
+        key = key_from_chords(spans, pr[live], bn[live])
         for c in spans:
             if c.quality == "5":
                 c.implied = "m" if _scale(key)[(c.root_pc + 3) % 12] > _scale(key)[(c.root_pc + 4) % 12] else ""
