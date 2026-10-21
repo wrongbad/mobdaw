@@ -62,7 +62,7 @@ function renderBar(staff: Staff, voice: Voice, bar: Bar, pieces: Piece[], lead: 
     if (p.tuplet) text += `(3:2:${p.tuplet}`
     const len = lenText(p.len, ctx.ppq)
     if (!p.heads.length) {
-      text += p.whole ? (voice.hidden ? 'X' : 'Z') : (voice.hidden ? 'x' : 'z') + len
+      text += (voice.hidden ? 'x' : 'z') + len // a whole-bar rest is a plain rest of the bar's length (`Z` draws a multi-measure rest)
       return
     }
     let tok: string
@@ -101,8 +101,9 @@ export function emitAbc(inp: AbcInput): Emitted {
       head += `V:${id} clef=${s.staff.clef}${first ? ` name="${quoted(s.part.name)}"` : ''}${v.stem ? ` stem=${v.stem}` : ''}\n`
     })
   }
-  // the key goes on the pitched voices only (abcjs would draw it on a percussion staff too); `K:` resets the clef, so repeat it
-  head += 'K:C\n'
+  // the key is the header's; a percussion staff's first voice opens with `[K:none]` so abcjs draws no signature on it (on its second voice the parser crashes). (An inline `K:` on
+  // a pitched voice makes abcjs drop that staff's name.)
+  head += `K:${keyName(inp.key.fifths)}\n`
 
   // every voice's bars as text
   const flat = staves.flatMap((s) => s.staff.voices.map((voice, vi) => ({ s, voice, id: s.ids[vi] })))
@@ -127,7 +128,7 @@ export function emitAbc(inp: AbcInput): Emitted {
   lines.forEach((ln, li) => {
     flat.forEach((f, fi) => {
       let line = `[V:${f.id}] `
-      if (li === 0 && inp.key.fifths !== 0 && f.s.staff.clef !== 'perc') line += `[K:${keyName(inp.key.fifths)} clef=${f.s.staff.clef}] `
+      if (li === 0 && f.s.staff.clef === 'perc' && f.id === f.s.ids[0]) line += '[K:none clef=perc] '
       for (let bi = ln.first; bi <= ln.last; bi++) {
         const r = rendered[fi][bi]
         const base = abc.length + line.length

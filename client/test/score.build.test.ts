@@ -37,11 +37,11 @@ V:V1 clef=treble name="Flute"
 V:V2 clef=bass name="Bass"
 V:V3 clef=perc name="Drums" stem=up
 V:V4 clef=perc stem=down
-K:C
-[V:V1] [K:D clef=treble] D2 EF A4 | D2 zC- Cz A,2 |]
-[V:V2] [K:D clef=bass] E,,4 A,,4 | D,,8 |]
-[V:V3] !style=x!g2 c2 z!style=x!g c2 | Z |]
-[V:V4] F2 x2 F2 x2 | X |]
+K:D
+[V:V1] D2 EF A4 | D2 zC- Cz A,2 |]
+[V:V2] E,,4 A,,4 | D,,8 |]
+[V:V3] [K:none clef=perc] !style=x!g2 c2 z!style=x!g c2 | z8 |]
+[V:V4] F2 x2 F2 x2 | x8 |]
 `)
   expect(r.bars.map((b) => b.bar)).toEqual([1, 2])
   expect(r.lines).toEqual([{ first: 0, last: 1 }])
@@ -50,6 +50,8 @@ K:C
   const p = parse(r)
   expect(p.measures).toEqual([2])
   expect(p.staves).toBe(3) // the drums' two voices share one staff
+  const staff = p.systems[0].staff as unknown as { clef: { type: string }; key: { accidentals: unknown[] } }[]
+  expect(staff.map((s) => [s.clef.type, s.key.accidentals.length])).toEqual([['treble', 2], ['bass', 2], ['perc', 0]])
 })
 
 test('ids: each emitted note/chord piece maps back to its doc note ids', () => {
@@ -73,7 +75,7 @@ test('hiding a track drops its staff but not the key', () => {
   const both = build(inp)
   const one = buildScore(inp, { show: new Set(['t0']), width: 800 })
   expect(parse(one).staves).toBe(1)
-  const key = (a: string) => /\[K:(\w+#?)/.exec(a)?.[1]
+  const key = (a: string) => /^K:(\S+)/m.exec(a)?.[1]
   expect(key(one.abc)).toBe(key(both.abc))
   expect(key(one.abc)).toBeDefined()
 })
@@ -158,4 +160,17 @@ test('a performed (humanized, sloppy) track still parses cleanly', () => {
   const r = build(fixture([{ notes }, drums]))
   const p = parse(r)
   expect(p.measures).toEqual(r.lines.map((l) => l.last - l.first + 1))
+})
+
+test('a score of several systems keeps clefs, key and a signature-free perc staff on every system', () => {
+  const eighths: [number, number, number][] = Array.from({ length: 64 }, (_, i) => [(i * Q) / 2, Q / 2, 62 + (i % 4)])
+  const kicks: [number, number, number][] = Array.from({ length: 32 }, (_, i) => [i * Q, 100, 36])
+  const r = build(fixture([{ notes: eighths }, { notes: eighths.map(([t, d, p]) => [t, d, p - 24] as [number, number, number]) }, { notes: kicks, drumNames: { 36: 'kick' } }], { key: 'D' }), 420)
+  expect(r.lines.length).toBeGreaterThan(1)
+  expect(r.abc.match(/\[K:none/g)!.length).toBe(1)
+  const p = parse(r)
+  for (const s of p.systems) {
+    const st = s.staff as unknown as { clef: { type: string }; key: { accidentals: unknown[] } }[]
+    expect(st.map((x) => [x.clef.type, x.key.accidentals.length])).toEqual([['treble', 2], ['bass', 2], ['perc', 0]])
+  }
 })

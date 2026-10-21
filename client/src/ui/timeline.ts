@@ -22,6 +22,7 @@ import { renderProject } from '../audio/render'
 import { exportDialog } from './exportDialog'
 import { projectMenu } from './projectMenu'
 import { h } from '../dom'
+import { mountScore, type ScoreView } from '../score/view'
 import { icon } from '../theme/icons'
 import { HEADER, applyLayout } from './layout'
 import { importFile, PLAYBACK_MAX_BYTES } from '../samples'
@@ -59,6 +60,15 @@ import { sliderDraft } from '../project/draft'
 import { createProjectStore } from '../project/store'
 import { createAutoValues, createDrawers, createMixDrive, createSelection, createTabAvailability, type TabName } from '../project/viewState'
 
+/** Whether a project was last left in score mode: per project, per browser. */
+const scoreMode = {
+  load(projectId: string) {
+    try { return localStorage.getItem(`mobdaw.score.on.${projectId}`) === '1' } catch { return false }
+  },
+  save(projectId: string, on: boolean) {
+    try { on ? localStorage.setItem(`mobdaw.score.on.${projectId}`, '1') : localStorage.removeItem(`mobdaw.score.on.${projectId}`) } catch { /* private mode */ }
+  },
+}
 const importableFiles = (list: FileList | null | undefined) =>
   [...(list ?? [])].filter((f) => isMidiFile(f) || f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
 
@@ -121,6 +131,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   if (!s.local && !s.snapshot) api.project(s.projectId).then((d) => setMemberNames(d.members.map((m) => m.username)), () => {})
   const [chatOpen, setChatOpen] = createSignal(false)
   const [historyOpen, setHistoryOpen] = createSignal(false)
+  const [scoreOn, setScoreOn] = createSignal(scoreMode.load(s.projectId))
   // pixels per second and the sample rate, for the bindings that place things on the timeline (the remote playheads)
   const [rate, setRate] = createSignal(DEFAULT_SAMPLE_RATE)
   const [pps, setPps] = createSignal(80)
@@ -289,7 +300,22 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const masterHead = h('div', { className: 'head' }) // (filled by `MasterHead`)
   let masterGain: HTMLInputElement | null = null // its fader, which doubles as its level meter
   master.append(h('div', { className: 'lane-row master-row' }, masterHead)) // (the drawers follow: `MasterDrawers`)
-  const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el, ...(hist ? [hist.el] : [])))
+  const scorePane = h('div', { className: 'score-pane' })
+  const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, scorePane, chat.el, ...(hist ? [hist.el] : [])))
+  // The score mode swaps the tracks for sheet music; the score mounts on first use and stays while hidden (it only draws while shown).
+  let score: ScoreView | null = null
+  const showScore = (on: boolean) => {
+    scoreMode.save(s.projectId, on)
+    setScoreOn(on)
+    scroll.hidden = on
+    scorePane.hidden = !on
+    if (!on) return
+    score ??= mountScore(scorePane, { doc, projectId: s.projectId })
+    score.resize()
+    score.setPosition(position())
+  }
+  scorePane.hidden = !scoreOn()
+  scroll.hidden = scoreOn()
 
   const x = (smp: number) => (smp / rate()) * pps()
   const fromX = (px: number) => Math.max(0, Math.round((px / pps()) * rate()))
@@ -324,7 +350,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     live: (d, p, v) => cardDeps.live(d, p, v), drag: (d) => cardDeps.drag(d), commit: (d, p, v) => cardDeps.commit(d, p, v),
   }
   disposers.push(
-    mountBar(bar, { store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, mentions: unreadMentions, chatOpen, history: hist ? { open: historyOpen, onToggle: toggleHistory } : undefined, notice: () => (future() ? 'made with a newer version: read-only. reload the page for the latest.' : null),
+    mountBar(bar, { score: { on: scoreOn, onToggle: () => showScore(!scoreOn()) }, store, live: !!s.provider, snapshot: s.snapshot, user: s.user, transport: transport.el, status, cpu, loopText, unread, mentions: unreadMentions, chatOpen, history: hist ? { open: historyOpen, onToggle: toggleHistory } : undefined, notice: () => (future() ? 'made with a newer version: read-only. reload the page for the latest.' : null),
       onStatus: () => status().text && alert(status().text), onClickTrack: clickTrack, onZoom: (f) => zoom.button(f), onExport: exportProject, onChat: toggleChat,
       saveCopy: cloud?.saveCopy && { shown: edited, onSave: () => {
         say('saving a copy on this device…')
@@ -372,6 +398,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     rec.stop(() => {
       pb?.stop()
       transport.setPlaying(false)
+      score?.setPosition(position())
       ensurePreviewTick() // let the loopers' playheads clear
     })
   }
@@ -475,6 +502,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     playhead.style.left = `${HEADER + x(p)}px`
     rulerHead.style.left = `${x(p)}px`
     transport.setTime(p / rate())
+    score?.setPosition(p)
     if (myTake()) setTakePos(p) // (the growing region follows)
     drawLoopStatus()
   }
@@ -1119,6 +1147,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     syncRec()
     measure()
     if (refreshPreviews()) ensurePreviewTick()
+    if (scoreOn()) showScore(true)
     zoom.fit() // (zoom is not remembered per project, so every open fits the song to the window)
     if (!s.snapshot && !future()) sweepUnusedTakes(rec.takeCtx())
     if (!s.snapshot && !future()) recoverTakes(rec.takeCtx()).then((n) => {
@@ -1150,6 +1179,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       chat.destroy()
       hist?.destroy()
       pb?.destroy()
+      score?.dispose()
       disposers.forEach((d) => d())
       store.dispose()
     },

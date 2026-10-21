@@ -30,6 +30,8 @@ export type BarProps = {
   chatOpen: Accessor<boolean>
   /** The history panel (live cloud sessions only; absent: no button). */
   history?: { open: Accessor<boolean>; onToggle(): void }
+  /** The score mode (sheet music instead of the tracks): `on` while shown. */
+  score?: { on: Accessor<boolean>; onToggle(): void }
   /** A line of notice next to the logo (e.g. the project is read-only because a newer version wrote it); null: none. */
   notice?: Accessor<string | null>
   onStatus(): void
@@ -74,6 +76,7 @@ export function Bar(p: BarProps) {
         <div class="bar-btns">
           <button class="bar-btn zoom" title="zoom out (ctrl + scroll)" on:click={() => p.onZoom(1 / 1.5)} innerHTML={iconHtml('zoomOut', 18)} />
           <button class="bar-btn zoom" title="zoom in (ctrl + scroll)" on:click={() => p.onZoom(1.5)} innerHTML={iconHtml('zoomIn', 18)} />
+          <Show when={p.score}>{(sc) => <button class="chat-btn" classList={{ on: sc().on() }} title="show the MIDI tracks as sheet music" on:click={sc().onToggle}>score</button>}</Show>
           <button class="bar-btn" title="render the whole project to a file" on:click={p.onExport}>export</button>
           <Show when={p.live}>
             <Show when={p.history}>{(hist) => <button class="chat-btn" classList={{ on: hist().open() }} title="every change to the project, with revert and restore" on:click={hist().onToggle}>history</button>}</Show>
