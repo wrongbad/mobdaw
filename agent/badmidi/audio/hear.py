@@ -1,13 +1,15 @@
-"""Hearing: tuning, onsets, rhythm, key and chords from mono audio on a known beat grid.
+"""Hearing: tuning, onsets, rhythm, key, chords or notes from mono audio on a known beat grid.
 
 Pure numpy/scipy on in-memory signals at 22050 Hz (`prepare` converts). The caller supplies the
 beat grid in seconds (so any tempo map works); everything is reported per beat or per bar of it.
-Debug CLI: python -m badmidi.audio.hear take.wav --bpm 100 --meter 4/4
+A take is heard as chords (`hear_chords`, a strummed guitar, keys) or as notes (`hear_notes`, a sung or single-note line);
+`hear` picks by voicing. Debug CLI: python -m badmidi.audio.hear take.wav --bpm 100 --meter 4/4 [--as auto|chords|notes]
 """
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from fractions import Fraction
 from math import gcd
 
 import numpy as np
@@ -103,6 +105,28 @@ class ChordSpan:
     confidence: float
     runner_up: tuple[str, float] | None = None
     implied: str = ""            # for a power chord: 'm' or '' (major) as read from the key
+    src: str = ""                # 'melody': a guess from a melody's notes, not heard
+
+
+@dataclass
+class HeardNote:
+    """A note of a monophonic line, quantized. Beats count from the first beat of the grid (a Fraction: a 16th is 1/4 of a
+    beat in a quarter-note beat); `raw_onset_s` is where it was heard, before quantizing."""
+    start_beat: Fraction
+    end_beat: Fraction
+    pitch: int                   # MIDI, tuning-shifted
+    velocity: int                # 1..127, from the RMS
+    confidence: float            # 0..1
+    raw_onset_s: float
+
+
+@dataclass
+class Decision:
+    """Why a take was heard as chords or as notes."""
+    mode: str                    # 'chords' | 'notes'
+    why: str
+    voiced: float = 0.0          # share of sounding frames with an f0
+    clear: float = 0.0           # share of sounding frames with a clear (periodic, steady) f0
 
 
 @dataclass
@@ -113,6 +137,9 @@ class Heard:
     chords: list[ChordSpan]
     rhythm: Rhythm
     onsets: Onsets = field(default_factory=lambda: Onsets([], []))
+    notes: list[HeardNote] = field(default_factory=list)
+    mode: str = "chords"
+    decision: Decision | None = None
 
 
 # --- front end ------------------------------------------------------------------------------------
@@ -361,7 +388,7 @@ def estimate_key(chroma: np.ndarray, bass: np.ndarray | None = None, first=None,
         for t in range(12):
             r = float(np.corrcoef(v, np.roll(prof, t))[0, 1])
             for w, c in ((0.08, first), (0.05, last)):
-                if c and c == (t, mode == "minor"):
+                if c and c[0] == t and (c[1] is None or c[1] == (mode == "minor")):     # minor? None: either mode
                     r += w
             res.append((r, t, mode))
     res.sort(reverse=True)
@@ -487,6 +514,384 @@ def hear_chords(x: np.ndarray, sr: int, grid: Grid) -> Heard:
     gc = grid_check(o.times, grid, o.strengths)
     rh = rhythm(o, grid, 4, gc.mean_offset if gc.on_grid else 0.0)
     return Heard(cents, key, gc, chords, rh, o)
+
+
+# --- monophonic: f0 and notes ---------------------------------------------------------------------
+
+F0_HOP = 220                  # 10 ms
+F0_WIN = 1024                 # integration window of the difference function (46 ms)
+F0_MIN, F0_MAX = 65.0, 2000.0
+TAU_MIN, TAU_MAX = int(SR / F0_MAX), int(SR / F0_MIN) + 1
+BIN = 0.2                     # f0 bins of a fifth of a semitone
+M_LO = 69 + 12 * np.log2(F0_MIN / 440)
+N_BINS = int((69 + 12 * np.log2(F0_MAX / 440) - M_LO) / BIN) + 1
+CAND_TOP = 0.5                # a lag whose normalised difference is above this is no candidate
+JUMP = 6                      # most f0 bins the pitch may move in one frame (120 cents)
+GATE = 0.03                   # frames quieter than this share of the loud ones (rms) are silence
+SPLIT_CENTS = 0.7             # a note ends when the pitch moves this many semitones ...
+SPLIT_FRAMES = 6              # ... and stays there this many frames (60 ms)
+MIN_NOTE = 0.05               # seconds
+
+
+@dataclass
+class F0Track:
+    """One f0 estimate per 10 ms frame. `midi` is the pitch (A440 = 69, not yet tuning-shifted), NaN where unvoiced; `prob`
+    the voicing probability, `aper` the aperiodicity at the chosen lag (0 = perfectly periodic)."""
+    times: np.ndarray
+    midi: np.ndarray
+    prob: np.ndarray
+    aper: np.ndarray
+    rms: np.ndarray
+
+    @property
+    def sounding(self) -> np.ndarray:
+        loud = self.rms[self.rms > 0]
+        return self.rms > max(GATE * (np.percentile(loud, 95) if len(loud) else 0), 1e-4)
+
+    @property
+    def voiced(self) -> np.ndarray:
+        return np.isfinite(self.midi)
+
+
+def _cmnd(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """YIN's cumulative-mean-normalised difference (frames x lags) and the rms of every frame, hop F0_HOP."""
+    n = len(x) // F0_HOP + 1
+    L = F0_WIN + TAU_MAX + 1
+    pad = np.pad(x.astype(np.float64), (F0_WIN // 2, TAU_MAX + F0_WIN + 1))
+    frames = sliding_window_view(pad, L)[::F0_HOP][:n]
+    c = np.empty((n, TAU_MAX + 1), np.float32)
+    rms = np.empty(n)
+    tau = np.arange(TAU_MAX + 1)
+    for i in range(0, n, 512):
+        F = frames[i:i + 512]
+        a = F[:, :F0_WIN]
+        ea = (a * a).sum(axis=1)
+        cs = np.pad(np.cumsum(F * F, axis=1), ((0, 0), (1, 0)))
+        eb = cs[:, F0_WIN:F0_WIN + TAU_MAX + 1] - cs[:, :TAU_MAX + 1]
+        r = np.fft.irfft(np.conj(np.fft.rfft(a, 2048)) * np.fft.rfft(F, 2048), 2048)[:, :TAU_MAX + 1]
+        d = np.maximum(ea[:, None] + eb - 2 * r, 0)
+        d[:, 0] = 0
+        out = d * tau / (np.cumsum(d, axis=1) + 1e-7 * F0_WIN)
+        out[:, 0] = 1
+        c[i:i + 512] = out
+        rms[i:i + 512] = np.sqrt(ea / F0_WIN)
+    return c, rms
+
+
+def _candidates(c: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """(frame, midi, normalised difference, mass) of every dip of the difference function. A dip's mass is the share of
+    thresholds (uniform up to CAND_TOP) for which it is the first dip below: the earlier and deeper, the likelier. That
+    is pYIN's observation model with a flat threshold prior."""
+    mid = c[:, TAU_MIN:TAU_MAX]
+    dip = (mid < c[:, TAU_MIN - 1:TAU_MAX - 1]) & (mid <= c[:, TAU_MIN + 1:TAU_MAX + 1]) & (mid < CAND_TOP)
+    fi, ti = np.nonzero(dip)
+    ti = ti + TAU_MIN
+    a, b, d = c[fi, ti - 1], c[fi, ti], c[fi, ti + 1]
+    delta = np.clip(0.5 * (a - d) / np.maximum(a - 2 * b + d, 1e-9), -0.5, 0.5)
+    midi = 69 + 12 * np.log2(SR / ((ti + delta) * 440))
+    mass = np.zeros(len(fi))
+    bounds = np.r_[0, np.nonzero(np.diff(fi))[0] + 1, len(fi)]
+    for s, e in zip(bounds[:-1], bounds[1:]):
+        v = b[s:e].copy()
+        if e - s > 1:                                              # a dip at a harmonic (a third, an octave up) of a far
+            gap = midi[s:e][None, :] - midi[s:e][:, None]            # deeper dip is that note's partial, not a pitch
+            mult = np.zeros((e - s, e - s), bool)
+            for n in (2, 3, 4, 5, 6):
+                mult |= np.abs(gap + 12 * np.log2(n)) < 0.5            # row i, column j: j is n times the lag of i? (j lower)
+            far = (v[:, None] - v[None, :] > 0.04) & (v[None, :] < 0.08 * v[:, None]) & (v[None, :] < 0.03)
+            v = np.where((mult & far).any(axis=1), CAND_TOP, v)
+        prev = np.r_[CAND_TOP, np.minimum.accumulate(v)[:-1]]
+        mass[s:e] = np.where(v >= CAND_TOP, 0, np.clip((np.minimum(prev, CAND_TOP) - v) / CAND_TOP, 0, 1))
+    return fi, midi, b.astype(float), mass
+
+
+def f0_track(x: np.ndarray) -> F0Track:
+    """pYIN-style f0: YIN candidates with probabilities, then a Viterbi path over pitch bins plus an unvoiced state."""
+    c, rms = _cmnd(x)
+    n = len(c)
+    fi, midi, cval, mass = _candidates(c)
+    track = F0Track(np.arange(n) * F0_HOP / SR, np.full(n, np.nan), np.zeros(n), np.ones(n), rms)
+    silent = ~track.sounding
+    if n < 3 or silent.all():
+        return track
+    tot = np.minimum(np.bincount(fi, mass, minlength=n), 1.0)
+    bins = np.clip(np.rint((midi - M_LO) / BIN).astype(int), 0, N_BINS - 1)
+    obs = np.full((n, N_BINS), 1e-4)
+    np.add.at(obs, (fi, bins), mass)
+    unv = np.maximum(1 - tot, 0.05)
+    obs[silent], unv[silent] = 1e-9, 1.0
+    lv, lu = np.log(obs), np.log(unv)
+    k = np.arange(-JUMP, JUMP + 1)
+    lk = np.log(np.exp(-np.abs(k) / 1.5) / np.exp(-np.abs(k) / 1.5).sum() * 0.98)
+    l_vu, l_uv, l_uu = np.log(0.02), np.log(0.02 / N_BINS), np.log(0.98)
+    v, u = lv[0] + l_uv, lu[0]
+    back_v = np.zeros((n, N_BINS), np.int8)               # offset to the previous bin; 127: came from the unvoiced state
+    back_u = np.zeros(n, np.int32)                        # -1: stayed unvoiced, else the voiced bin it came from
+    for t in range(1, n):
+        win = sliding_window_view(np.pad(v, (JUMP, JUMP), constant_values=-np.inf), 2 * JUMP + 1) + lk[None]
+        j = win.argmax(axis=1)
+        stay = win[np.arange(N_BINS), j]
+        via_u = u + l_uv
+        from_u = via_u > stay
+        back_v[t] = np.where(from_u, 127, j - JUMP)
+        vn = np.where(from_u, via_u, stay) + lv[t]
+        bv = int(v.argmax())
+        to_u = v[bv] + l_vu
+        back_u[t] = bv if to_u > u + l_uu else -1
+        u, v = max(u + l_uu, to_u) + lu[t], vn
+    state = N_BINS if u >= v.max() else int(v.argmax())
+    path = np.zeros(n, np.int32)
+    for t in range(n - 1, -1, -1):
+        path[t] = state
+        if t == 0:
+            break
+        if state == N_BINS:
+            state = N_BINS if back_u[t] < 0 else int(back_u[t])
+        else:
+            o = int(back_v[t, state])
+            state = N_BINS if o == 127 else state + o
+    starts = np.searchsorted(fi, np.arange(n + 1))
+    for t in np.nonzero(path < N_BINS)[0]:
+        s, e = starts[t], starts[t + 1]
+        near = np.nonzero(np.abs(bins[s:e] - path[t]) <= 2)[0]
+        if not len(near):
+            continue
+        j = s + near[np.argmax(mass[s:e][near])]
+        track.midi[t], track.prob[t], track.aper[t] = midi[j], tot[t], cval[j]
+    return track
+
+
+def _smooth(m: np.ndarray, size: int = 5) -> np.ndarray:
+    """Fill gaps of up to 3 unvoiced frames between close pitches, then median-filter each voiced run."""
+    m = m.copy()
+    v = np.isfinite(m)
+    idx = np.nonzero(v)[0]
+    for a, b in zip(idx[:-1], idx[1:]):
+        if 1 < b - a <= 4 and abs(m[a] - m[b]) < 1.0:
+            m[a + 1:b] = np.linspace(m[a], m[b], b - a + 1)[1:-1]
+    v = np.isfinite(m)
+    edges = np.flatnonzero(np.diff(np.r_[0, v.astype(int), 0]))
+    for a, b in zip(edges[::2], edges[1::2]):
+        if b - a >= size:
+            m[a:b] = median_filter(m[a:b], size, mode="nearest")
+    return m
+
+
+def decide(track: F0Track) -> Decision:
+    """Notes or chords? A line is one clear f0 in most of the sounding audio: voiced, periodic (low aperiodicity) and
+    steady (no jumping between octaves or partials). Chords and noise are not."""
+    snd = track.sounding
+    if snd.sum() < 30:
+        return Decision("chords", "too little sound to tell")
+    m = _smooth(track.midi)
+    voiced = np.isfinite(m) & snd
+    steady = np.zeros(len(m), bool)
+    med = median_filter(np.nan_to_num(m, nan=0.0), 9, mode="nearest")
+    steady[voiced] = np.abs(m[voiced] - med[voiced]) < 1.0
+    clear = voiced & steady & (track.aper < 0.25)
+    v, c = float(voiced.sum() / snd.sum()), float(clear.sum() / snd.sum())
+    if c >= 0.6:
+        return Decision("notes", f"one clear pitch in {c * 100:.0f}% of the sound", v, c)
+    return Decision("chords", f"no single clear pitch in the sound ({c * 100:.0f}% clear, {v * 100:.0f}% voiced)", v, c)
+
+
+def _tuning_from_pitch(m: np.ndarray, w: np.ndarray) -> float:
+    """Cents the line sits above 12-TET (-50..50): the weighted mode of the pitch's distance to the semitone grid."""
+    ok = np.isfinite(m)
+    if ok.sum() < 5:
+        return 0.0
+    cents = ((m[ok] + 0.5) % 1 - 0.5) * 100
+    hist = np.bincount(((cents + 50) % 100).astype(int) % 100, weights=w[ok], minlength=100)
+    sm = np.convolve(np.r_[hist[-24:], hist, hist[:24]], np.exp(-0.5 * (np.arange(-24, 25) / 8.0) ** 2), "valid")   # wide: vibrato
+    c0 = np.argmax(sm) - 50 + 0.5
+    near = np.abs((cents - c0 + 50) % 100 - 50) < 30
+    return float(c0 + np.average((cents[near] - c0 + 50) % 100 - 50, weights=w[ok][near])) if near.any() else float(c0)
+
+
+def _segments(m: np.ndarray) -> list[tuple[int, int]]:
+    """[first, end) frames of each note of a smoothed pitch track: a run of voiced frames, cut where the pitch moves by
+    SPLIT_CENTS and stays (a glide is not a note), the cut in the middle of the glide."""
+    v = np.isfinite(m)
+    out = []
+    edges = np.flatnonzero(np.diff(np.r_[0, v.astype(int), 0]))
+    for a, b in zip(edges[::2], edges[1::2]):
+        cur, pend, start = [], [], a
+        for i in range(a, b):
+            ref = np.median(m[cur[-30:]]) if cur else m[i]
+            if cur and abs(m[i] - ref) > SPLIT_CENTS:
+                pend.append(i)
+                while len(pend) > 1 and m[pend].max() - m[pend].min() > 1.0:
+                    pend.pop(0)                                  # still gliding: the settled part is the tail
+                if len(pend) >= SPLIT_FRAMES and abs(np.median(m[pend]) - ref) > SPLIT_CENTS:
+                    cut = (cur[-1] + 1 + pend[0]) // 2 if pend[0] > cur[-1] + 1 else pend[0]
+                    out.append((start, cut))
+                    start, cur, pend = cut, list(range(pend[0], i + 1)), []
+            else:
+                cur += pend + [i]
+                pend = []
+        if b > start:
+            out.append((start, b))
+    return out
+
+
+def _split_on_onsets(segs, db, on_idx, rms_rise: float = 5.0):
+    """Cut a note where an onset shows up inside it with a clear rise in level (the same pitch struck again)."""
+    out = []
+    for a, b in segs:
+        cuts = [a]
+        for i in on_idx:
+            if cuts[-1] + 8 <= i <= b - 8 and db[i + 1:i + 5].max() - db[max(i - 8, 0):i].min() >= rms_rise:
+                cuts.append(int(i))
+        out += list(zip(cuts, cuts[1:] + [b]))
+    return out
+
+
+def hear_notes(x: np.ndarray, sr: int, grid: Grid, snap: int = 4, track: F0Track | None = None) -> Heard:
+    """A sung or single-note line: tuning, key, grid check, notes (quantized to `snap` slots per beat, 4 = 16ths in a
+    quarter-note beat), rhythm. The notes' `raw_onset_s` are the unquantized onsets."""
+    x = prepare(x, sr)
+    tr = track or f0_track(x)
+    hop = F0_HOP / SR
+    m = _smooth(tr.midi)
+    m[~tr.sounding] = np.nan
+    db = 20 * np.log10(tr.rms + 1e-9)
+    cents = _tuning_from_pitch(m, tr.rms)
+    mt = m - cents / 100
+    ons = onsets(x)
+    strong = [t for t, s in zip(ons.times, ons.strengths) if s >= 0.3]
+    on_idx = [int(round(t / hop)) for t in strong if 0 <= t / hop < len(m) - 5]
+    segs = [(a, b) for a, b in _split_on_onsets(_segments(mt), db, on_idx) if (b - a) * hop >= MIN_NOTE]
+
+    raw = []                                                       # (start s, end s, pitch, level dB, confidence)
+    for a, b in segs:
+        f = mt[a:b]
+        f = f[np.isfinite(f)]
+        if not len(f):
+            continue
+        core = f[2:-2] if len(f) > 8 else f
+        med = float(np.median(core))
+        pitch = int(round(med))
+        vp = float(np.mean(tr.prob[a:b]))
+        conf = vp * (1 - min(1.0, 1.5 * abs(med - pitch))) * min(1.0, (b - a) * hop / 0.08)
+        t0 = a * hop
+        prev = raw[-1][0] + MIN_NOTE if raw else -1.0
+        near = [t for t in strong if -0.15 <= t - t0 <= 0.05 and t > prev]      # the flux onset knows the attack better than the f0
+        if near:
+            t0 = min(near, key=lambda t: abs(t - t0))
+        raw.append((t0, b * hop, pitch, float(np.percentile(db[a:b], 80)), max(0.0, min(1.0, conf))))
+    raw.sort()
+    starts = [r[0] for r in raw]
+    gc = grid_check(starts, grid, None)
+    shift = gc.mean_offset if gc.on_grid else 0.0
+    ref = np.percentile([r[3] for r in raw], 90) if raw else 0.0
+    notes = _quantize(raw, grid, snap, shift, ref)
+    rh = rhythm(Onsets(starts, [min(1.0, max(0.3, n.velocity / 110)) for n in notes][:len(starts)] if len(notes) == len(starts) else [1.0] * len(starts)),
+                grid, snap, shift)
+    key = _key_of_notes(notes)
+    return Heard(cents, key, gc, guess_chords(notes, grid, key), rh, Onsets(starts, [1.0] * len(starts)), notes, "notes")
+
+
+def _quantize(raw, grid: Grid, snap: int, shift: float, ref_db: float) -> list[HeardNote]:
+    """Onsets and ends to the nearest slot; a note is at least a slot long, never past the next note's start, and a gap
+    of under a slot and 60 ms to the next note is closed (legato)."""
+    slots = np.append(_slot_times(grid, snap), grid.edges()[-1])
+    nslots = len(slots) - 1
+    q = []
+    for t0, t1, pitch, db, conf in raw:
+        if t0 - shift < slots[0] - 0.05 or t0 - shift >= slots[-1]:
+            continue
+        s = int(np.argmin(np.abs(slots - (t0 - shift))))
+        e = int(np.argmin(np.abs(slots - (t1 - shift))))
+        q.append([s, e, pitch, int(max(1, min(127, round(105 + 2 * (db - ref_db))))), conf, t0, t1])
+    out = []
+    for i, (s, e, pitch, vel, conf, t0, t1) in enumerate(q):
+        nxt = q[i + 1] if i + 1 < len(q) else None
+        if nxt and nxt[0] <= s:
+            continue                                               # two notes on one slot: the later one is an ornament of it
+        if nxt:
+            if nxt[5] - t1 < 0.06 or nxt[0] - e <= 1:
+                e = nxt[0]
+            e = min(e, nxt[0])
+        e = min(max(e, s + 1), nslots)
+        if s >= nslots:
+            continue
+        out.append(HeardNote(Fraction(s, snap), Fraction(e, snap), pitch, vel, round(conf, 2), round(t0, 4)))
+    return out
+
+
+def _key_of_notes(notes: list[HeardNote]) -> Key:
+    """Krumhansl-Schmuckler on the notes' pitch classes weighted by duration; the last note nudges the tonic."""
+    if not notes:
+        return estimate_key(np.ones((1, 12)))
+    v = np.zeros((1, 12))
+    for n in notes:
+        v[0, n.pitch % 12] += float(n.end_beat - n.start_beat)
+    last = (notes[-1].pitch % 12, None)
+    return estimate_key(v, None, (notes[0].pitch % 12, None), last)
+
+
+def _triads(key: Key) -> list[tuple[int, str]]:
+    """The key's diatonic triads as (root, quality), plus the major V of a minor key."""
+    steps = (0, 2, 4, 5, 7, 9, 11) if key.mode == "major" else (0, 2, 3, 5, 7, 8, 10)
+    pcs = [(key.tonic + s) % 12 for s in steps]
+    out = []
+    for i, r in enumerate(pcs):
+        third, fifth = (pcs[(i + 2) % 7] - r) % 12, (pcs[(i + 4) % 7] - r) % 12
+        out.append((r, "maj" if (third, fifth) == (4, 7) else "min" if (third, fifth) == (3, 7) else "dim"))
+    if key.mode == "minor":
+        out.append((pcs[4], "maj"))
+    return out
+
+
+def guess_chords(notes: list[HeardNote], grid: Grid, key: Key) -> list[ChordSpan]:
+    """A rough chord per bar from a melody: the diatonic triad of the key that covers the most of the bar's notes (by
+    duration, the downbeat counting double and the middle of the bar half as much again; chord tones weigh root > third >
+    fifth, other notes count against it). A guess, with low confidence, marked src='melody'."""
+    flats = _flats(key)
+    prior = {0: .06, 4: .04, 3: .03}                               # tonic, dominant, subdominant by degree
+    cands = _triads(key)
+    out = []
+    for a, b in grid.bars():
+        w = np.zeros(12)
+        for n in notes:
+            for beat in range(a, b):
+                lo, hi = max(float(n.start_beat), beat), min(float(n.end_beat), beat + 1)
+                if hi > lo:
+                    pos = beat - a
+                    w[n.pitch % 12] += (hi - lo) * (2.0 if pos == 0 else 1.5 if (b - a >= 4 and pos == (b - a) // 2) else 1.0)
+        total = w.sum()
+        if total < 0.5:
+            out.append(ChordSpan(a, b, "N", 0, "N", 0, 0.0, None, "", "melody"))
+            continue
+        scores = []
+        for i, (r, q) in enumerate(cands):
+            tones = [(r + iv) % 12 for iv, _ in QUALITIES[q][1]]
+            wt = [wt for _, wt in QUALITIES[q][1]]
+            cover = sum(w[p] * x for p, x in zip(tones, wt))
+            rest = total - sum(w[p] for p in tones)
+            scores.append((cover - 0.35 * rest) / total + prior.get(i, 0) + (0.03 if q == "maj" and i == 7 else 0))
+        order = np.argsort(scores)[::-1]
+        r, q = cands[order[0]]
+        r2, q2 = cands[order[1]]
+        conf = float(np.clip(0.15 + 0.4 * (scores[order[0]] - scores[order[1]]), 0.1, 0.4))
+        out.append(ChordSpan(a, b, symbol(r, q, None, flats), r, q, r, round(conf, 2),
+                             (symbol(r2, q2, None, flats), round(max(conf - 0.1, 0.05), 2)), "", "melody"))
+    return out
+
+
+def hear(x: np.ndarray, sr: int, grid: Grid, mode: str = "auto", snap: int = 4) -> Heard:
+    """Chords or notes: `mode` 'auto' decides by voicing (see `decide`), or force 'chords' / 'notes'."""
+    if mode == "chords":
+        return hear_chords(x, sr, grid)
+    x = prepare(x, sr)
+    tr = f0_track(x)
+    d = decide(tr) if mode == "auto" else None
+    if mode == "notes" or d.mode == "notes":
+        h = hear_notes(x, SR, grid, snap, tr)
+    else:
+        h = hear_chords(x, SR, grid)
+    h.decision = d
+    return h
 
 
 # --- text -----------------------------------------------------------------------------------------
