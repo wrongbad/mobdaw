@@ -64,7 +64,7 @@ class Grid:
 @dataclass
 class Onsets:
     times: list[float]
-    strengths: list[float]       # relative to the strongest (1.0)
+    strengths: list[float]       # 0..1, against the 90th percentile
 
 
 @dataclass
@@ -230,9 +230,10 @@ ONSET_DELAY = 0.0   # seconds to subtract from the flux peak time (set from meas
 
 
 def onsets(x: np.ndarray) -> Onsets:
-    """Spectral-flux onsets with an adaptive threshold; strengths relative to the strongest."""
+    """Spectral-flux onsets with an adaptive threshold; strengths relative to the strong ones, clipped at 1."""
     n, hop = 1024, 256
-    S = _stft(x, n, hop)
+    lead = n // 2                                    # a lead-in of silence so an onset at t=0 shows as a rise
+    S = _stft(np.r_[np.zeros(lead, np.float32), x], n, hop)
     k0, k1 = int(60 / (SR / n)), int(8000 / (SR / n))
     L = np.log1p(S[:, k0:k1] * (100.0 / max(S.max(), 1e-9)))
     flux = np.maximum(L[1:] - maximum_filter1d(L[:-1], 3, axis=1), 0).sum(axis=1)
@@ -257,7 +258,7 @@ def onsets(x: np.ndarray) -> Onsets:
     for k, i in enumerate(idx):                      # a slow attack: the onset is where the rise began
         while start[k] > 0 and i - start[k] < 6 and flux[start[k] - 1] > 0.3 * flux[i]:
             start[k] -= 1
-    return Onsets((start * hop / SR - ONSET_DELAY).tolist(), (st / st.max()).tolist())
+    return Onsets(((start * hop - lead) / SR - ONSET_DELAY).tolist(), np.minimum(st / max(np.percentile(st, 90), 1e-9), 1.0).tolist())
 
 
 def _slot_times(grid: Grid, spb: int) -> np.ndarray:
@@ -320,7 +321,7 @@ N_SCORE = 0.5            # how well "no chord" matches a sounding beat
 BASS_W = 0.15            # bonus for a chord whose root is what the bass plays
 BETA = 12.0              # emission scale for Viterbi
 CHANGE = 1.6             # change penalty (emission units) on a weak beat
-CONF_T = 25.0            # softmax temperature for confidence
+CONF_T = 40.0            # softmax temperature for confidence
 
 
 def _build_templates() -> None:
@@ -503,11 +504,11 @@ def format_chart(h: Heard, grid: Grid, name: str = "audio") -> str:
         for c in h.chords:
             if c.end_beat <= a or c.start_beat >= b:
                 continue
-            cell = c.symbol if c.confidence >= 0.6 or c.runner_up is None else \
-                f"{c.symbol} {c.confidence:.2f} | {c.runner_up[0]} {c.runner_up[1]:.2f}"
+            unsure = c.runner_up is not None and (c.confidence < 0.5 or c.runner_up[1] > 0.5 * c.confidence)
+            cell = f"{c.symbol} {c.confidence:.2f}" + (f" | {c.runner_up[0]} {c.runner_up[1]:.2f}  <- unsure" if unsure else "")
             if c.quality == "5" and c.implied:
-                cell += " (minor by key)"
-            cells.append(cell if c.confidence < 0.6 else f"{cell} {c.confidence:.2f}")
+                cell += " (power chord, minor by key)"
+            cells.append(cell)
         lines.append(f"{n:>3}  " + "  ".join(cells))
     if h.rhythm.bars:
         spb = h.rhythm.slots_per_beat
@@ -530,6 +531,7 @@ def main(argv: list[str] | None = None) -> int:
     per_bar = int(a.meter.split("/")[0])
     beat = 60.0 / a.bpm * 4 / int(a.meter.split("/")[1])
     n = int((len(x) / SR - a.offset) / beat)
+    n = n // per_bar * per_bar or n                  # whole bars; the reverb tail is not a bar
     grid = Grid([a.offset + i * beat for i in range(n)], [i % per_bar == 0 for i in range(n)], a.offset + n * beat)
     print(format_chart(hear_chords(x, SR, grid), grid, a.file))
     return 0
