@@ -38,7 +38,11 @@ PPQ = 960
 SLOT = (0, 6, 8, 12)
 
 
-def state_for(file_hash, seconds, bpm=th.BPM if np else 100, extra_tracks=()):
+CLICK = {"id": "click1", "name": "click", "kind": "midi", "role": "click", "muted": False, "soloed": False, "devices": [], "clips": []}
+
+
+def state_for(file_hash, seconds, bpm=th.BPM if np else 100, extra_tracks=(), click=True):
+    """A project with a take on "Guitar" from bar 1. With a click track (the default) it has a timing reference: case A."""
     bar = 4 * PPQ
     return {
         "rev": 3, "meta": {"ppq": PPQ, "sampleRate": 48000}, "name": "Take",
@@ -47,7 +51,7 @@ def state_for(file_hash, seconds, bpm=th.BPM if np else 100, extra_tracks=()):
         "samples": {file_hash: {"name": "take.wav", "duration": seconds, "mime": "audio/wav"}},
         "tracks": [{"id": "g1", "name": "Guitar", "kind": "audio", "devices": [], "clips": [
             {"id": "a1", "kind": "audio", "start": "1.1.0", "startTick": 0, "startSeconds": 0, "lengthSeconds": seconds,
-             "sourceOffsetSeconds": 0, "sourceHash": file_hash, "sample": "take.wav", "gain": 1}]}, *extra_tracks],
+             "sourceOffsetSeconds": 0, "sourceHash": file_hash, "sample": "take.wav", "gain": 1}]}, *([CLICK] if click else []), *extra_tracks],
     }
 
 
@@ -92,7 +96,6 @@ class TestListen(unittest.TestCase):
 
     def test_the_chart(self):
         txt = self.res.chart()
-        self.assertTrue(self.res.ok, txt)
         self.assertRegex(txt.splitlines()[0], r"^Guitar \(audio, 1 take\), 4 bars, heard as chords \(auto: no single clear pitch, \d+% of the sound\), tuning \+\d+ c, key A minor, on the grid")
         for n, sym in enumerate(PROG, 1):
             self.assertRegex(txt, rf"\n +{n}  {sym} [01]\.\d\d")
@@ -155,7 +158,7 @@ class TestListen(unittest.TestCase):
         res = L.listen(FakeClient({h: wav}), "pid", st, "Guitar", mode="chords", cache_dir=self.cache)
         self.assertEqual(len(res.grid.beats), 8, "two beats a bar, not six")
         self.assertEqual(res.part.rhythm.beat, Fraction(3, 2))
-        self.assertEqual(len(res.part.rhythm.bars[0]), 12, "six 16ths in each dotted quarter")
+        self.assertEqual(len(res.part.rhythm.bars[0]), 6, "three 8ths in each dotted quarter (the compound beat's own subdivision)")
         self.assertEqual([(c.symbol, c.start) for c in res.part.chords], [(s, 3 * i) for i, s in enumerate(PROG)])
 
     def run_cli(self, client, *args):
@@ -183,18 +186,19 @@ class TestListen(unittest.TestCase):
         code, _ = self.run_cli(c)
         self.assertIn("still uploading", str(code))
 
-    def test_cli_off_the_grid_fails_with_advice(self):
-        x = th.render(PROG[:2], th.pluck_note, SLOT, tempo=th.BPM * 1.04)
+    def test_cli_a_take_off_the_click_is_followed_not_refused(self):
+        x = th.render(PROG, th.pluck_note, SLOT, tempo=th.BPM * 1.04)
         wav = os.path.join(self.tmp, "fast.wav")
         sf.write(wav, x, th.SR, subtype="PCM_16")
         h = sha(wav)
         c = FakeClient({h: wav})
-        c._state = state_for(h, 2 * 4 * 60 / (th.BPM * 1.04))
-        code, out = self.run_cli(c, "--bars", "1-2")
-        self.assertEqual(code, 1)
-        self.assertIn("OFF the grid", out)
-        self.assertIn("Re-record it to the click", out)
-        self.assertIn("tempo from loop", out)
+        c._state = state_for(h, 4 * 4 * 60 / (th.BPM * 1.04))
+        code, out = self.run_cli(c, "--bars", "1-4")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("OFF the grid", out)
+        self.assertRegex(out, r"warning: .*(rushes|drifts|wanders)")
+        for n, sym in enumerate(PROG, 1):
+            self.assertRegex(out, rf"\n +{n}  {sym} ")
 
 
 @unittest.skipIf(np is None, "numpy/scipy/soundfile not installed")
@@ -206,7 +210,7 @@ class TestHeardInThePiece(unittest.TestCase):
         cls.keys = {"id": "k1", "name": "Keys", "kind": "midi", "devices": [{"id": "d", "type": "finnwave", "typeId": 2, "params": {}}], "clips": [
             {"id": "c1", "kind": "midi", "start": "1.1.0", "startTick": 0, "lengthTicks": 4 * PPQ, "length": "1 bar", "end": "2.1.0",
              "notes": [{"id": "n1", "p": "C4", "pitch": 60, "t": 0, "d": PPQ, "v": 100}]}]}
-        cls.state = state_for(cls.hash, cls.bars_seconds, extra_tracks=[cls.keys])
+        cls.state = state_for(cls.hash, cls.bars_seconds, extra_tracks=[cls.keys], click=False)
         cls.res = L.listen(cls.client, "pid", cls.state, "Guitar", cache_dir=cls.cache)
 
     tearDownClass = classmethod(lambda cls: shutil.rmtree(cls.tmp))
@@ -304,7 +308,6 @@ class TestListenNotes(unittest.TestCase):
 
     def test_auto_hears_a_notes_chart(self):
         txt = self.res.chart()
-        self.assertTrue(self.res.ok, txt)
         self.assertRegex(txt.splitlines()[0], r"^Voice \(audio, 1 take\), 4 bars, heard as notes \(auto: one clear pitch in \d+% of the sound\), tuning \+1\d c, key A minor, on the grid")
         self.assertRegex(txt, r"\n  1  A3\.q C4\.e E4\.e A4\.qd G4\.e +\| guess: Am")
         self.assertRegex(txt, r"\n  4  A3\.q A4\.q A3\.q A3\.q")

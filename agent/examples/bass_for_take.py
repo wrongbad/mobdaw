@@ -5,6 +5,10 @@
 
 Once (no --watch): listen to the track, draft a bass with `bass.line`, check it against the heard chords, push it as a new
 "bass guitar" track with the `bass` patch as ONE history entry labelled "bass for Guitar", and say what happened in chat.
+It follows whatever timing the take has and never refuses it: with a click track or MIDI in the project the bass is on the project's
+grid and the reply says how the take sits against it ("the take sits +35 ms behind the beats: move the clip 35 ms earlier"); in an
+audio-only project the time map is set from the audio in the same entry ("set the project tempo to 92 bpm 4/4 (pickup 0.4 s) to
+match the take"; a revert undoes both; `--keep-map` leaves the map alone), with a warning naming the other reading when it is unsure.
 With --watch it waits in the project for a chat message that mentions this token's handle ("@you(api) bass for Guitar,
 bars 1-8, walk") and does that for each one, answering in chat. Needs `pip install 'badmidi[audio]'` and MOBDAW_URL if the
 server is not the default.
@@ -19,7 +23,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from badmidi import bass  # noqa: E402
@@ -34,6 +38,8 @@ class Result:
     summary: str                # what was pushed
     seq: int | None             # the history entry (None: dry run)
     unsure: list[str]
+    warnings: list[str] = field(default_factory=list)       # the timing's: how the take sits on the beats, or what was guessed
+    map_note: str = ""          # audio-only project: the time map the push sets (empty: the project's map is untouched)
 
 
 def bar_spans(got: Listened) -> list[tuple]:
@@ -55,15 +61,23 @@ def draft(got: Listened, score, style: str):
     return bass.line(got.part, style=style, key=score.key)
 
 
+def map_note(got: Listened, applied: bool) -> str:
+    """The sentence about the time map an audio-only project gets from its audio ('' when the map is not touched)."""
+    p = got.proposal
+    if p is None:
+        return ""
+    pickup = f" (pickup {p.pickup_s:.1f} s)" if p.pickup_s else ""
+    what = f"the project tempo to {p.bpm:.0f} bpm {p.meter}{pickup}" if p.kind == "steady" else f"the project's tempo map to follow the take, about {p.bpm:.0f} bpm {p.meter}{pickup}, {len(p.metered())} tempo regions"
+    return f"{'I set' if applied else 'would set'} {what} to match the take (the project had no click or MIDI to follow)."
+
+
 def make_bass(c: Client, pid: str, track: str, style: str = "root-fifth", bars: tuple[int, int] | None = None,
-              apply: bool = True, wait: float = 0, cache_dir: str | None = None) -> Result:
+              apply: bool = True, wait: float = 0, cache_dir: str | None = None, case: str = "auto", keep_map: bool = False) -> Result:
     """Listen to `track`, draft a bass, check it, push it. Raises BridgeError (SampleIncoming while the take uploads; the
-    take being off the click, with advice, or the draft having errors)."""
+    draft having errors). A take's timing is never a reason to stop: it is followed and reported in the Result."""
     state = c.state(pid)
-    got = listen(c, pid, state, track, bars, "chords", wait, cache_dir)
-    if not got.ok:
-        raise BridgeError(got.problem())
-    pulled = pull(state, pid, None, [got.part])
+    got = listen(c, pid, state, track, bars, "chords", wait, cache_dir, case=case, keep_map=keep_map)
+    pulled = pull(state, pid, None, [got.part], got.proposal)
     score = pulled.score
     taken = {p.name for p in score.parts}
     name = next(n for n in ["bass guitar"] + [f"bass guitar {i}" for i in range(2, 99)] if n not in taken)
@@ -74,17 +88,21 @@ def make_bass(c: Client, pid: str, track: str, style: str = "root-fifth", bars: 
     asks = [f"bar {got.bars[0] + i}: {c_.symbol} or {c_.alt}" for i, (a, z) in enumerate(bar_spans(got))
             for c_ in got.part.chords if a <= c_.start < z and c_.is_unsure()]
     if not apply:
-        return Result(chart_line(got), f"dry run: {len(pl.ops)} ops, +{pl.adds} notes, {pl.new_tracks} new track", None, asks)
+        return Result(chart_line(got), f"dry run: {len(pl.ops)} ops, +{pl.adds} notes, {pl.new_tracks} new track", None, asks, got.warnings, map_note(got, False))
     res = c.ops(pid, pl.ops, f"bass for {track}")
-    return Result(chart_line(got), f"{pl.adds} notes on a new {name!r} track ({style})", res["seq"], asks)
+    return Result(chart_line(got), f"{pl.adds} notes on a new {name!r} track ({style})", res["seq"], asks, got.warnings, map_note(got, True))
 
 
 def reply_text(r: Result) -> str:
     text = f"heard: {r.chart}\nbass: {r.summary}."
     if r.unsure:
         text += " Unsure: " + "; ".join(r.unsure) + " (tell me the right chord and I will redo it)."
+    if r.map_note:
+        text += "\n" + r.map_note
+    if r.warnings:
+        text += "\ntiming: " + "; ".join(r.warnings) + "."
     if r.seq is not None:
-        text += f" The audio is unheard by me, so check it by ear; revert with history seq {r.seq}."
+        text += f"\nThe audio is unheard by me, so check it by ear; revert with history seq {r.seq}" + (" (it undoes the tempo change and the bass together)." if r.map_note else ".")
     return text
 
 
@@ -101,17 +119,18 @@ def parse_request(text: str, default_track: str, default_style: str) -> tuple[st
     return m["track"].strip() or default_track, style, (int(b[1]), int(b[2] or b[1])) if b else None
 
 
-def handle(c: Client, pid: str, track: str, style: str, bars, apply: bool = True, wait: float = 120, say=print) -> Result | None:
+def handle(c: Client, pid: str, track: str, style: str, bars, apply: bool = True, wait: float = 120, say=print,
+           case: str = "auto", keep_map: bool = False) -> Result | None:
     """One request, answered in chat (and `say`)."""
     def tell(text: str):
         say(text)
         c.chat(pid, text)
     try:
         try:
-            r = make_bass(c, pid, track, style, bars, apply)
+            r = make_bass(c, pid, track, style, bars, apply, case=case, keep_map=keep_map)
         except SampleIncoming:
             tell(f"waiting for the take on {track} to upload")
-            r = make_bass(c, pid, track, style, bars, apply, wait=wait)
+            r = make_bass(c, pid, track, style, bars, apply, wait=wait, case=case, keep_map=keep_map)
     except BridgeError as e:
         tell(f"cannot make a bass for {track}: {e}")
         return None
@@ -119,7 +138,8 @@ def handle(c: Client, pid: str, track: str, style: str, bars, apply: bool = True
     return r
 
 
-def watch(c: Client, pid: str, track: str, style: str, apply: bool = True, once: bool = False, timeout: float | None = None) -> None:
+def watch(c: Client, pid: str, track: str, style: str, apply: bool = True, once: bool = False, timeout: float | None = None,
+          case: str = "auto", keep_map: bool = False) -> None:
     """Wait for chat messages that mention this token's handle and ask for a bass. `once`: return after the first one."""
     since = c.events(pid)["cursor"]
     print(f"waiting in the project's chat for a mention such as 'bass for {track}' ...", flush=True)
@@ -135,7 +155,7 @@ def watch(c: Client, pid: str, track: str, style: str, apply: bool = True, once:
             req = parse_request(e["message"]["text"], track, style)
             if req:
                 print(f"{e['message']['username']}: {e['message']['text']}")
-                handle(c, pid, req[0], req[1], req[2], apply)
+                handle(c, pid, req[0], req[1], req[2], apply, case=case, keep_map=keep_map)
                 if once:
                     return
     raise BridgeError("timed out waiting for a chat request for a bass")
@@ -150,14 +170,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--watch", action="store_true", help="wait for chat requests instead of doing it once")
     ap.add_argument("--once", action="store_true", help="with --watch: stop after the first request")
     ap.add_argument("--dry-run", action="store_true", help="draft and check, push nothing")
+    ap.add_argument("--case", default="auto", choices=("auto", "a", "b"), help="a: follow the project's time map; b: the audio defines it; auto: by the project's click track and MIDI notes")
+    ap.add_argument("--keep-map", action="store_true", help="audio-only project: leave the time map alone (the bass will not sit on its bar lines)")
     args = ap.parse_args(argv)
     c = Client()
     pid = c.project_id(args.project)
     if args.watch:
-        watch(c, pid, args.track, args.style, not args.dry_run, args.once)
+        watch(c, pid, args.track, args.style, not args.dry_run, args.once, case=args.case, keep_map=args.keep_map)
         return 0
     from badmidi.cli import _bars
-    r = handle(c, pid, args.track, args.style, _bars(args.bars), not args.dry_run)
+    r = handle(c, pid, args.track, args.style, _bars(args.bars), not args.dry_run, case=args.case, keep_map=args.keep_map)
     return 0 if r else 1
 
 
