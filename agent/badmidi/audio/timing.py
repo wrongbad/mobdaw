@@ -29,6 +29,7 @@ UNSURE = 0.5                   # under this confidence a reading should be repor
 BPM_LO, BPM_HI = 40.0, 240.0
 PRIOR_BPM, PRIOR_OCT = 100.0, 0.8     # the tempo prior: log-normal around 100 bpm, this many octaves wide
 HARM = (1.0, 0.5, 0.33, 0.25)  # weight of the multiples of a beat period in the tempo score
+LOW_W = 0.6                    # the bass band's share in the beat tracker's envelope: beats are where the bass lands
 ALPHA = 200.0                  # beat tracker: stiffness of the tempo (cost of a log-ratio away from the local period)
 
 
@@ -39,7 +40,8 @@ ALPHA = 200.0                  # beat tracker: stiffness of the tempo (cost of a
 class Features:
     """What the timing functions share, from one pass over the audio."""
     env: np.ndarray              # onset strength per frame (FPS), >= 0
-    low: np.ndarray              # the same for the bass band (40-250 Hz)
+    low: np.ndarray              # the same for the bass band (60-250 Hz)
+    rise: np.ndarray             # how far the level rises into each frame, dB (accents: a loud strum, a kick)
     chroma: np.ndarray           # frames x 12, cheap pitch-class energy
     chroma_fps: float
     duration: float
@@ -150,13 +152,15 @@ def features(x: np.ndarray) -> Features:
     """Onset-strength envelope (log-spectral flux across 60 Hz - 8 kHz), the same for the bass band, and a cheap chroma."""
     x = np.asarray(x, np.float32)
     n = 1024
-    S = _stft(x, n, HOP)
+    S = _stft(np.r_[np.zeros(4 * HOP, np.float32), x], n, HOP)[4:]     # a lead-in of silence, so an onset at t=0 shows as a rise
     k0, k1, kl = int(60 / (SR / n)) + 1, int(8000 / (SR / n)), int(250 / (SR / n))
     L = np.log1p(S[:, k0:k1] * (100.0 / max(S.max(), 1e-9)))
     flux = np.maximum(L[1:] - maximum_filter1d(L[:-1], 3, axis=1), 0)
     env = np.r_[0, flux.sum(axis=1)]
     low = np.r_[0, flux[:, :kl - k0].sum(axis=1)]
     env, low = _clean(env), _clean(low)
+    db = 10 * np.log10((S[:, k0:k1] ** 2).sum(axis=1) + 1e-6 * max(S.max() ** 2, 1e-9))
+    rise = np.maximum(db - np.r_[np.full(4, db[0]), np.minimum.reduce([db[i:len(db) - 4 + i] for i in range(4)])][:len(db)], 0)
     nc, hc = 4096, 1024
     C = _stft(x, nc, hc)
     f = np.arange(C.shape[1]) * SR / nc
@@ -166,7 +170,7 @@ def features(x: np.ndarray) -> Features:
     A = np.log1p(C[:, ok] * (100.0 / max(C.max(), 1e-9)))
     for p in range(12):
         chroma[:, p] = A[:, pc == p].sum(axis=1)
-    return Features(env, low, chroma, SR / hc, len(x) / SR)
+    return Features(env, low, rise, chroma, SR / hc, len(x) / SR)
 
 
 def _clean(e: np.ndarray) -> np.ndarray:
@@ -281,7 +285,7 @@ def beats(x, hint_bpm: float | None = None) -> BeatTrack:
     then a dynamic-programming tracker that follows the tempo as it moves (rubato, accelerando). `hint_bpm` forces the reading
     (a person said "it's double"): the tempo is searched within 12% of it."""
     f = _feat(x)
-    o = f.env
+    o = f.env + LOW_W * f.low
     bpms = BPM_LO * (BPM_HI / BPM_LO) ** (np.arange(0, 1.0001, 0.005))
     empty = BeatTrack(np.zeros(0), np.zeros(0), PRIOR_BPM, 0.0)
     if len(o) < int(2 * FPS) or o.max() <= 0:
@@ -344,3 +348,176 @@ def _alternatives(P: np.ndarray, bpms: np.ndarray, bpm: float) -> tuple[list[Alt
     rival = float(P[far].max() / best) if far.any() else 0.0
     alts.sort(key=lambda a: -a.score)
     return [a for a in alts if a.score >= 0.3], min(rival, 1.0)
+
+
+# --- feel -----------------------------------------------------------------------------------------
+
+_FRAC = {"straight16": (0, 1, 2, 3), "triplet8": (0, 1, 2), "triplet16": (0, 1, 2, 3, 4, 5)}
+_DEN = {"straight16": 4, "triplet8": 3, "triplet16": 6}
+
+
+def _cdist(a, b):
+    """Circular distance on a period of 1, signed."""
+    return (a - b + 0.5) % 1.0 - 0.5
+
+
+def _gauss(d: np.ndarray, s: float) -> np.ndarray:
+    return np.exp(-0.5 * (d / s) ** 2) / (s * np.sqrt(2 * np.pi))
+
+
+def _fit_mixture(phi: np.ndarray, w: np.ndarray, centres: np.ndarray, sigma: float, eps: float = 0.1) -> tuple[float, np.ndarray]:
+    """Weighted log-likelihood of onset phases under a mixture of Gaussians at `centres` (weights fitted by EM) plus uniform clutter."""
+    N = _gauss(_cdist(phi[:, None], centres[None]), sigma)
+    pi = np.full(len(centres), 1.0 / len(centres))
+    for _ in range(25):
+        comp = (1 - eps) * N * pi
+        p = comp.sum(axis=1) + eps
+        pi = (w[:, None] * comp / p[:, None]).sum(axis=0)
+        pi = pi / max(pi.sum(), 1e-12)
+    p = ((1 - eps) * N * pi).sum(axis=1) + eps
+    return float((w * np.log(p)).sum()), pi
+
+
+def feel(onset_times, beat_times, strengths=None) -> Feel:
+    """Subdivision and swing of the playing against the beats (which may be irregular): the onsets' phases within their beat are
+    fitted by straight 16ths, triplet 8ths, triplet 16ths and swung 8ths (the off-beat 8th at a fitted 0.52..0.76 of the beat),
+    each paying for the positions it uses. Few onsets -> straight, low confidence. `offset_s`: where the on-beat onsets sit
+    against the beat."""
+    t = np.asarray(onset_times, float)
+    B = np.asarray(beat_times, float)
+    w = np.ones(len(t)) if strengths is None else np.asarray(strengths, float)
+    if len(B) < 3 or len(t) == 0:
+        return Feel("straight16", 0.5, 0.0, 0.0, 0)
+    k = np.searchsorted(B, t, "right") - 1
+    ok = (k >= 0) & (k < len(B) - 1) & (w >= 0.15)
+    t, k, w = t[ok], k[ok], w[ok]
+    L = np.diff(B)[k] if len(k) else np.zeros(0)
+    phi = (t - B[k]) / np.maximum(L, 1e-6) if len(k) else np.zeros(0)
+    Lm = float(np.median(np.diff(B)))
+    neff = float(w.sum())
+    if neff < 8:
+        return Feel("straight16", 0.5, 0.0, 0.1 * neff / 8, len(t))
+    sigma = float(np.clip(0.02 / Lm, 0.03, 0.06))
+    ds = np.arange(-0.15, 0.1501, 0.005)
+    sc = np.array([(w * _gauss(_cdist(phi, d), sigma)).sum() for d in ds])
+    d0 = ds[int(sc.argmax())]
+    near = np.abs(_cdist(phi, d0)) < 0.08
+    d0 = d0 + float(np.average(_cdist(phi[near], d0), weights=w[near])) if near.any() else d0
+    off_s = float(np.median(_cdist(phi[near], 0.0) * L[near])) if near.any() else 0.0
+    cands = [(kind, 0.5, np.array(_FRAC[kind]) / _DEN[kind]) for kind in _FRAC]
+    cands += [("swing8", r, np.array([0.0, r])) for r in np.arange(0.52, 0.7601, 0.01)]
+    best: dict[str, tuple[float, float, np.ndarray, frozenset]] = {}
+    for kind, r, pos in cands:
+        ll, pi = _fit_mixture(phi, w, (pos + d0) % 1.0, sigma)
+        used = int((pi * neff >= max(2.0, 0.05 * neff)).sum())
+        score = ll - 0.5 * np.log(neff) * (used + (1 if kind == "swing8" else 0)) - 0.25 * len(pos)       # each position it could use costs a little
+        if kind not in best or score > best[kind][0]:
+            best[kind] = (score, r, pi, frozenset(int(round(q * 50)) % 50 for q, u in zip(pos, pi * neff >= max(2.0, 0.05 * neff)) if u))
+    order = sorted(best, key=lambda kd: -best[kd][0])
+    top = order[0]
+    rival = [kd for kd in order[1:] if best[kd][3] != best[top][3]                 # a model that plays the same positions says the same thing
+             and not (kd == "swing8" and top == "straight16" and best[kd][1] < 0.56)
+             and not ({kd, top} == {"swing8", "triplet8"} and 0.63 < best["swing8"][1] < 0.70)]       # a swing at 2/3 is a triplet feel      # a barely swung 8th is a straight one
+    gap = best[top][0] - best[rival[0]][0] if rival else 20.0
+    conf = float((1 - np.exp(-gap / 6)) * np.clip((neff - 6) / 20, 0, 1))
+    r = best[top][1] if top == "swing8" else {"triplet8": 2 / 3}.get(top, 0.5)
+    if top == "triplet8" and best[top][2][1] * neff < max(2.0, 0.08 * neff):      # nothing on the middle triplet: a swung 8th at 2/3
+        top = "swing8"
+    return Feel(top, float(round(r, 3)), off_s, conf, len(t))
+
+
+def notated(f: Feel) -> tuple:
+    """The subdivision slots of a beat as Fractions (a swung 8th is notated at 1/2: swing is how it is played)."""
+    from fractions import Fraction
+    if f.kind == "swing8":
+        return (Fraction(0), Fraction(1, 2))
+    d = _DEN[f.kind]
+    return tuple(Fraction(i, d) for i in _FRAC[f.kind])
+
+
+def subdivisions(beat_times, f: Feel, extend: bool = True) -> np.ndarray:
+    """Every subdivision point of the beats, in seconds, for feel `f` (ending with the last beat itself)."""
+    B = np.asarray(beat_times, float)
+    pos = np.array(f.positions())
+    out = (B[:-1, None] + np.diff(B)[:, None] * pos[None]).ravel()
+    return np.r_[out, B[-1]]
+
+
+# --- meter ----------------------------------------------------------------------------------------
+
+
+def _env_onsets(env: np.ndarray, thr: float = 0.3) -> np.ndarray:
+    i = np.nonzero((env >= maximum_filter1d(env, 5)) & (env > thr))[0]
+    return i / FPS - ENV_DELAY
+
+
+def _beat_features(f: Features, B: np.ndarray, chord_changes=None) -> dict[str, np.ndarray]:
+    """Per beat: the strongest onset around it, the bass band's, and how much the harmony changes there."""
+    n = len(B)
+    ti = lambda a: np.clip((np.asarray(a) * FPS).round().astype(int), 0, len(f.env) - 1)
+    acc, low, lvl = np.zeros(n), np.zeros(n), np.zeros(n)
+    for k, b in enumerate(B):
+        a, c = ti(b - 0.05 + ENV_DELAY), ti(b + 0.08 + ENV_DELAY)
+        acc[k], low[k], lvl[k] = f.env[a:c + 1].max(), f.low[a:c + 1].max(), f.rise[a:c + 1].max()
+    L = np.r_[np.diff(B), np.diff(B)[-1]]
+    if chord_changes is not None:
+        cc = np.asarray(chord_changes, float)
+        chord = np.array([float(len(cc) and np.abs(cc - b).min() < 0.4 * L[k]) for k, b in enumerate(B)])
+    else:
+        ci = lambda t: int(np.clip(round(t * f.chroma_fps), 0, len(f.chroma) - 1))
+        chord = np.zeros(n)
+        for k, b in enumerate(B):
+            if k == 0:
+                continue
+            a0, a1, p0, p1 = ci(b + 0.1 * L[k]), ci(b + 0.9 * L[k]), ci(B[k - 1] + 0.1 * L[k - 1]), ci(b - 0.1 * L[k - 1])
+            after, before = f.chroma[a0:max(a1, a0) + 1].mean(axis=0), f.chroma[p0:max(p1, p0) + 1].mean(axis=0)
+            den = np.linalg.norm(after) * np.linalg.norm(before)
+            chord[k] = 1 - float(after @ before) / den if den > 1e-9 else 0.0
+    return {"acc": acc, "low": low, "lvl": lvl, "chord": chord}
+
+
+def _tstat(v: np.ndarray, P: int, ph: int, floor: float) -> float:
+    m = (np.arange(len(v)) - ph) % P == 0
+    na, nb = int(m.sum()), int((~m).sum())
+    if na < 2 or nb < 2:
+        return 0.0
+    return float((v[m].mean() - v[~m].mean()) / (max(v.std(), floor) * np.sqrt(1 / na + 1 / nb)))
+
+
+def _soft(t: float) -> float:
+    """Evidence against a downbeat (an accent that is weaker there) counts for less than evidence for it: syncopation is normal."""
+    return t if t > 0 else 0.3 * t
+
+
+FEATURE_W = {"acc": (0.6, 0.1), "low": (0.6, 0.1), "lvl": (1.0, 1.0), "chord": (1.2, 0.04)}      # weight, floor of the spread (envelope units)
+
+
+def meter(x, beat_times, feel_: Feel | None = None, chord_changes=None) -> Meter:
+    """Beats per bar (2, 3 or 4), unit and the first downbeat of the beats given. Every (beats per bar, phase) is scored by how
+    much more the beats on its bar lines carry: an onset, bass energy, a change of harmony (cheap beat chroma, or `chord_changes`,
+    seconds). `feel_` with a triplet subdivision makes the beat a dotted quarter (6/8, 9/8, 12/8). Confidence: how far the best
+    stands over noise and over the runner-up."""
+    f = _feat(x)
+    B = np.asarray(beat_times, float)
+    if len(B) < 6:
+        return Meter(4, "4", 0, float(B[0]) if len(B) else 0.0, 0.0)
+    if feel_ is None:
+        feel_ = feel(_env_onsets(f.env), B)
+    feats = _beat_features(f, B, chord_changes)
+    cand = [(P, ph) for P in (4, 3, 2) for ph in range(P)]
+    T = {k: np.array([_tstat(feats[k], P, ph, fl) for P, ph in cand]) for k, (w, fl) in FEATURE_W.items()}
+    use = [k for k in T if T[k].max() >= 3.0] or list(T)              # only the features that say something count; the rest is noise
+    tot = sum(FEATURE_W[k][0] * np.where(T[k] > 0, T[k], 0.3 * T[k]) for k in use) / np.sqrt(sum(FEATURE_W[k][0] ** 2 for k in use))
+    sc = {c: float(v) for c, v in zip(cand, tot)}
+    order = sorted(sc, key=lambda k: -sc[k])
+    (P, ph), best = order[0], sc[order[0]]
+    ru = next(k for k in order[1:])
+    conf = float(np.clip((best - 2.3) / 2.0, 0, 1) * np.clip((best - sc[ru]) / max(best, 1e-9) / 0.25, 0, 1))
+    third = feel_.kind == "triplet8" and feel_.confidence >= 0.3
+    shuffle = feel_.kind == "swing8" and 0.63 < feel_.swing_ratio < 0.70           # two beats to a bar with a swing at 2/3 is 6/8
+    unit = "8" if third or (shuffle and P == 2) else "4"
+    run = Reading(ru[0], unit, ru[1], round(sc[ru], 2))
+    if P == 2 and (third or shuffle) or (feel_.kind == "triplet8" and feel_.confidence < 0.6):      # 6/8 or 2/4 swung, 3/4 or 6/8: say so
+        run = Reading(P, "4" if unit == "8" else "8", ph, round(sc[(P, ph)], 2))
+        conf *= 0.6 if shuffle and not third else 1.0
+    return Meter(P, unit, ph, float(B[ph]), conf, run, {k: round(v, 2) for k, v in sc.items()})
