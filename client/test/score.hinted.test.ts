@@ -108,7 +108,7 @@ test('a dotted quarter at beat 1.5 of a 3/4 hemiola is one dotted quarter, with 
   expect(voice(one({ ...hinted(notes(true)) }), 1)).toBe('[V:V1] C3D3 |]')
   expect(voice(one({ ...hinted(notes(false)) }), 1)).toBe('[V:V1] C3D3 |]') // no tie: one notatable value inside the bar
   // not notatable as one value (5/4 of a quarter), or across a bar line: the splitting rules
-  expect(voice(one({ ...hinted([{ on: 0, len: 1.25, pitch: 60 }, { on: 1.25, len: 1.75, pitch: 62 }]) }), 1)).toBe('[V:V1] C-C/2D- D2 D/2 |]')
+  expect(voice(one({ ...hinted([{ on: 0, len: 1.25, pitch: 60 }, { on: 1.25, len: 1.75, pitch: 62 }]) }), 1)).toBe('[V:V1] C2- C/2D7/2 |]') // (a double-dotted quarter is one value)
 })
 
 test('segs written verbatim and tied; a seg that crosses a bar line falls back to the splitting rules', () => {
@@ -179,7 +179,7 @@ test('one bar hinted, the next has an edited note: the first is drawn from hints
 
 test('a clip that starts off the quarter grid still places hinted notes at clip start + on', () => {
   const t: FixTrack = { start: Q / 2, ...hinted([{ on: 0, len: 1, pitch: 60 }, { on: 1, len: [3, 2], pitch: 62 }, { on: [5, 2], len: 0.5, pitch: 64 }]), length: 3 * Q }
-  expect(voice(one(t, { regions: [metered(1, 4, 4)] }), 1)).toBe('[V:V1] zC- CD- D2 Ez |]')
+  expect(voice(one(t, { regions: [metered(1, 4, 4)] }), 1)).toBe('[V:V1] zC2D3 Ez |]')
   // the written pieces are used as they are
   const w: FixTrack = { ...t, ...hinted([{ on: 0, len: 1, pitch: 60, segs: [1] }, { on: 1, len: [3, 2], pitch: 62, segs: [[3, 2]] }, { on: [5, 2], len: 0.5, pitch: 64 }]) }
   expect(voice(one({ ...w, start: Q / 2, length: 3 * Q }, { regions: [metered(1, 4, 4)] }), 1)).toBe('[V:V1] zC2D3 Ez |]')
