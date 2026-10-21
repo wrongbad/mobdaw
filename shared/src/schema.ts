@@ -55,7 +55,9 @@ export const LOOP_CUTOFF_MIN = 200
 export const LOOP_CUTOFF_MAX = 20000
 /** `role: 'click'` marks the metronome's track: it ignores other tracks' solo (still audible), and its own mute counts. */
 export type TrackRole = 'click'
-export type Track = { id: string; name: string; kind: TrackKind; order: number; muted: boolean; soloed: boolean; role?: TrackRole; color?: number; preset?: string }
+/** A staff's clef in the score view (`clefs` on a track: one per staff, top first; absent = the score view picks). */
+export type ScoreClef = 'treble' | 'bass' | 'alto' | 'tenor' | 'treble_8' | 'bass_8' | 'perc'
+export type Track = { id: string; name: string; kind: TrackKind; order: number; muted: boolean; soloed: boolean; role?: TrackRole; color?: number; preset?: string; clefs?: ScoreClef[] }
 /** 0 equal-power, 1 linear, 2 s-curve */
 export type FadeShape = 0 | 1 | 2
 /**
@@ -83,7 +85,31 @@ export type AudioClip = {
  */
 export type MidiClip = { id: string; trackId: string; kind: 'midi'; startTick: number; lengthTicks: number; loopTicks?: number; forever?: boolean; view?: 'drums' }
 export type Clip = AudioClip | MidiClip
-export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number }
+/** An exact fraction [numerator, denominator] (denominator > 0), for notated times that ticks can't hold (a 7-tuplet). */
+export type Frac = [number, number]
+/**
+ * How a note is written (docs/SCORE-PLAN.md, "Notation hints"): set by an import that knows the notation (MusicXML), read by the
+ * score view instead of guessing. Times are in quarter notes from the clip start (like `tick`, clip-local). The hint is for the note
+ * as it was when written: once `tick`, `durTicks` or `pitch` differ from `at`, it is stale and the score view guesses again.
+ */
+export type NoteHint = {
+  at: [tick: number, durTicks: number, pitch: number]
+  /** Notated onset and length (the whole tied chain), in quarters. */
+  on: Frac
+  len: Frac
+  /** The written pieces of a tied chain, in order (actual lengths in quarters, summing to `len`); absent: the score view splits. */
+  segs?: Frac[]
+  /** In a tuplet: `n` notes in the time of `of`, the group spanning [start, start + span) in quarters. */
+  tup?: { n: number; of: number; start: Frac; span: Frac }
+  /** 1-based staff of the track (see `Track.clefs`) and voice on that staff. */
+  staff?: number
+  voice?: number
+  /** Spelling, e.g. 'F#4', 'Bb3', 'E#5', 'Cbb4' (octave as in `noteName`: 60 is C4). */
+  spell?: string
+  /** Articulations, badmidi's characters: `>` accent, `^` marcato, `'` staccato, `_` tenuto. */
+  art?: string
+}
+export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number; hint?: NoteHint }
 /** `name`, `keyLo` and `keyHi` are optional: an instrument's label and its note range (MIDI 0..127 inclusive; absent = 0 and 127). Not params. */
 export type Device = { id: string; trackId: string; type: number; order: number; bypass: boolean; params: Record<string, number>; name?: string; keyLo?: number; keyHi?: number }
 export const KEY_MIN = 0
