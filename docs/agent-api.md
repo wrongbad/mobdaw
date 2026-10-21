@@ -57,10 +57,12 @@ Errors are `{error, message}` with 400 (`bad_request`, `bad_ops` with `op`: the 
 Positions are `bar.beat.tick` (bar and beat from 1, tick within the beat; a beat is a `1/den` note, so an eighth in 7/8) next to ticks
 from bar 1. Note `t` and `d` are ticks inside the clip. Velocity `v` is MIDI 1..127. Audio clips show `start` (the position),
 `startSeconds`, `lengthSeconds`, `sourceOffsetSeconds` (where in the sample the clip starts reading), `sourceHash` and the sample
-name; they can be moved and resized but not created yet. `samples` is the table for the hashes the audio clips in the view play
+name; a looping clip also has `loopSeconds` (the pass: sample seconds `[sourceOffsetSeconds, +loopSeconds)`, repeated to fill the clip)
+and, when non-zero, `loopPhaseSeconds` (where in the pass the clip's start falls: it plays pass position `(t + loopPhaseSeconds) mod loopSeconds`
+at `t` seconds after its start); they can be moved and resized but not created yet. `samples` is the table for the hashes the audio clips in the view play
 (`name`, `duration` in seconds, `mime`; `status` only when it is `incoming`: still on the recorder's device, not downloadable yet);
 fetch the bytes with `GET .../samples/:hash/url`. `format=text` is the same as a compact outline (ids in brackets) for prompting;
-an audio clip's line shows the offset and the status: `audio clip [id] at 3.1.0 (4 s), 8 s, "take.wav", from 0.5 s (incoming)`.
+an audio clip's line shows the offset and the status: `audio clip [id] at 3.1.0 (4 s), 8 s, "take.wav", from 0.5 s (incoming)`, and `, loop 2 s from 0.5 s in` for a looping clip.
 
 ## Ops
 `POST .../ops {"label": "drum loop", "ops": [ {"op": "addTrack", ...}, ... ]}`. The batch is checked field by field (an unknown

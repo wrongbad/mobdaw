@@ -45,6 +45,10 @@ The API and the `/collab` WebSocket share one port (8787); Vite proxies both in 
   `audit [--fix]` (reconcile storage with the DB: leaked objects, broken uploads, orphan library links,
   `bytes_used` drift; exits non-zero on findings; `--fix` deletes leaked objects and
   recomputes `bytes_used`). Reads `.env`; operates on `DB_PATH` and the configured storage.
+- **End-to-end audio test:** `agent/tests/e2e_audio_live.sh` starts a throwaway local server (own port, db and storage in a temp
+  dir), makes a user, seeds a generated take into a project with `tools/seed-take.ts` (options in its header: it logs in, uploads
+  through the session routes and adds the sample and clip to the collab document, as a recording does; `--mint-token` prints an
+  API token for `MOBDAW_TOKEN`), runs `agent/tests/e2e_audio_live.py` against it and stops the server.
 
 ## Layout
 `shared/` Yjs schema helpers + API types (consumed as TS source) · `server/` Hono API +

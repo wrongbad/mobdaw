@@ -171,6 +171,9 @@ class TestSource(unittest.TestCase):
         x = source.clip_signal(src, {"sourceOffsetSeconds": 0.5, "lengthSeconds": 0.35, "loopSeconds": 0.1, "gain": 1}, SR)
         one = src[4000:4800]
         np.testing.assert_allclose(x, np.concatenate([one, one, one, one])[:2800])
+        # loop phase: the clip starts 0.025 s into the 0.1 s pass (pass position (t + phase) mod pass, as the engine reads it)
+        x = source.clip_signal(src, {"sourceOffsetSeconds": 0.5, "lengthSeconds": 0.35, "loopSeconds": 0.1, "loopPhaseSeconds": 0.025, "gain": 1}, SR)
+        np.testing.assert_allclose(x, np.tile(one, 5)[200:200 + 2800])
         # a loop at least as long as the clip is no loop; reading past the end is silence
         x = source.clip_signal(src, {"sourceOffsetSeconds": 0.75, "lengthSeconds": 0.5, "loopSeconds": 0.5, "gain": 1}, SR)
         np.testing.assert_allclose(x[:2000], src[6000:]); self.assertEqual(float(np.abs(x[2000:]).max()), 0)

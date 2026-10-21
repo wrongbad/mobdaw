@@ -107,7 +107,9 @@ export type AgentMidiClip = {
 export type AgentAudioClip = {
   id: string; kind: 'audio'; start: string; startSeconds: number; lengthSeconds: number; sample?: string; sourceHash: string
   /** Where in the sample the clip starts reading. */
-  sourceOffsetSeconds: number; loopSeconds?: number; gain: number
+  sourceOffsetSeconds: number; loopSeconds?: number
+  /** Where in the loop pass the clip's start falls (only when looping and non-zero): the clip plays pass position `(t + loopPhaseSeconds) mod loopSeconds`. */
+  loopPhaseSeconds?: number; gain: number
 }
 /** A sample an audio clip plays; `status: 'incoming'` means the take is still on the recorder's device (not downloadable yet). */
 export type AgentSample = { name: string; duration: number; mime: string; status?: SampleStatus }
@@ -186,7 +188,7 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
         id: c.id, kind: 'audio', start: formatPosition(map, startTick), startSeconds: r3(c.start / rate), lengthSeconds: r3(c.length / rate),
         ...(samples[c.sourceHash]?.name ? { sample: samples[c.sourceHash].name } : {}), sourceHash: c.sourceHash,
         sourceOffsetSeconds: r3(c.sourceOffset / rate),
-        ...(c.loopLength ? { loopSeconds: r3(c.loopLength / rate) } : {}), gain: r3(c.gain),
+        ...(c.loopLength ? { loopSeconds: r3(c.loopLength / rate), ...(c.loopPhase ? { loopPhaseSeconds: r3(c.loopPhase / rate) } : {}) } : {}), gain: r3(c.gain),
       }
     }
     return {
@@ -253,7 +255,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
     for (const d of t.devices) out.push(`  device ${devLine(d)}`)
     for (const c of t.clips) {
       if (c.kind === 'audio') {
-        out.push(`  audio clip [${c.id}] at ${c.start} (${c.startSeconds} s), ${c.lengthSeconds} s${c.sample ? `, "${c.sample}"` : ''}${c.sourceOffsetSeconds ? `, from ${c.sourceOffsetSeconds} s` : ''}${v.samples[c.sourceHash]?.status ? ` (${v.samples[c.sourceHash].status})` : ''}${c.loopSeconds ? `, loop ${c.loopSeconds} s` : ''}`)
+        out.push(`  audio clip [${c.id}] at ${c.start} (${c.startSeconds} s), ${c.lengthSeconds} s${c.sample ? `, "${c.sample}"` : ''}${c.sourceOffsetSeconds ? `, from ${c.sourceOffsetSeconds} s` : ''}${v.samples[c.sourceHash]?.status ? ` (${v.samples[c.sourceHash].status})` : ''}${c.loopSeconds ? `, loop ${c.loopSeconds} s${c.loopPhaseSeconds ? ` from ${c.loopPhaseSeconds} s in` : ''}` : ''}`)
         continue
       }
       out.push(`  clip [${c.id}] ${c.start} to ${c.end} (${c.length}, ${c.lengthTicks} ticks)${c.loopTicks ? `, loop ${c.loopTicks} ticks` : ''}${c.forever ? ' forever' : ''}${c.view ? `, ${c.view} view` : ''}, ${c.notes.length} notes`)

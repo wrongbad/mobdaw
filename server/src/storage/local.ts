@@ -34,7 +34,7 @@ export class LocalStorage implements Storage {
       if (!f) return c.json({ error: 'not_found' }, 404)
       const { size } = await f.stat()
       const { owner, hash } = parseKey(key)!
-      return new Response(f.createReadStream() as unknown as ReadableStream, {
+      return new Response(Readable.toWeb(f.createReadStream()) as ReadableStream, {
         headers: {
           'Content-Type': getMime(owner, hash) ?? 'application/octet-stream',
           'Content-Length': String(size),

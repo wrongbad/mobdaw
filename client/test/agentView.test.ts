@@ -75,6 +75,19 @@ describe('agentView', () => {
     expect(agentView(fixture().doc).samples).toEqual({})
   })
 
+  it('shows a looped audio clip\'s pass and, when it is not zero, its phase', () => {
+    const { doc } = fixture()
+    const gtr = addTrack(doc, 'Guitar', 'audio')
+    addSample(doc, { hash: 'h1', name: 'take.wav', duration: 4, size: 9, mime: 'audio/wav' })
+    addAudioClip(doc, { trackId: gtr, sourceHash: 'h1', start: 0, length: 192000, loopLength: 96000 })
+    addAudioClip(doc, { trackId: gtr, sourceHash: 'h1', start: 192000, length: 192000, loopLength: 96000, loopPhase: 24000 })
+    const [plain, phased] = agentView(doc).tracks.find((t) => t.id === gtr)!.clips
+    expect(plain).toMatchObject({ loopSeconds: 2 })
+    expect(plain).not.toHaveProperty('loopPhaseSeconds')
+    expect(phased).toMatchObject({ loopSeconds: 2, loopPhaseSeconds: 0.5 })
+    expect(agentText(doc)).toContain('loop 2 s from 0.5 s in')
+  })
+
   it('lists every device type with its param names', () => {
     expect(Object.keys(DEVICES).length).toBeGreaterThan(5)
   })
