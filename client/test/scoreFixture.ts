@@ -21,3 +21,24 @@ export function fixture(tracks: FixTrack[], o: { regions?: Region[]; key?: strin
 }
 
 export const metered = (bar: number, num: number, den: number, extra: Partial<Region> = {}): Region => ({ id: `r${bar}`, bar, kind: 'metered', bpm: 120, num, den, ...extra }) as Region
+
+/** An agent-API project state (`get_state`: regions, tracks with clips and notes `{p, t, d, v}`) as a ScoreInput. Drum tracks are not handled. */
+export function stateToInput(state: any, o: { fromTick?: number; toTick?: number; key?: string } = {}): ScoreInput {
+  const regions = (state.regions as any[]).map((r) => {
+    const [num, den] = String(r.meter).split('/').map(Number)
+    return { id: r.id, bar: r.bar, kind: 'metered', bpm: r.bpm, num, den } as Region
+  })
+  const out: ScoreInput = { tracks: [], clips: [], notes: [], devices: [], map: timeMap(regions, state.meta.sampleRate, state.meta.ppq), key: o.key, markers: [] }
+  const from = o.fromTick ?? 0, to = o.toTick ?? Infinity
+  ;(state.tracks as any[]).forEach((t, i) => {
+    out.tracks.push({ id: t.id, name: t.name, kind: 'midi', order: i, muted: false, soloed: false } as Track)
+    for (const c of t.clips as any[]) {
+      out.clips.push({ id: c.id, trackId: t.id, kind: 'midi', startTick: 0, lengthTicks: Math.min(c.lengthTicks, to - from) } as Clip)
+      for (const n of c.notes) {
+        const tick = c.startTick + n.t
+        if (tick >= from && tick < to) out.notes.push({ id: n.id, clipId: c.id, tick: tick - from, durTicks: n.d, pitch: n.pitch, velocity: n.v / 127 } as Note)
+      }
+    }
+  })
+  return out
+}

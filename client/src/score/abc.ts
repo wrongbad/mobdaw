@@ -75,6 +75,7 @@ function renderBar(staff: Staff, voice: Voice, bar: Bar, pieces: Piece[], lead: 
       })
       tok = names.length > 1 ? `[${names.join('')}]${len}` : p.tie ? `${names[0].slice(0, -1)}${len}-` : `${names[0]}${len}`
     }
+    if (p.stac) tok = '.' + tok
     ids.push({ start: text.length, end: text.length + tok.length, noteIds: [...new Set(p.heads.flatMap((h) => h.noteIds))] })
     text += tok
   })

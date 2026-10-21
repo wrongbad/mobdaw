@@ -177,3 +177,25 @@ test('a score of several systems keeps clefs, key and a signature-free perc staf
     expect(st.map((x) => [x.clef.type, x.key.accidentals.length])).toEqual([['treble', 2], ['bass', 2], ['perc', 0]])
   }
 })
+
+/** Bars 25-26 of the woven chaconne's hocket (3/4, ppq 960): a 16th line passed among three players, performed staccato at half length. */
+const hocket: FixTrack[] = [
+  { name: 'violin 1', notes: [[0, 120, 83], [720, 120, 79], [1440, 120, 88], [2160, 120, 83], [2880, 120, 86], [3600, 120, 81], [4320, 120, 90], [5040, 120, 86]] },
+  { name: 'violin 2', notes: [[240, 120, 88], [960, 120, 83], [1680, 120, 91], [2400, 120, 79], [3120, 120, 90], [3840, 120, 86], [4560, 120, 93], [5280, 120, 81]] },
+  { name: 'viola', notes: [[480, 120, 71], [1200, 120, 67], [1920, 120, 76], [2640, 120, 71], [3360, 120, 74], [4080, 120, 69], [4800, 120, 78], [5520, 120, 74]] },
+  { name: 'cello', notes: [[0, 2880, 52], [2880, 2880, 50]] },
+]
+
+test('a staccato hocket (120-tick notes on a 16th grid) is written as staccato 16ths and rests, never 32nds', () => {
+  const r = build(fixture(hocket, { regions: [metered(1, 3, 4)], key: 'G' }))
+  const voice = (n: number) => r.abc.split('\n').find((l) => l.startsWith(`[V:V${n}]`))!
+  expect(voice(1)).toBe(`[V:V1] .b/2z.g/2 z.e'/2z/2 z/2.b/2z | .d'/2z.a/2 z.f'/2z/2 z/2.d'/2z |]`)
+  expect(voice(2)).toBe(`[V:V2] z/2.e'/2z .b/2z.g'/2 z.g/2z/2 | z/2.f'/2z .d'/2z.a'/2 z.a/2z/2 |]`)
+  expect(voice(3)).toBe(`[V:V3] z.B/2z/2 z/2.G/2z .e/2z.B/2 | z.d/2z/2 z/2.A/2z .f/2z.d/2 |]`)
+  for (const n of [1, 2, 3]) {
+    expect(voice(n)).not.toMatch(/\/4/) // no 32nd notes or rests
+    expect(voice(n).match(/\./g)).toHaveLength(8) // all eight notes staccato
+  }
+  expect(voice(4)).toBe('[V:V4] E,6 | D,6 |]') // held notes keep their length (no staccato)
+  parse(r)
+})

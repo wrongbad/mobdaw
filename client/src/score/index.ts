@@ -69,7 +69,7 @@ export function buildScore(input: ScoreInput, opts: { show: ReadonlySet<string>;
 
   const parts: Part[] = shown.map((f) => {
     if (f.drums) {
-      const q = quantizeNotes(f.notes, bars, ppq, { tuplets: false, ends: false })
+      const q = quantizeNotes(f.notes, bars, ppq, { tuplets: false })
       const qn: QNote[] = f.notes.map((n, i) => ({ on: q.on[i], end: q.end[i], pitch: n.pitch, noteId: n.noteId }))
       const heads = drumHeads(new Set(f.notes.map((n) => n.pitch)), f.drumNames)
       const [up, down] = drumEvents(qn, heads, bars, ppq)
@@ -86,8 +86,8 @@ export function buildScore(input: ScoreInput, opts: { show: ReadonlySet<string>;
       }
     }
     const q = quantizeNotes(f.notes, bars, ppq)
-    const qn: QNote[] = f.notes.map((n, i) => ({ on: q.on[i], end: q.end[i], pitch: n.pitch, noteId: n.noteId }))
-    const staff = (clef: 'treble' | 'bass', ns: QNote[]): Staff => ({ clef, voices: [{ bars: notateStaff(chordEvents(ns.filter((n) => n.on < bars[bars.length - 1].endTick)), bars, q.windows, ppq) }] })
+    const qn: QNote[] = f.notes.map((n, i) => ({ on: q.on[i], end: q.end[i], pitch: n.pitch, noteId: n.noteId, stac: q.stac[i] }))
+    const staff = (clef: 'treble' | 'bass', ns: QNote[]): Staff => ({ clef, voices: [{ bars: notateStaff(chordEvents(ns.filter((n) => n.on < bars[bars.length - 1].endTick), ppq), bars, q.windows, ppq) }] })
     const clef = chooseClef(f.notes.map((n) => n.pitch))
     if (clef === 'grand') return { name: f.name, staves: [staff('treble', qn.filter((n) => n.pitch >= GRAND_SPLIT)), staff('bass', qn.filter((n) => n.pitch < GRAND_SPLIT))] }
     return { name: f.name, staves: [staff(clef, qn)] }

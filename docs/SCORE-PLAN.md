@@ -55,8 +55,12 @@ Y.Doc ──1 flatten──▶ Performance ──2 interpret──▶ Notation �
      ramp (`accel.`/`rit.` text), markers as rehearsal marks. A free region becomes one unmetered bar of its nominal
      ticks (hidden time signature, notes placed proportionally, quantized coarsely).
    - `quantize.ts`: port of badmidi's `_Quantizer`: times already on a notated grid stay, the rest snap beat by beat
-     to 16ths or eighth-triplets, whichever fits that beat better. Lengths snap too, with a minimum of one step; tiny
-     legato gaps close, overlaps within a voice trim. Per-track override (`1/8`, `1/16`, `1/8t`, off) later.
+     to 16ths or eighth-triplets, whichever fits that beat better. Only onsets vote for a window's division (ends vote only in a window with no onset). A note's end is rounded *up*
+     to the grid of the window it ends in (the finest plain division of that window and its neighbours, so a lone onset inside a 16th
+     passage still writes 16ths), at least one step after the onset, never past the next onset in the voice; an end within an
+     eighth of a quarter before the next onset goes to it (legato). A note performed at <= 0.6 of its written length, written as a
+     quarter or shorter, gets a staccato dot (`STACCATO_RATIO`); a rest after a note the quantizer made is not staccato.
+     Overlaps within a voice trim. Per-track override (`1/8`, `1/16`, `1/8t`, off) later.
    - `voices.ts`: notes with the same quantized onset and length become a chord; otherwise up to two voices per staff
      (the upper line stems up), extra overlaps go to the nearest voice and are trimmed. v1 may ship single-voice
      (chords + trim) if that is enough to be useful.

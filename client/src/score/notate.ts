@@ -6,9 +6,9 @@ import { isTuplet, type Win } from './quantize'
 
 export type Head = { pitch: number; noteIds: string[] }
 /** A quantized note: absolute ticks. */
-export type QNote = { on: number; end: number; pitch: number; noteId: string }
+export type QNote = { on: number; end: number; pitch: number; noteId: string; /** Performed clearly shorter than written (see quantize.ts). */ stac?: boolean }
 /** Something sounding (or, with no heads, silent) from `start` to `end`. */
-export type Ev = { start: number; end: number; heads: Head[] }
+export type Ev = { start: number; end: number; heads: Head[]; /** Staccato: every note of it is. */ stac?: boolean }
 
 export type Piece = {
   /** Absolute tick where it starts (the real time, not the written one). */
@@ -23,6 +23,8 @@ export type Piece = {
   cont: boolean
   /** On the first piece of a tuplet window: how many pieces it holds. */
   tuplet?: number
+  /** Staccato dot (only the first piece of a note). */
+  stac?: boolean
   /** A rest that fills the whole bar. */
   whole?: boolean
 }
@@ -32,19 +34,21 @@ const near = (a: number, b: number) => Math.abs(a - b) < EPS
 const multiple = (x: number, of: number) => near(x / of, Math.round(x / of))
 
 /** Notes -> events: same onset = one chord ending at its latest end, cut at the next onset. */
-export function chordEvents(notes: readonly QNote[]): Ev[] {
+export function chordEvents(notes: readonly QNote[], maxStac = Infinity): Ev[] {
   const sorted = [...notes].sort((a, b) => a.on - b.on || a.pitch - b.pitch)
   const evs: Ev[] = []
   for (const n of sorted) {
     const last = evs[evs.length - 1]
     if (last && last.start === n.on) {
       last.end = Math.max(last.end, n.end)
+      last.stac = last.stac && !!n.stac
       const h = last.heads.find((x) => x.pitch === n.pitch)
       if (h) h.noteIds.push(n.noteId)
       else last.heads.push({ pitch: n.pitch, noteIds: [n.noteId] })
-    } else evs.push({ start: n.on, end: n.end, heads: [{ pitch: n.pitch, noteIds: [n.noteId] }] })
+    } else evs.push({ start: n.on, end: n.end, heads: [{ pitch: n.pitch, noteIds: [n.noteId] }], stac: !!n.stac })
   }
   for (let i = 0; i + 1 < evs.length; i++) evs[i].end = Math.min(evs[i].end, evs[i + 1].start)
+  for (const e of evs) if (e.stac && e.end - e.start > maxStac) e.stac = false
   return evs
 }
 
@@ -166,6 +170,7 @@ export function notateStaff(evs: readonly Ev[], bars: readonly Bar[], windows: r
         }
       }
       if (p.ev) {
+        if (p.ev.stac && made.length === 1 && p.ev.start >= bar.startTick) made[0].stac = true
         made.forEach((m, k) => {
           if (opts.noTie && k > 0) m.heads = []
           else {
