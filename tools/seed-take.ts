@@ -6,6 +6,7 @@
 //   MOBDAW_PASSWORD=... npx tsx tools/seed-take.ts --user e2e --project <id> --wav take.wav [--track Guitar] [--bar 1] [--incoming [ms]]
 //   MOBDAW_PASSWORD=... npx tsx tools/seed-take.ts --user e2e --new-project "E2E" --wav take.wav --mint-token
 //   MOBDAW_PASSWORD=... npx tsx tools/seed-take.ts --user e2e --project <id> --chat "@e2e(api) bass for Guitar"
+//   MOBDAW_PASSWORD=... npx tsx tools/seed-take.ts --user e2e --project <id> --click     (switch the metronome on: the click track)
 //
 // --url         server base (default $MOBDAW_URL or http://localhost:8787)
 // --user        account to sign in as (password from $MOBDAW_PASSWORD, or --password); the clip is attributed to it
@@ -18,6 +19,8 @@
 //               after MS (default 3000), and only then exit: exercises the `sample` agent event
 // --chat        post this text in the project's chat as the signed-in user (as a browser does); --wav is then optional, and with
 //               both the take goes first. The message is what an agent sees as a chat event (mentionsMe if it names its handle)
+// --click       add the click track (what the metronome button does the first time it is switched on) if the project has none:
+//               a project with one has a timing reference, so listening follows its time map instead of proposing one
 // --mint-token  also create an API token for the user and print it (use it as MOBDAW_TOKEN)
 // Prints one JSON object: {project, track, clipId, hash, token?}.
 import { createHash } from 'node:crypto'
@@ -27,13 +30,13 @@ import { parseArgs } from 'node:util'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import WebSocket from 'ws'
 import * as Y from 'yjs'
-import { addAudioClip, addChatMessage, addSample, addTrack, apiName, docName, getSampleRate, getTimeMap, getTracks, mentionHandle, setSampleStatus, type SampleMeta } from '../shared/src/index.ts'
+import { addAudioClip, addChatMessage, addClickTrack, addSample, addTrack, apiName, docName, getSampleRate, getTimeMap, getTracks, mentionHandle, setSampleStatus, type SampleMeta } from '../shared/src/index.ts'
 
 const { values: a } = parseArgs({
   options: {
     url: { type: 'string' }, user: { type: 'string' }, password: { type: 'string' }, project: { type: 'string' }, 'new-project': { type: 'string' },
     wav: { type: 'string' }, track: { type: 'string', default: 'Audio' }, bar: { type: 'string', default: '1' }, 'length-bars': { type: 'string' },
-    duration: { type: 'string' }, chat: { type: 'string' }, incoming: { type: 'string' }, 'mint-token': { type: 'boolean' },
+    duration: { type: 'string' }, chat: { type: 'string' }, incoming: { type: 'string' }, click: { type: 'boolean' }, 'mint-token': { type: 'boolean' },
   },
   allowPositionals: false,
 })
@@ -41,7 +44,7 @@ const die = (msg: string): never => (console.error(`seed-take: ${msg}`), process
 const base = (a.url ?? process.env.MOBDAW_URL ?? 'http://localhost:8787').replace(/\/+$/, '')
 const password = a.password ?? process.env.MOBDAW_PASSWORD
 if (!a.user || !password) die('--user and a password (MOBDAW_PASSWORD or --password) are required')
-if (!a.wav && !a.chat) die('--wav (or --chat) is required')
+if (!a.wav && !a.chat && !a.click) die('--wav (or --chat, or --click) is required')
 if (!a.project && !a['new-project']) die('--project or --new-project is required')
 const incoming = a.incoming !== undefined
 const incomingMs = Number(a.incoming || 3000)
@@ -95,6 +98,10 @@ const until = async (ok: () => boolean, what: string, ms = 10_000) => {
 await until(() => provider.synced, 'the collab document to sync')
 const flushed = () => until(() => provider.unsyncedChanges === 0, 'the server to accept the edit')
 
+if (a.click && !getTracks(doc).some((t) => t.role === 'click')) {
+  addClickTrack(doc)
+  await flushed()
+}
 let clipId = '', trackId = ''
 if (a.wav) {
   // upload through the real session routes (mirrors client/src/samples.ts uploadToProject)
