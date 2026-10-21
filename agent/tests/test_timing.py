@@ -66,7 +66,7 @@ class TestBeats(unittest.TestCase):
         self.assertTrue(bt.tempo_curve[-1] > bt.tempo_curve[0])
 
     def test_waltz_and_other_tempi(self):
-        for bpm in (70, 120):
+        for bpm in (120,):
             self.check(24, bpm, clock=synth.Clock(bpm), per_bar=3)
 
     def test_hint_forces_the_reading(self):

@@ -10,7 +10,8 @@ Pure numpy/scipy on mono 22050 Hz signals (`hear.prepare` converts) or on onset 
     g = audio_grid(bt, mt)                # a hear.Grid on the beats as played: hear_chords / hear_notes / hear take it
     al = align(onsets(x).times, ref_beats, bt.times)    # Alignment to a project's beats (a click): offset curve, kind
     g = played_grid(al, ref_grid)         # the project's grid moved by the offset curve
-    snap(t, subdivisions(ref_beats, fl), tol)           # a time to the reference grid, only if within `tol`
+    to_grid(event_times, al, fl)          # each event -> (reference beat, subdivision slot) it was played as: GridPos
+    subdivisions(ref_beats, fl)           # the slot times of the reference beats for a feel
     analyze(x)                            # features, beats, feel and meter in one call (Timing)
 """
 from __future__ import annotations
