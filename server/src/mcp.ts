@@ -56,7 +56,7 @@ export function mcpServerFor(svc: AgentService, user: AgentUser, storage: Storag
   }, ({ projectId, label, ops }) => run(async () => svc.ops(user, projectId, { label, ops }))())
 
   server.registerTool('get_sample_url', {
-    description: 'A short-lived (15 min) signed download URL for the audio of a sample, by the hash get_state shows on an audio clip ("sample <hash>"). Fetch it with plain HTTP (no auth) to get the audio file, e.g. to analyse its pitch or timing. An audio clip plays the sample from sourceOffsetSeconds on. Errors: not_found if the hash is not a sample of this project; sample_incoming while the take is still only on the recorder\'s device: wait for the sample event or retry.',
+    description: 'A short-lived (15 min) signed download URL for the audio of a sample, by the hash get_state shows on an audio clip ("sample <hash>"). Fetch it with plain HTTP (no auth) to get the audio file, e.g. to analyse its pitch or timing. For pitch use badmidi.audio.hear (tuning_offset, the semitone filterbank, estimate_key; see agent/AGENTS.md Pitch of a recording you fetched yourself), not a hand-rolled FFT chroma, which invents notes the music does not have. An audio clip plays the sample from sourceOffsetSeconds on. Errors: not_found if the hash is not a sample of this project; sample_incoming while the take is still only on the recorder\'s device: wait for the sample event or retry.',
     inputSchema: { projectId, hash: z.string().describe('sample hash from get_state') },
   }, ({ projectId, hash }) => run(async () => ({ url: await storage.downloadUrl(await svc.sampleOwner(user, projectId, hash), hash) }))())
 

@@ -64,7 +64,7 @@ name; a looping clip also has `loopSeconds` (the pass: sample seconds `[sourceOf
 and, when non-zero, `loopPhaseSeconds` (where in the pass the clip's start falls: it plays pass position `(t + loopPhaseSeconds) mod loopSeconds`
 at `t` seconds after its start); they can be moved and resized but not created yet. `samples` is the table for the hashes the audio clips in the view play
 (`name`, `duration` in seconds, `mime`; `status` only when it is `incoming`: still on the recorder's device, not downloadable yet);
-fetch the bytes with `GET .../samples/:hash/url`. `format=text` is the same as a compact outline (ids in brackets) for prompting;
+fetch the bytes with `GET .../samples/:hash/url` (to find pitches in them use `badmidi.audio.hear`, see `agent/AGENTS.md`, not a hand-rolled FFT chroma, which invents notes). `format=text` is the same as a compact outline (ids in brackets) for prompting;
 an audio clip's line shows the offset and the status: `audio clip [id] at 3.1.0 (4 s), 8 s, "take.wav", from 0.5 s (incoming)`, and `, loop 2 s from 0.5 s in` for a looping clip.
 
 A note that has a **notation hint** shows it in the JSON as stored, `at` included: `"hint": {"at": [0, 240, 36], "on": [0, 1], "len": [1, 4], ...}`

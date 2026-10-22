@@ -607,6 +607,32 @@ badmidi push song.py --apply --label "violin 3 descant" --like Violin   # one hi
 - One push is one history entry, so a person can revert it from the History panel. Say which checks you ran, and that the
   audio is unheard.
 
+## Pitch of a recording you fetched yourself (MCP / `get_sample_url`)
+
+If you only have the audio file (an MCP agent: `get_state` gives the sample hash, `get_sample_url` the file) and want to know what
+notes it plays, **use `badmidi.audio.hear`, never your own FFT**. A hand-rolled chroma (FFT peaks folded to 12 classes) is
+fooled by harmonics, the room and a short window: on a plain F# minor pentatonic take it reported A# and G# that were never played,
+and a flute part written from that sounded wrong. `hear` tunes first (`tuning_offset`), uses a semitone filterbank with
+whitening and harmonic suppression, and estimates the key. Needs `pip install 'badmidi[audio]'` (numpy, scipy).
+
+```python
+from badmidi.audio import hear
+x = hear.prepare(samples, sr)                       # mono, 22050 Hz
+cents = hear.tuning_offset(x)                       # +-50 cents; a recording is often a little off A440
+L, _ = hear._salience2(x, cents)                    # frames x semitones (MIDI 33..96)
+chroma = hear._fold(L, hear.LOW, hear.HIGH)         # frames x 12 pitch classes: mean over a bar's frames
+key = hear.estimate_key(chroma)                     # Key(tonic, mode, name, score, margin)
+```
+
+- Check the key first and write only notes of that scale; the audio decides the key, not the chords you expect. Pentatonic or
+  modal material is common.
+- Per bar, take the strongest classes of `chroma` over that bar's frames (frame i is at `i * 512 / 22050` s) and ignore classes
+  under ~25% of the strongest. A class that shows up once and nowhere else is a passing tone or an artefact.
+- Put the clip on the timeline before slicing by bar: the clip plays the sample from `sourceOffsetSeconds`, repeating every
+  `loopSeconds` when it has one (starting `loopPhaseSeconds` into the pass), beginning at `startSeconds`.
+- If a result contradicts the music (a note the key doesn't have), suspect the analysis before the recording, and say in the
+  reply that the pitches are from `hear` and the part itself is unheard.
+
 ## Making a part for a recording
 
 A track of audio (a guitar, keys, a voice) can be heard: its chords and strum rhythm become read-only data in the piece, and you
