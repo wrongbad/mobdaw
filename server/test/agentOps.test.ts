@@ -108,4 +108,72 @@ describe('agent ops', () => {
     expect(getRegions(doc)[0]).toMatchObject({ bpm: 60, num: 4, den: 4 })
     expect(getRegions(doc)[0]).not.toHaveProperty('groups')
   })
+
+  describe('notation hints', () => {
+    const setup = () => {
+      const doc = new Y.Doc()
+      const r = run(doc, [{ op: 'addTrack', name: 'Vn', clefs: ['treble', 'bass'] }, { op: 'addMidiClip', trackId: '$0', start: '1', length: '2 bars' }])
+      return { doc, trackId: r[0] as string, clipId: r[1] as string }
+    }
+    const fail = (doc: Y.Doc, ops: unknown[]) => {
+      try {
+        run(doc, ops)
+      } catch (e) {
+        expect(e).toBeInstanceOf(OpError)
+        return (e as OpError).message
+      }
+      throw new Error('did not fail')
+    }
+    const hint = { on: [3, 4], len: [1, 4], segs: [[1, 8], [1, 8]], tup: { n: 5, of: 4, start: [1, 1], span: [1, 1] }, staff: 2, voice: 1, spell: 'B#3', art: "'>" }
+
+    it('adds a hint with the server computing at, and stores clefs on the track', () => {
+      const { doc, clipId } = setup()
+      expect(getTracks(doc)[0].clefs).toEqual(['treble', 'bass'])
+      run(doc, [{ op: 'addNotes', clipId, notes: [{ p: 'C4', t: 720, d: 240, hint }, { p: 'D4', t: 0, d: 480 }] }])
+      const [a, b] = getNotes(doc).sort((x, y) => y.tick - x.tick)
+      expect(a.hint).toEqual({ ...hint, at: [720, 240, 60] })
+      expect(b.hint).toBeUndefined()
+    })
+
+    it('updates, keeps a stale hint when t/d/p change alone, and removes with null', () => {
+      const { doc, clipId } = setup()
+      const [ids] = run(doc, [{ op: 'addNotes', clipId, notes: [{ p: 'C4', t: 720, d: 240, hint }] }]) as [string[]]
+      const id = ids[0]
+      run(doc, [{ op: 'updateNotes', notes: [{ id, t: 960 }] }])
+      expect(getNotes(doc)[0].hint!.at).toEqual([720, 240, 60]) // unchanged: now stale
+      expect(getNotes(doc)[0].tick).toBe(960)
+      run(doc, [{ op: 'updateNotes', notes: [{ id, p: 'A3', hint: { on: [1, 1], len: [1, 4], spell: 'A3' } }] }])
+      expect(getNotes(doc)[0].hint).toEqual({ at: [960, 240, 57], on: [1, 1], len: [1, 4], spell: 'A3' })
+      run(doc, [{ op: 'updateNotes', notes: [{ id, hint: { on: [1, 1], len: [1, 4] } }] }])
+      expect(getNotes(doc)[0].hint!.at).toEqual([960, 240, 57]) // from the current note
+      run(doc, [{ op: 'updateNotes', notes: [{ id, hint: null }] }])
+      expect(getNotes(doc)[0].hint).toBeUndefined()
+      run(doc, [{ op: 'updateTrack', id: getTracks(doc)[0].id, clefs: null }])
+      expect(getTracks(doc)[0].clefs).toBeUndefined()
+    })
+
+    it('validates the hint strictly', () => {
+      const { doc, clipId } = setup()
+      const add = (h: unknown) => fail(doc, [{ op: 'addNotes', clipId, notes: [{ p: 'C4', t: 0, d: 240, hint: h }] }])
+      const ok = { on: [0, 1], len: [1, 4] }
+      expect(add(5)).toContain('hint must be an object')
+      expect(add({ ...ok, at: [0, 240, 60] })).toContain('"at" is set by the server')
+      expect(add({ ...ok, foo: 1 })).toContain('unknown field "foo"')
+      expect(add({ len: [1, 4] })).toContain('"on" is required')
+      expect(add({ on: [0, 0], len: [1, 4] })).toContain('denominator > 0')
+      expect(add({ on: [0.5, 1], len: [1, 4] })).toContain('integers')
+      expect(add({ on: [0, 1], len: [0, 4] })).toContain('hint.len must be > 0')
+      expect(add({ ...ok, segs: [[1, 8], [1, 4]] })).toContain('add up to len')
+      expect(add({ ...ok, segs: [[1, 4], [0, 4]] })).toContain('segs[1]')
+      expect(add({ ...ok, tup: { n: 0, of: 4, start: [0, 1], span: [1, 1] } })).toContain('tup.n must be a positive integer')
+      expect(add({ ...ok, tup: { n: 5, of: 1.5, start: [0, 1], span: [1, 1] } })).toContain('tup.of')
+      expect(add({ ...ok, staff: 0 })).toContain('staff must be a positive integer')
+      expect(add({ ...ok, voice: 1.5 })).toContain('voice')
+      expect(add({ ...ok, spell: 'H4' })).toContain('note name')
+      expect(add({ ...ok, spell: 'D4' })).toContain("does not name the note's pitch")
+      expect(add({ ...ok, art: 'x' })).toContain('hint.art')
+      expect(fail(doc, [{ op: 'updateTrack', id: getTracks(doc)[0].id, clefs: ['soprano'] }])).toContain('bad clefs')
+      expect(getNotes(doc)).toEqual([])
+    })
+  })
 })

@@ -7,7 +7,7 @@ import { DEVICES, MIX, type DeviceDef, type ParamDef } from './devices.ts'
 import { noteName } from './noteName.ts'
 import {
   MASTER_TRACK, getClips, getDevices, getKey, getMarkers, getNotes, getPpq, getRegions, getSampleRate, getSamples, getTimeMap, getTracks,
-  type Device, type Region, type SampleStatus,
+  type Device, type NoteHint, type Region, type SampleStatus, type ScoreClef,
 } from './schema.ts'
 import type { TimeMap } from './timemap.ts'
 
@@ -99,7 +99,8 @@ export function formatDuration(map: TimeMap, fromTick: number, ticks: number): s
 
 export type AgentParams = Record<string, number>
 export type AgentDevice = { id: string; type: string; typeId: number; name?: string; bypass?: boolean; key?: number; keyLo?: number; keyHi?: number; params: AgentParams }
-export type AgentNote = { id: string; p: string; pitch: number; t: number; d: number; v: number }
+/** `hint` is the stored `NoteHint` as it is, `at` included (a reader compares `at` with `[t, d, pitch]` to tell whether it is fresh; `t` and `d` here are rounded to 3 decimals). */
+export type AgentNote = { id: string; p: string; pitch: number; t: number; d: number; v: number; hint?: NoteHint }
 export type AgentMidiClip = {
   id: string; kind: 'midi'; start: string; startTick: number; lengthTicks: number; length: string; end: string
   loopTicks?: number; forever?: boolean; view?: 'drums'; notes: AgentNote[]
@@ -117,6 +118,8 @@ export type AgentTrack = {
   id: string; name: string; kind: string; muted: boolean; soloed: boolean; color?: number
   /** `'click'` on the metronome's track (the project has a timing reference); absent on every other track. */
   role?: 'click'
+  /** One clef per staff of the score view, top first (absent: the score view picks). */
+  clefs?: ScoreClef[]
   devices: AgentDevice[]; clips: (AgentMidiClip | AgentAudioClip)[]
 }
 export type AgentRegion =
@@ -199,11 +202,13 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
       ...(c.loopTicks ? { loopTicks: r3(c.loopTicks) } : {}), ...(c.forever ? { forever: true } : {}), ...(c.view ? { view: c.view } : {}),
       notes: (notes.get(c.id) ?? []).filter((n) => c.startTick + n.tick < hi && c.startTick + n.tick + n.durTicks > lo).sort((a, b) => a.tick - b.tick || a.pitch - b.pitch).map((n) => ({
         id: n.id, p: noteName(n.pitch).toUpperCase(), pitch: n.pitch, t: r3(n.tick), d: r3(n.durTicks), v: Math.round(n.velocity * 127),
+        ...(n.hint ? { hint: n.hint } : {}),
       })),
     }
   }
   const tracks = getTracks(doc).filter((t) => !wanted || wanted.includes(t.id.toLowerCase()) || wanted.includes(t.name.toLowerCase())).map((t) => ({
     id: t.id, name: t.name, kind: t.kind, muted: t.muted, soloed: t.soloed, ...(t.color != null ? { color: t.color } : {}), ...(t.role === 'click' ? { role: 'click' as const } : {}),
+    ...(t.clefs?.length ? { clefs: t.clefs } : {}),
     devices: devices.filter((d) => d.trackId === t.id).map(deviceView),
     clips: clips.filter((c) => c.trackId === t.id && inWindow(c)).map(clipView),
   }))
@@ -237,6 +242,9 @@ const fmtParams = (p: AgentParams) => Object.entries(p).map(([k, v]) => `${k}=${
 const devLine = (d: AgentDevice) =>
   `${d.type}${d.name ? ` "${d.name}"` : ''} [${d.id}]${d.bypass ? ' (bypassed)' : ''}${d.key != null ? ` key ${d.key}` : ''}${d.keyLo != null ? ` keys ${d.keyLo}-${d.keyHi ?? 127}` : ''}: ${fmtParams(d.params)}`
 
+/** `h` after a note that carries a notation hint still true of it, `h?` when it is stale (the note changed since; the text view leaves the hint itself to the JSON view). */
+const hintMark = (n: AgentNote) => (!n.hint ? '' : Math.abs(n.hint.at[0] - n.t) < 1e-3 && Math.abs(n.hint.at[1] - n.d) < 1e-3 && n.hint.at[2] === n.pitch ? ' h' : ' h?')
+
 /** The view as a compact text outline: ids in [brackets], positions "bar.beat.tick", notes `PITCH tick+duration vVELOCITY` (clip-local ticks). */
 export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): string {
   const v = agentView(doc, rev, filter)
@@ -253,7 +261,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
   }
   if (v.markers.length) out.push(`markers: ${v.markers.map((m) => `bar ${m.bar} "${m.label}" [${m.id}]`).join(', ')}`)
   for (const t of v.tracks) {
-    out.push(`track "${t.name}" [${t.id}] ${t.kind}${t.role ? ` ${t.role}` : ''}${t.muted ? ' muted' : ''}${t.soloed ? ' soloed' : ''}`)
+    out.push(`track "${t.name}" [${t.id}] ${t.kind}${t.role ? ` ${t.role}` : ''}${t.muted ? ' muted' : ''}${t.soloed ? ' soloed' : ''}${t.clefs ? ` clefs ${t.clefs.join('+')}` : ''}`)
     for (const d of t.devices) out.push(`  device ${devLine(d)}`)
     for (const c of t.clips) {
       if (c.kind === 'audio') {
@@ -261,7 +269,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
         continue
       }
       out.push(`  clip [${c.id}] ${c.start} to ${c.end} (${c.length}, ${c.lengthTicks} ticks)${c.loopTicks ? `, loop ${c.loopTicks} ticks` : ''}${c.forever ? ' forever' : ''}${c.view ? `, ${c.view} view` : ''}, ${c.notes.length} notes`)
-      for (let i = 0; i < c.notes.length; i += 6) out.push(`    ${c.notes.slice(i, i + 6).map((n) => `${n.p} ${n.t}+${n.d} v${n.v} [${n.id}]`).join('  ')}`)
+      for (let i = 0; i < c.notes.length; i += 6) out.push(`    ${c.notes.slice(i, i + 6).map((n) => `${n.p} ${n.t}+${n.d} v${n.v}${hintMark(n)} [${n.id}]`).join('  ')}`)
     }
   }
   if (v.master.devices.length) {

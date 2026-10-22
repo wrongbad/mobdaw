@@ -7,7 +7,7 @@ import {
   DEVICES, FINNWAVE, MASTER_TRACK, MIX, PositionError, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, apiName,
   clipsMap, deleteClip, deleteDevice, deleteMarker, deleteNote, deleteRegion, deleteTrack, deviceType, devicesMap, getRegions, getTimeMap,
   ensureMixDevice, getDevices, isFutureDoc, markersMap, notesMap, paramOf, parseDuration, parseNote, parsePosition, regionAtBar, regionsMap, setKey, setParam, setRegion,
-  getTracks, tracksMap, updateClip, updateDevice, updateMarker, updateNote, updateTrack, type DeviceDef, type Region, type RegionPatch,
+  getTracks, noteName, tracksMap, updateClip, updateDevice, updateMarker, updateNote, updateTrack, type DeviceDef, type Frac, type NoteHint, type Region, type RegionPatch, type ScoreClef,
 } from '@mobdaw/shared'
 import type { Ctx } from './auth.ts'
 import { writeAs, type Collab } from './history.ts'
@@ -27,8 +27,8 @@ export const MAX_NOTES = 100_000
 type Spec = Record<string, string>
 /** Field types: str, num, bool, any, list (an array); a trailing ? makes it optional. Unknown fields are an error (a typo should not pass silently). */
 const SPECS: Record<string, Spec> = {
-  addTrack: { name: 'str', kind: 'str?', preset: 'any?', like: 'str?' },
-  updateTrack: { id: 'str', name: 'str?', muted: 'bool?', soloed: 'bool?', color: 'num?' },
+  addTrack: { name: 'str', kind: 'str?', preset: 'any?', like: 'str?', clefs: 'list?' },
+  updateTrack: { id: 'str', name: 'str?', muted: 'bool?', soloed: 'bool?', color: 'num?', clefs: 'list?' },
   removeTrack: { id: 'str' },
   addMidiClip: { trackId: 'str', start: 'any', length: 'any', loop: 'any?', view: 'str?' },
   updateClip: { id: 'str', start: 'any?', length: 'any?', trackId: 'str?', loop: 'any?', view: 'str?' },
@@ -88,8 +88,69 @@ export function parseOps(raw: unknown): Op[] {
   if (notes > MAX_NOTES) throw new OpError(-1, `at most ${MAX_NOTES} notes per batch`)
   return raw as Op[]
 }
-const NEW_NOTE: Spec = { pitch: 'any?', p: 'any?', t: 'any', d: 'any', v: 'num?' }
-const NOTE_PATCH: Spec = { id: 'str', pitch: 'any?', p: 'any?', t: 'any?', d: 'any?', v: 'num?' }
+const NEW_NOTE: Spec = { pitch: 'any?', p: 'any?', t: 'any', d: 'any', v: 'num?', hint: 'any?' }
+const NOTE_PATCH: Spec = { id: 'str', pitch: 'any?', p: 'any?', t: 'any?', d: 'any?', v: 'num?', hint: 'any?' }
+
+// --- notation hints (docs/agent-api.md "Notation hints"): the agent gives how the note is written, the server adds `at`.
+const CLEFS: ScoreClef[] = ['treble', 'bass', 'alto', 'tenor', 'treble_8', 'bass_8', 'perc']
+const HINT_FIELDS = ['on', 'len', 'segs', 'tup', 'staff', 'voice', 'spell', 'art']
+const ART_CHARS = ">^'_"
+const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : Math.abs(a))
+const fAdd = (a: Frac, b: Frac): Frac => { const d = a[1] * b[1], n = a[0] * b[1] + b[0] * a[1], g = gcd(n, d) || 1; return [n / g, d / g] }
+const fEq = (a: Frac, b: Frac) => a[0] * b[1] === b[0] * a[1]
+const SPELL = /^([A-G])(bb|##|b|#|x)?(-?\d+)$/
+const LETTER_PC: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }
+const ACC: Record<string, number> = { '': 0, b: -1, bb: -2, '#': 1, '##': 2, x: 2 }
+
+function fracOf(i: number, where: string, v: unknown, min: 'zero' | 'positive'): Frac {
+  const ok = Array.isArray(v) && v.length === 2 && Number.isSafeInteger(v[0]) && Number.isSafeInteger(v[1]) && v[1] > 0
+  if (!ok) return bad(i, `${where} must be a fraction [numerator, denominator] of integers with denominator > 0 (quarter notes), got ${JSON.stringify(v)}`)
+  const f = v as Frac
+  if (min === 'positive' ? f[0] <= 0 : f[0] < 0) return bad(i, `${where} must be ${min === 'positive' ? '> 0' : '>= 0'}, got ${JSON.stringify(v)}`)
+  return f
+}
+const posInt = (i: number, where: string, v: unknown): number => (Number.isSafeInteger(v) && (v as number) > 0 ? (v as number) : bad(i, `${where} must be a positive integer, got ${JSON.stringify(v)}`))
+
+/** Check a note's `hint` (the NoteHint fields except `at`) against the note's pitch and build the stored hint with `at = [tick, durTicks, pitch]`. */
+function hintOf(i: number, where: string, v: unknown, at: NoteHint['at']): NoteHint {
+  const w = `${where}.hint`
+  if (!isObj(v)) return bad(i, `${w} must be an object (fields: ${HINT_FIELDS.join(', ')}) or null`)
+  if ('at' in v) bad(i, `${w}: "at" is set by the server from the note's tick, length and pitch; leave it out`)
+  for (const k of Object.keys(v)) if (!HINT_FIELDS.includes(k)) bad(i, `${w}: unknown field "${k}" (fields: ${HINT_FIELDS.join(', ')})`)
+  if (v.on === undefined) bad(i, `${w}: "on" is required`)
+  if (v.len === undefined) bad(i, `${w}: "len" is required`)
+  const on = fracOf(i, `${w}.on`, v.on, 'zero'), len = fracOf(i, `${w}.len`, v.len, 'positive')
+  const h: NoteHint = { at, on, len }
+  if (v.segs != null) {
+    if (!Array.isArray(v.segs) || !v.segs.length) return bad(i, `${w}.segs must be a non-empty array of fractions`)
+    const segs = v.segs.map((s, k) => fracOf(i, `${w}.segs[${k}]`, s, 'positive'))
+    if (!fEq(segs.reduce(fAdd, [0, 1] as Frac), len)) return bad(i, `${w}.segs must add up to len ${JSON.stringify(len)}`)
+    h.segs = segs
+  }
+  if (v.tup != null) {
+    if (!isObj(v.tup)) return bad(i, `${w}.tup must be an object {n, of, start, span}`)
+    for (const k of Object.keys(v.tup)) if (!['n', 'of', 'start', 'span'].includes(k)) bad(i, `${w}.tup: unknown field "${k}" (fields: n, of, start, span)`)
+    h.tup = { n: posInt(i, `${w}.tup.n`, v.tup.n), of: posInt(i, `${w}.tup.of`, v.tup.of), start: fracOf(i, `${w}.tup.start`, v.tup.start, 'zero'), span: fracOf(i, `${w}.tup.span`, v.tup.span, 'positive') }
+  }
+  if (v.staff != null) h.staff = posInt(i, `${w}.staff`, v.staff)
+  if (v.voice != null) h.voice = posInt(i, `${w}.voice`, v.voice)
+  if (v.spell != null) {
+    const m = typeof v.spell === 'string' ? SPELL.exec(v.spell) : null
+    if (!m) return bad(i, `${w}.spell must be a note name like "F#4", "Bb3", "E#5" or "Cbb4", got ${JSON.stringify(v.spell)}`)
+    if (12 * (Number(m[3]) + 1) + LETTER_PC[m[1]] + ACC[m[2] ?? ''] !== at[2]) return bad(i, `${w}.spell ${JSON.stringify(v.spell)} does not name the note's pitch ${at[2]} (${noteName(at[2])})`)
+    h.spell = v.spell as string
+  }
+  if (v.art != null) {
+    if (typeof v.art !== 'string' || [...v.art].some((c) => !ART_CHARS.includes(c))) return bad(i, `${w}.art must be a string of ${[...ART_CHARS].join(' ')} (> accent, ^ marcato, ' staccato, _ tenuto), got ${JSON.stringify(v.art)}`)
+    if (v.art) h.art = v.art
+  }
+  return h
+}
+
+function clefsOf(i: number, v: unknown): ScoreClef[] {
+  if (!Array.isArray(v) || !v.length || v.length > 8 || v.some((c) => !CLEFS.includes(c))) return bad(i, `bad clefs ${JSON.stringify(v)}: use 1 to 8 of ${CLEFS.join(', ')} (one per staff, top first), or null to clear`)
+  return v as ScoreClef[]
+}
 
 /** What an op returned: the id it made or acted on, a list of ids (notes), or null. */
 export type OpResult = string | string[] | null
@@ -204,6 +265,8 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
       if (kind !== 'midi' && kind !== 'audio') return bad(i, `bad kind "${kind}": use "midi" or "audio"`)
       const name = str('name').trim().slice(0, 80)
       if (!name) return bad(i, 'name is empty')
+      const clefs = opt<unknown>('clefs') == null ? undefined : clefsOf(i, op.clefs)
+      if (clefs && kind !== 'midi') return bad(i, 'only midi tracks take clefs')
       let inst = kind === 'midi' ? DEVICES[FINNWAVE] : undefined
       const likeRef = opt<string>('like')
       if (likeRef != null) {
@@ -215,6 +278,7 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
         doc.transact(() => {
           id = addTrack(doc, name, kind, undefined, undefined, src.color)
           copyDevices(doc, src.id, id)
+          if (clefs) updateTrack(doc, id, { clefs })
         })
         return id
       }
@@ -230,6 +294,7 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
       let id = ''
       doc.transact(() => {
         id = addTrack(doc, name, kind)
+        if (clefs) updateTrack(doc, id, { clefs })
         if (inst) addDevice(doc, id, inst.type)
       })
       return id
@@ -239,7 +304,16 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
       const patch: Record<string, unknown> = {}
       for (const k of ['name', 'muted', 'soloed', 'color']) if (op[k] !== undefined && op[k] !== null) patch[k] = k === 'name' ? str('name').trim().slice(0, 80) : op[k]
       if (patch.name === '') return bad(i, 'name is empty')
-      updateTrack(doc, t.id, patch)
+      if (op.clefs !== undefined) {
+        if (op.clefs !== null) {
+          if (t.kind !== 'midi') return bad(i, 'only midi tracks take clefs')
+          patch.clefs = clefsOf(i, op.clefs)
+        }
+      }
+      doc.transact(() => {
+        if (op.clefs === null) tracksMap(doc).get(t.id)?.delete('clefs')
+        updateTrack(doc, t.id, patch)
+      })
       return t.id
     }
     case 'removeTrack': {
@@ -320,7 +394,8 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
           const dur = position(i, () => parseDuration(m, c.startTick + tick, n.d))
           if (!(dur > 0)) return bad(i, `${where}: d (length) must be > 0`)
           if (tick >= c.lengthTicks) return bad(i, `${where}: t=${tick} is past the end of the clip (${c.lengthTicks} ticks)`)
-          ids.push(addNote(doc, { clipId: c.id, tick, durTicks: dur, pitch, velocity: velocityOf(i, n.v as number | undefined) }))
+          const hint = n.hint == null ? undefined : hintOf(i, where, n.hint, [tick, dur, pitch])
+          ids.push(addNote(doc, { clipId: c.id, tick, durTicks: dur, pitch, velocity: velocityOf(i, n.v as number | undefined), ...(hint ? { hint } : {}) }))
         }
       })
       return ids
@@ -331,18 +406,20 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
       doc.transact(() => {
         for (const [j, n] of (op.notes as Record<string, unknown>[]).entries()) {
           const id = r(n.id)
-          const cur = notesMap(doc).get(id)?.toJSON() as { clipId: string; tick: number } | undefined
+          const cur = notesMap(doc).get(id)?.toJSON() as { clipId: string; tick: number; durTicks: number; pitch: number } | undefined
           if (!cur) return bad(i, `notes[${j}]: no note "${id}"`)
           const clipStart = (clipsMap(doc).get(cur.clipId)?.get('startTick') as number | undefined) ?? 0
-          const patch: Record<string, number> = {}
+          const patch: Record<string, unknown> = {}
           if (n.pitch !== undefined || n.p !== undefined) patch.pitch = pitchOf(i, n.pitch ?? n.p)
           if (n.t !== undefined) patch.tick = position(i, () => parseDuration(m, clipStart, n.t))
           if (n.d !== undefined) {
-            patch.durTicks = position(i, () => parseDuration(m, clipStart + (patch.tick ?? cur.tick), n.d))
-            if (!(patch.durTicks > 0)) return bad(i, `notes[${j}]: d (length) must be > 0`)
+            patch.durTicks = position(i, () => parseDuration(m, clipStart + ((patch.tick as number | undefined) ?? cur.tick), n.d))
+            if (!((patch.durTicks as number) > 0)) return bad(i, `notes[${j}]: d (length) must be > 0`)
           }
           if (n.v !== undefined) patch.velocity = velocityOf(i, n.v as number)
+          if (n.hint != null) patch.hint = hintOf(i, `notes[${j}]`, n.hint, [(patch.tick as number | undefined) ?? cur.tick, (patch.durTicks as number | undefined) ?? cur.durTicks, (patch.pitch as number | undefined) ?? cur.pitch])
           updateNote(doc, id, patch)
+          if (n.hint === null) notesMap(doc).get(id)?.delete('hint')
           ids.push(id)
         }
       })
@@ -496,11 +573,12 @@ Conventions
 - Every op returns an id (the one it made or changed); the batch result lists them in order.
 
 Ops
-- addTrack {name, kind?: "midi"|"audio" (default midi), preset?: instrument name or "none", like?: a track's id or name}: a midi track gets the "finnwave" synth unless preset says otherwise. like copies another track's whole chain (instrument, effects, every param, fader and pan, colour): the way to make a second violin sound like the first. Presets are device TYPES (the instruments in the device list below), not the display names on devices.
-- updateTrack {id, name?, muted?, soloed?, color?}; removeTrack {id} (its clips, notes and devices go too).
+- addTrack {name, kind?: "midi"|"audio" (default midi), preset?: instrument name or "none", like?: a track's id or name, clefs?: ["treble","bass",...] one per staff of the score view}: a midi track gets the "finnwave" synth unless preset says otherwise. like copies another track's whole chain (instrument, effects, every param, fader and pan, colour): the way to make a second violin sound like the first. Presets are device TYPES (the instruments in the device list below), not the display names on devices.
+- updateTrack {id, name?, muted?, soloed?, color?, clefs? (null clears)}; removeTrack {id} (its clips, notes and devices go too).
 - addMidiClip {trackId, start, length, loop?, view?: "drums"|"piano"}: loop is the pattern length that repeats until length ends.
 - updateClip {id, start?, length?, trackId?, loop? (0 or null clears), view?}; removeClip {id}.
-- addNotes {clipId, notes: [{p|pitch, t, d, v?}]}; updateNotes {notes: [{id, p?, t?, d?, v?}]}; removeNotes {ids: []}.
+- addNotes {clipId, notes: [{p|pitch, t, d, v?, hint?}]}; updateNotes {notes: [{id, p?, t?, d?, v?, hint?}]}; removeNotes {ids: []}.
+- hint (optional, on a note) is how the note is WRITTEN, so the score view shows it so instead of guessing: {on: [num,den], len: [num,den], segs?: [[n,d],...], tup?: {n, of, start: [n,d], span: [n,d]}, staff?, voice?, spell?: "F#4", art?: ">^'_"}. Hint times are QUARTER NOTES as exact fractions, relative to the clip start (not ticks): a quintuplet sixteenth is len [1,5]. on/len cover the whole tied chain, segs are its written pieces (summing to len), tup the tuplet bracket [start, start+span), staff/voice 1-based, spell must name the note's pitch, art any of > accent ^ marcato ' staccato _ tenuto. Do not send "at": the server sets it from the note's tick, length and pitch. A hint goes stale when the note is later moved, resized or transposed; to keep it, send a new hint with that change. hint: null in updateNotes removes it.
 - addDevice {trackId (or "master"), type, name?, key?, params?: {name: value}}: type is a device name (list below). key makes a one-key drum (an instrument that plays only that note, e.g. a lofi drum on key 36).
 - removeDevice {id}; setParam {deviceId, param (name), value (number, or an option's name)}: values are clamped to the param's range.
 - addRegion {bar, bpm?, meter?: "7/8" or "7/8 2+2+3", rampTo?, free?: seconds}: tempo / meter from that bar on (replaces the region that starts there); what you leave out carries on from before. free makes a one-bar unmetered stretch. setRegion {id|bar, bpm?, meter?, rampTo? (null clears)}; removeRegion {id|bar}.

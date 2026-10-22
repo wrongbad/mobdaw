@@ -22,6 +22,25 @@ function fixture() {
 }
 
 describe('agentView', () => {
+  it('shows a note hint as stored, track clefs, and a short marker in the text', () => {
+    const { doc, bass, clip } = fixture()
+    updateTrack(doc, bass, { clefs: ['treble', 'bass'] })
+    const hint = { at: [0, 480, 60] as [number, number, number], on: [0, 1] as [number, number], len: [1, 2] as [number, number], spell: 'B#3', art: "'" }
+    addNote(doc, { clipId: clip, tick: 0, durTicks: 480, pitch: 60, velocity: 1, hint })
+    addNote(doc, { clipId: clip, tick: 100, durTicks: 480, pitch: 62, velocity: 1, hint: { ...hint, at: [0, 480, 62] } }) // stale
+    const v = agentView(doc)
+    expect(v.tracks[0].clefs).toEqual(['treble', 'bass'])
+    const c = v.tracks[0].clips[0]
+    if (c.kind !== 'midi') throw new Error()
+    expect(c.notes.find((n) => n.pitch === 60)!.hint).toEqual(hint)
+    expect(c.notes.find((n) => n.pitch === 36)!.hint).toBeUndefined()
+    const text = agentText(doc)
+    expect(text).toContain('clefs treble+bass')
+    expect(text).toMatch(/C4 0\+480 v127 h \[/)
+    expect(text).toMatch(/D4 100\+480 v127 h\? \[/)
+    expect(text).not.toContain('B#3')
+  })
+
   it('describes tracks, devices by param name, clips, notes, regions and markers', () => {
     const { doc, bass, clip, fx } = fixture()
     const v = agentView(doc, 7)

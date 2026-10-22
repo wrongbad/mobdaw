@@ -67,6 +67,11 @@ at `t` seconds after its start); they can be moved and resized but not created y
 fetch the bytes with `GET .../samples/:hash/url`. `format=text` is the same as a compact outline (ids in brackets) for prompting;
 an audio clip's line shows the offset and the status: `audio clip [id] at 3.1.0 (4 s), 8 s, "take.wav", from 0.5 s (incoming)`, and `, loop 2 s from 0.5 s in` for a looping clip.
 
+A note that has a **notation hint** shows it in the JSON as stored, `at` included: `"hint": {"at": [0, 240, 36], "on": [0, 1], "len": [1, 4], ...}`
+(see "Notation hints"). A track with score `clefs` shows `"clefs": ["treble", "bass"]`. The text outline stays short: ` h` after a note
+whose hint is fresh and ` h?` after one whose hint is stale (`C2 0+240 v100 h [id]`), and `clefs treble+bass` on the track line. Read the
+JSON view to use a hint.
+
 ## Ops
 `POST .../ops {"label": "drum loop", "ops": [ {"op": "addTrack", ...}, ... ]}`. The batch is checked field by field (an unknown
 field or a wrong type names the op), then run on a scratch copy of the live document; only if every op works is its change applied
@@ -79,12 +84,12 @@ unit text: `"4 bars"`, `"1 bar 2 beats"`, `"3 beats"`, `"240 ticks"`. Pitches `"
 
 | Op | Fields |
 |---|---|
-| `addTrack` | `name`, `kind?` (`midi` default, `audio`), `preset?` (an instrument device type, e.g. `"finnwave"`, or `"none"`; midi tracks get `finnwave` by default) or `like?` (a track's id or name: copy its whole device chain, params, fader/pan and colour) |
-| `updateTrack` / `removeTrack` | `id`, `name?`, `muted?`, `soloed?`, `color?` / `id` |
+| `addTrack` | `name`, `kind?` (`midi` default, `audio`), `preset?` (an instrument device type, e.g. `"finnwave"`, or `"none"`; midi tracks get `finnwave` by default) or `like?` (a track's id or name: copy its whole device chain, params, fader/pan and colour), `clefs?` (midi tracks: the score view's clef for each staff, top first) |
+| `updateTrack` / `removeTrack` | `id`, `name?`, `muted?`, `soloed?`, `color?`, `clefs?` (null clears) / `id` |
 | `addMidiClip` | `trackId`, `start`, `length`, `loop?` (pattern length), `view?` (`"drums"`) |
 | `updateClip` / `removeClip` | `id`, `start?`, `length?`, `trackId?`, `loop?` (0 or null clears), `view?` / `id` |
-| `addNotes` | `clipId`, `notes: [{p\|pitch, t, d, v?}]` |
-| `updateNotes` / `removeNotes` | `notes: [{id, p?, t?, d?, v?}]` / `ids` |
+| `addNotes` | `clipId`, `notes: [{p\|pitch, t, d, v?, hint?}]` |
+| `updateNotes` / `removeNotes` | `notes: [{id, p?, t?, d?, v?, hint?}]` (`hint: null` removes it) / `ids` |
 | `addDevice` | `trackId` (or `"master"`), `type` (name, see `/catalog`), `name?`, `key?` (a one-key drum), `params?: {name: value}` |
 | `removeDevice` / `setParam` | `id` / `deviceId`, `param` (name), `value` (number, or an option name; clamped to the range) |
 | `addRegion` | `bar`, `bpm?`, `meter?` (`"7/8"`, `"7/8 2+2+3"`), `rampTo?`, `free?` (seconds: one unmetered bar); replaces the region starting at that bar; unset fields carry on from before |
@@ -93,6 +98,41 @@ unit text: `"4 bars"`, `"1 bar 2 beats"`, `"3 beats"`, `"240 ticks"`. Pitches `"
 | `setKey` | `key` (display only; `""` clears) |
 
 Not in v1: audio import, automation lanes, loopers, per-track presets (client-side content).
+
+### Notation hints
+A note may say how it is **written**, so the score view draws it so and does not guess (docs/SCORE-PLAN.md, "Notation hints"; the
+MusicXML import writes the same). `hint` on an `addNotes` / `updateNotes` note takes the `NoteHint` fields of `shared/src/schema.ts`
+**except `at`**. Unlike `t` and `d` (ticks), **hint times are quarter notes as exact fractions `[numerator, denominator]` (denominator > 0),
+relative to the clip's start**, like the note's own `t` (a quintuplet sixteenth lasts `[1, 5]`, which no tick count holds):
+
+| field | meaning |
+|---|---|
+| `on`, `len` (required) | the notated onset and length of the **whole tied chain**, `len` > 0 |
+| `segs` | the written pieces of the chain, in order; positive fractions that add up to `len` |
+| `tup` | `{n, of, start, span}`: in a tuplet of `n` notes in the time of `of`, the bracket covering `[start, start + span)`; `n`, `of` positive integers |
+| `staff`, `voice` | 1-based; the staff of the track (one clef per staff in the track's `clefs`, top first) and the voice on it |
+| `spell` | the written pitch name, `F#4`, `Bb3`, `E#5`, `Cbb4`; must name the note's pitch (the octave is the letter's: `B#3` is middle C) |
+| `art` | any of `>` accent, `^` marcato, `'` staccato, `_` tenuto |
+
+The server computes `at` = `[tick, durTicks, pitch]` itself from the note as it ends up (an `updateNotes` with a hint uses the note's
+resulting `t`, `d` and `p`), so a hint can never be written mismatched with its note. A hint is **fresh** while the note's `tick`,
+`durTicks` and `pitch` still equal `at`, and stale after they change; the score view ignores a stale hint. An `updateNotes` that changes
+`t`, `d` or `p` **without** a `hint` leaves the old hint in place and so makes it stale: that is intended, send a new hint with the change
+to keep the note's notation. A bad hint names the op, the note and the field (`op 3: notes[7].hint.segs must add up to len [1,4]`);
+an unknown field, `at` included, is an error. Hints are not read for loop repeats, and drum tracks ignore them.
+
+`clefs` on `addTrack` / `updateTrack` is a list of `treble`, `bass`, `alto`, `tenor`, `treble_8`, `bass_8`, `perc` (1 to 8, one per
+staff, top first; `null` clears it on `updateTrack`). Midi tracks only.
+
+```json
+{"op": "addTrack", "name": "Violin", "clefs": ["treble"]}
+{"op": "addMidiClip", "trackId": "$0", "start": "57", "length": "1 bar"}
+{"op": "addNotes", "clipId": "$1", "notes": [
+  {"p": "B5", "t": 0, "d": 192, "hint": {"on": [0, 1], "len": [1, 5], "tup": {"n": 5, "of": 4, "start": [0, 1], "span": [1, 1]},
+                                         "staff": 1, "voice": 1, "spell": "B5", "art": ">"}}]}
+```
+`badmidi push` sends such a hint with every note it adds or updates (built from its own engraving, so the score view shows the piece as
+badmidi writes it) and `badmidi pull` reads a fresh hint instead of quantizing (`agent/AGENTS.md`, "Notation hints").
 
 ## Events
 `GET .../events?since=<cursor>&wait=25` returns `{cursor, events, gap?}`. Without `since` it starts from now (`events` empty;

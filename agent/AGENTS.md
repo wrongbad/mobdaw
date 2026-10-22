@@ -580,6 +580,15 @@ badmidi push song.py --apply --label "violin 3 descant" --like Violin   # one hi
   velocity changed since the pull: untouched notes keep their human velocities, new notes get the performed one. Change a part's
   loudness by editing its marks (`cello.mark(5, "pp")`); note that `part.clear(a, b)` also removes the marks in those bars, which
   rewrites the velocities there. Hairpins and articulations other than drum accents are not inferred.
+- **Notation hints.** `push` sends every note it adds, or updates in length, with a `hint` of how the piece writes it (`badmidi/hints.py`:
+  exact `on` / `len` as fractions of a quarter, the written pieces of a tie as `segs`, the tuplet bracket, `staff` and `voice`, the engraved
+  spelling, articulations) and sets the track's `clefs` (new tracks, tracks with clefs already, or a track this push writes to). mobdaw's score view
+  then draws the piece as badmidi engraves it. `pull` places a note from its hint when the hint is fresh (its tick, length and pitch are
+  what the hint was written for; edited in mobdaw since, it is stale) and guesses the rest as before; the pull report counts both. A note
+  whose performance is unchanged but whose hint differs from the pulled one (respelled, moved to another voice, a neighbouring tuplet
+  changed) is sent as an `updateNotes` with just the hint. A track with several staves (`clefs`) comes back as one part per staff in a
+  group, voices on a staff as parts sharing its `staff`. Hints in looped clips and drum tracks are not read (those are guessed).
+  `push --no-hints` for a server that predates them.
 - **Drums.** A track with drum-view clips (or only one-key drum devices) is a `drums` part. `pull` prints its key legend
   (`C2 = Kick, F#2 = Hat`), writes a hit above the part's level as an accent `>` (a louder hit), and keeps the part's level as one dynamic.
   A new drum part needs `--like <drum track>` (a kit is one keyed device per drum, which a piece cannot describe) and becomes a
@@ -767,6 +776,7 @@ badmidi/lilypond.py  LilyPond export, rendering, and verification against LilyPo
 badmidi/loops.py     which Part.loop() spans can be engraved as repeats
 badmidi/render.py    wav through fluidsynth
 badmidi/bridge.py    pull/push against a mobdaw project (state -> Score, Score diff -> one batch of ops)
+badmidi/hints.py     the notation hint of every note of a track's parts, as push sends it
 badmidi/heard.py     HeardChord, HeardPart, Rhythm: what a recording says, in score time (no numpy)
 badmidi/bass.py      bass.line(): draft bass parts (roots, root-fifth, pulse, walk) from heard chords
 badmidi/patches.py   named sounds for new tracks (`push --patch bass`)

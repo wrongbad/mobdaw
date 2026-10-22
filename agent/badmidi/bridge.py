@@ -14,6 +14,13 @@ What is read: regions -> meter / tempo / rit. / accel. / free bars, markers -> s
 clip's notes at exact positions (`clip.startTick + note.t`, in ticks of `meta.ppq`). Drum-view and audio clips
 are left out (said in the report); notes in looped clips are shown as stored and cannot be changed from here.
 
+Notation hints (docs/agent-api.md): push sends each note it adds or updates with a `hint` built from the piece's own engraving
+(`badmidi.hints`: exact onset and length, written pieces, tuplet, staff and voice, spelling, articulation) and the track's `clefs`,
+so mobdaw's score view shows the piece as written. Pull places a note from its hint when the hint is still fresh (the note's tick,
+length and pitch are what the hint was written for) and guesses the rest as before; the report says how many of each. A note whose
+performance is unchanged but whose hint differs from the pulled baseline (respelled, re-voiced) is sent as an `updateNotes` with
+just the hint. `badmidi push --no-hints` leaves them out.
+
 What is pushed: only notes. A note is identified by (track, onset, pitch): new ones become `addNotes` (into the
 clip that covers them, else a new clip), missing ones `removeNotes`, a changed length `updateNotes`; a part the
 snapshot doesn't know becomes a new track (`--like <track>` copies another track's whole device chain). Meter,
@@ -42,8 +49,9 @@ import hashlib
 
 from . import patches
 from .core import Motif, Note, Pitch
+from . import hints as hintlib
 from .heard import HeardPart
-from .ingest import (_Item, _N, _clean_name, _lines, _pitch, _place, _unique, estimate_key,
+from .ingest import (_Item, _N, _clean_name, _lines_tagged, _pitch, _place, _unique, estimate_key,
                      instrument_for, SourceNote)
 from .scale import Scale, key as parse_key
 from .score import INSTRUMENTS, Loop, Meter, Score
@@ -286,15 +294,44 @@ def _score_meter(r: dict) -> str:
 
 class _VN(_N):
     """An importer note that also knows the project's velocity for it."""
-    __slots__ = ("vel", "ghost")
+    __slots__ = ("vel", "ghost", "tup", "tag")
 
 
-def _vnote(on: Fraction, dur: Fraction, midi: int, vel: int, ghost: bool) -> _VN:
+def _vnote(on: Fraction, dur: Fraction, midi: int, vel: int, ghost: bool, hint: dict | None = None) -> _VN:
     """`ghost`: a repeat of a looped clip's pattern (a later pass). It is placed so the views hear it, but the project has no
-    note for it: the loop is the pattern, and the passes are what the loop means."""
+    note for it: the loop is the pattern, and the passes are what the loop means. `hint`: the note's fresh notation hint
+    (`_fresh_hint`): its spelling, articulations, tuplet and (staff, voice) are used as written instead of guessed."""
     n = _VN(SourceNote(on, dur, midi))
-    n.vel, n.ghost = vel, ghost
+    n.vel, n.ghost, n.tup, n.tag = vel, ghost, None, None
+    if hint:
+        n.spell, n.art = hint.get("spell"), hint.get("art", "")
+        t = hint.get("tup")
+        n.tup = (t["n"], t["of"]) if t else None
+        n.tag = hint.get("staff", 1) * 1000 + hint.get("voice", 1)
     return n
+
+
+def _fresh_hint(n: dict) -> dict | None:
+    """A project note's notation hint when it is still true of the note: its `at` (tick, length, pitch) equals the note's now
+    (the state rounds ticks to 3 decimals), and it is shaped as the API writes it. Anything else: None, and the note is guessed."""
+    h = n.get("hint")
+    try:
+        at = h["at"]
+        if not (abs(at[0] - n["t"]) < 0.0011 and abs(at[1] - n["d"]) < 0.0011 and at[2] == n["pitch"]):
+            return None
+        for k in ("on", "len"):
+            if not (len(h[k]) == 2 and all(isinstance(x, int) for x in h[k]) and h[k][1] > 0):
+                return None
+        if h["len"][0] <= 0:
+            return None
+        t = h.get("tup")
+        if t is not None and not (isinstance(t["n"], int) and isinstance(t["of"], int) and t["n"] > 0 and t["of"] > 0):
+            return None
+        if not all(isinstance(h.get(k, 1), int) and h.get(k, 1) > 0 for k in ("staff", "voice")):
+            return None
+        return h
+    except (KeyError, TypeError, IndexError):
+        return None
 
 
 def is_drum_track(t: dict) -> bool:
@@ -312,6 +349,9 @@ class _Track:
     clips: list[dict] = field(default_factory=list)
     notes: list[dict] = field(default_factory=list)       # what plays: pass 1 of a loop has ids, later passes are ghosts
     by_key: dict = field(default_factory=dict)            # (onset, pitch) -> the project's note (pass 1 only)
+    hinted: int = 0                                       # notes placed from a fresh notation hint
+    guessed: int = 0                                      # notes placed by guessing (no hint, or a stale one: `stale`)
+    stale: int = 0
 
 
 def _collect(state: dict, report: list[str]) -> list[_Track]:
@@ -342,6 +382,7 @@ def _collect(state: dict, report: list[str]) -> list[_Track]:
             skipped = 0
             for n in c["notes"]:
                 tt, d = _frac(n["t"]), _frac(n["d"])
+                hint = None if (tr.drums or loop) else _fresh_hint(n)    # a looped clip is its pattern: guessed, so every pass agrees
                 if loop and not c.get("forever"):
                     if tt >= loop:
                         skipped += 1
@@ -352,7 +393,15 @@ def _collect(state: dict, report: list[str]) -> list[_Track]:
                     if on >= start + length:
                         continue
                     row = {"id": n["id"] if k == 0 else None, "clip": c["id"], "on": on / ppq, "dur": min(d, start + length - on) / ppq,
-                           "midi": n["pitch"], "vel": n["v"], "readonly": readonly}
+                           "midi": n["pitch"], "vel": n["v"], "readonly": readonly, "hint": None}
+                    if k == 0 and hint:       # written as the hint says: its onset and length, not the performed ones
+                        row["on"], row["dur"], row["hint"] = start / ppq + Fraction(*hint["on"]), Fraction(*hint["len"]), hint
+                    if k == 0 and not tr.drums:
+                        if hint:
+                            tr.hinted += 1
+                        else:
+                            tr.guessed += 1
+                            tr.stale += bool(n.get("hint"))
                     tr.notes.append(row)
                     if k == 0:
                         tr.by_key[(row["on"], row["midi"])] = row
@@ -424,6 +473,8 @@ class Pulled:
     snapshot: dict
     report: list[str] = field(default_factory=list)
     heard: dict[str, HeardPart] = field(default_factory=dict)      # HEARD in the piece: name -> what the recording says
+    hinted: int = 0                                                # pitched notes placed from a fresh notation hint
+    guessed: int = 0                                               # ... and placed by guessing (no hint, or a stale one)
 
 
 def _timeline_into(score: Score, state: dict, report: list[str]) -> None:
@@ -484,12 +535,14 @@ def suggest_meter(state: dict) -> str | None:
 
 def _baseline(score: Score, parts_by_track: dict[str, list[str]], tracks: list[_Track]) -> list[dict]:
     """What the parts say, per note, with the id of the project's note at that (onset, pitch) and the velocity the
-    markings give it now (`pv`): push changes a note's velocity only when its `pv` changes."""
+    markings give it now (`pv`): push changes a note's velocity only when its `pv` changes. `hint` is the notation hint
+    push would send for the note as the parts say it now (absolute quarters, no `at`): push sends a note's hint again only
+    when it differs from this, or when the note's length changes (which makes the project's copy stale)."""
     out = []
     for tr in tracks:
-        for name in parts_by_track.get(tr.info["id"], []):
-            if not any(p.name == name for p in score.parts):
-                continue
+        names = [n for n in parts_by_track.get(tr.info["id"], []) if any(p.name == n for p in score.parts)]
+        hints = {} if tr.drums else hintlib.note_hints(score, names)      # what push would send for each note, as the piece says it now
+        for name in names:
             part = score[name]
             pv = performed(score, part)
             for on, note in part.events():
@@ -499,7 +552,8 @@ def _baseline(score: Score, parts_by_track: dict[str, list[str]], tracks: list[_
                     src = tr.by_key.get((on, p.midi))
                     if src:
                         out.append({"track": tr.info["id"], "id": src["id"], "clip": src["clip"], "on": str(on), "dur": str(note.dur),
-                                    "midi": p.midi, "vel": src["vel"], "pv": pv[(on, p.midi)], "readonly": src["readonly"]})
+                                    "midi": p.midi, "vel": src["vel"], "pv": pv[(on, p.midi)], "readonly": src["readonly"],
+                                    "hint": hints.get((on, p.midi))})
     return out
 
 
@@ -508,7 +562,8 @@ def _snapshot(state: dict, project: str, filter_info: dict | None, tracks: list[
     return {
         "project": project, "rev": state.get("rev"), "ppq": state["meta"]["ppq"], "regions": state["regions"], "filter": filter_info or {},
         "bars": bars, "notes": baseline, "heard": heard or [], "map_ops": map_ops or [], "map_text": map_text,
-        "tracks": [{"id": tr.info["id"], "name": tr.info["name"], "drums": tr.drums, "parts": parts_by_track.get(tr.info["id"], []), "clips": tr.clips}
+        "tracks": [{"id": tr.info["id"], "name": tr.info["name"], "drums": tr.drums, "parts": parts_by_track.get(tr.info["id"], []), "clips": tr.clips,
+                    "clefs": tr.info.get("clefs")}
                    for tr in tracks],
     }
 
@@ -517,6 +572,21 @@ def _sig(score: Score, part: str) -> str:
     """A fingerprint of what a part says (onset, pitch, length of every note): how push notices an edit to a heard part."""
     ev = sorted((str(on), m, str(d)) for on, m, d, _ in _events(score, [part]))
     return hashlib.sha1(json.dumps(ev).encode()).hexdigest()
+
+
+def _staff_mains(score: Score, name: str, inst: str, rng, clefs: list[str] | None, nstaves: int, taken: set[str]) -> list:
+    """The first part of each staff of a track: one per clef of its `clefs` (more when the hints use more staves; one when it
+    has none), the first named for the track. Staves of one track share a group (a braced grand staff) and a MIDI channel."""
+    nstaves = max(1, nstaves, len(clefs or []))
+    out = []
+    for k in range(1, nstaves + 1):
+        kw: dict = {"range": rng} if rng else {}
+        if clefs and k <= len(clefs):
+            kw["clef"] = hintlib.clef_arg(clefs[k - 1])
+        if nstaves > 1:
+            kw.update(group=name, channel=name)
+        out.append(score.part(name if k == 1 else _unique(f"{name} staff {k}", taken), inst, **kw))
+    return out
 
 
 def pull(state: dict, project: str = "", filter_info: dict | None = None, heard: list[HeardPart] | None = None, proposal=None) -> Pulled:
@@ -571,13 +641,14 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None, heard:
                           + "; not shown in grid / lens / form (name it in --parts to include)")
         dev = " ".join(d.get("name") or d["type"] for d in t["devices"] if d["type"] != "mix")
         inst = "drums" if tr.drums else instrument_for(None, f"{t['name']} {dev}")
+        clefs = None if tr.drums else (t.get("clefs") or None)
         if not tr.notes:
-            score.part(name, inst)
-            parts_by_track[t["id"]] = [name]
+            mains = _staff_mains(score, name, inst, None, clefs, len(clefs or []), taken)
+            parts_by_track[t["id"]] = [p.name for p in mains]
             continue
         ns = []
         for n in tr.notes:
-            vn = _vnote(n["on"], n["dur"], n["midi"], n["vel"], n["id"] is None and not n["readonly"])
+            vn = _vnote(n["on"], n["dur"], n["midi"], n["vel"], n["id"] is None and not n["readonly"], n["hint"])
             ns.append(vn)
         by_pitch = defaultdict(list)
         for n in sorted(ns, key=lambda n: (n.onset, -n.end)):
@@ -603,18 +674,36 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None, heard:
                     n.art = ">"
         chords = defaultdict(list)
         for n in ns:
-            chords[(n.onset, n.end)].append(n)
-        items = [_Item(on, end, sorted(g, key=lambda n: n.midi), None) for (on, end), g in chords.items()]
-        lines = _lines(items)
+            chords[(n.onset, n.end, n.tag, n.tup)].append(n)
+        items = [_Item(on, end, sorted(g, key=lambda n: n.midi), tag, tup) for (on, end, tag, tup), g in chords.items()]
+        tagged = _lines_tagged(items)
+        # staff -> its lines, voice 1 first. Hinted notes sit where their hint says (staff, voice); the rest are guessed into the
+        # lines as before (the first voice when a hinted voice is known). A voice the hints skip is kept as an empty line.
+        if all(tag is None for tag, _ in tagged):
+            staff_lines = {1: [line for _, line in tagged]}
+        else:
+            slots: dict[int, dict[int, list]] = {}
+            for tag, line in tagged:
+                slots.setdefault(tag // 1000, {}).setdefault(tag % 1000, []).append(line)
+            # (a voice that overlaps itself, e.g. a guessed note over a hinted one, gets an extra line after the hinted voices, so they keep their numbers)
+            staff_lines = {st: [(vs.get(v) or [[]])[0] for v in range(1, max(vs) + 1)] + [ln for v in sorted(vs) for ln in vs[v][1:]]
+                           for st, vs in slots.items()}
+        nstaves = max([len(clefs or []), *staff_lines])
+        for st in range(1, nstaves + 1):
+            staff_lines.setdefault(st, [[]])
+        lines = [ln for st in sorted(staff_lines) for ln in staff_lines[st]]
         end_t = max(it.end for l in lines for it in l)
         bar, beat = score.position(end_t)
         nbars = max(1, bar - 1 if beat == 1 else bar)
         pitches = [n.midi for line in lines for it in line for n in it.notes]
         rng = None if tr.drums else (Pitch(min(INSTRUMENTS[inst][1], *pitches)), Pitch(max(INSTRUMENTS[inst][2], *pitches)))
-        main = score.part(name, inst, range=rng) if rng else score.part(name, inst)
-        parts = [main] + [main.voice(_unique(f"{name} {k}", taken)) for k in range(2, len(lines) + 1)]
+        parts, plines = [], []
+        for st, main in enumerate(_staff_mains(score, name, inst, rng, clefs, nstaves, taken), 1):
+            ls = staff_lines[st]
+            parts += [main] + [main.voice(_unique(f"{main.name} {k}", taken)) for k in range(2, len(ls) + 1)]
+            plines += ls
         loops = [(_frac(c["startTick"]) / ppq, _frac(c["loopTicks"]) / ppq, c["passes"]) for c in tr.clips if c["passes"] >= 2 and not c["readonly"]]
-        for part, line in zip(parts, lines):
+        for part, line in zip(parts, plines):
             # dynamics are read from the first pass of a loop and repeated in each pass: a loop is its body
             marks = infer_dynamics(score, [it for it in line if not any(n.ghost for n in it.notes)], tr.drums)
             for a, body, passes in loops:
@@ -627,6 +716,11 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None, heard:
                 if any(a <= on < a + body * passes for on, _ in part.events()):
                     score.loops.append(Loop(part, a, body, passes))
     baseline = _baseline(score, parts_by_track, tracks)
+    hinted, guessed = sum(tr.hinted for tr in tracks), sum(tr.guessed for tr in tracks)
+    if hinted + guessed:
+        stale = sum(tr.stale for tr in tracks)
+        report.append(f"notation hints: {hinted} of {hinted + guessed} notes placed from fresh hints (onset, length, spelling, tuplet, voice, "
+                      f"articulation as written), {guessed} guessed" + (f" ({stale} of them have a stale hint: edited since it was written)" if stale else ""))
     marks, hp = [], {}
     for h in heard or []:
         h.part = _unique(h.part, taken)
@@ -640,7 +734,7 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None, heard:
             report.append(f"timing of {h.track!r} (case {h.timing.case.upper()}): {h.timing.summary}")
             report += [f"warning ({h.track!r}): {w}" for w in h.timing.warnings]
     return Pulled(score, _snapshot(state, project, filter_info, tracks, parts_by_track, baseline, score.bars if score.parts else 0, marks, map_ops, map_text),
-                  report, hp)
+                  report, hp, hinted, guessed)
 
 
 # --- push: Score + snapshot -> ops ---------------------------------------------------
@@ -653,6 +747,7 @@ class PushPlan:
     adds: int = 0
     removes: int = 0
     updates: int = 0
+    hints: int = 0                  # notes sent with a notation hint (adds, and updates that changed a note's hint)
     new_tracks: int = 0
     new_parts: dict[int, list[str]] = field(default_factory=dict)    # addTrack op index -> the piece's part names for it
     track_parts: dict[str, list[str]] = field(default_factory=dict)  # existing track id -> the piece's part names for it
@@ -754,9 +849,15 @@ def _reconcile_clips(score: Score, t: dict, parts: list[str], loops: list, ppq: 
 
 
 def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, preset: str | None = None,
-         sound: dict[str, str] | str | None = None, guide: bool = False) -> PushPlan:
+         sound: dict[str, str] | str | None = None, guide: bool = False, hints: bool = True) -> PushPlan:
     """The ops that turn the snapshot's project into the piece (`sound`: a patch name, or {part: name}, for new tracks). Heard parts (audio as chords) are not the project's: they
-    are skipped, and refused if edited; `guide` sends them as muted tracks instead."""
+    are skipped, and refused if edited; `guide` sends them as muted tracks instead.
+
+    `hints` (default): every note that is added, or updated in length or in how the piece writes it, carries a notation `hint`
+    (badmidi.hints: onset and length as exact fractions, written pieces, tuplet, staff and voice, spelling, articulation) and the
+    track gets its `clefs`, so mobdaw's score view shows the piece as badmidi engraves it. A note whose performance is unchanged but
+    whose hint differs from the snapshot's (respelled, re-voiced) is an `updateNotes` with just the new hint. `hints=False` for a
+    server that predates them (it refuses the unknown field)."""
     check_timeline(score, snap)
     heard = {h["part"]: h for h in snap.get("heard", [])}
     if not guide:
@@ -787,10 +888,14 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
             raise BridgeError(f"{what}: a note at tick {float(on * ppq):g} is outside the pulled bars "
                               f"({snap['filter'].get('fromBar')}-{snap['filter'].get('toBar')}); pull the whole project or widen --bars")
 
-    def note_json(on: Fraction, midi: int, dur: Fraction, v: int, origin: Fraction) -> dict:
-        return {"p": midi, "t": _tick(on - origin, ppq), "d": _tick(dur, ppq), "v": v}
+    def note_json(on: Fraction, midi: int, dur: Fraction, v: int, origin: Fraction, hs: dict | None = None) -> dict:
+        j = {"p": midi, "t": _tick(on - origin, ppq), "d": _tick(dur, ppq), "v": v}
+        if hs and (on, midi) in hs:
+            j["hint"] = hintlib.shift(hs[(on, midi)], origin)
+            pl.hints += 1
+        return j
 
-    def clip_ops(track_ref: str, clips: list[dict], notes: list, name: str, drums: bool, loops: list):
+    def clip_ops(track_ref: str, clips: list[dict], notes: list, name: str, drums: bool, loops: list, hs: dict | None = None):
         """addNotes into covering clips; leftovers into new clips: one looped clip per Loop of the piece, one plain clip per
         run of nearby notes. `notes` has only the first pass of every loop."""
         nonlocal new_notes_total
@@ -809,7 +914,7 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
             else:
                 rest.append(e)
         for cid, ns in into.items():
-            pl.ops.append({"op": "addNotes", "clipId": cid, "notes": [note_json(on, m, d, v, a) for (on, m, d, v), a in ns]})
+            pl.ops.append({"op": "addNotes", "clipId": cid, "notes": [note_json(on, m, d, v, a, hs) for (on, m, d, v), a in ns]})
         view = {"view": "drums"} if drums else {}
         # looped clips for the piece's loops over what is left
         for lp in loops:
@@ -822,7 +927,7 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
             pl.ops.append({"op": "addMidiClip", "trackId": track_ref, "start": _tick(lp.start, ppq), "length": _tick(lp.body * lp.times, ppq),
                            "loop": _tick(lp.body, ppq), **view})
             cref = f"${len(pl.ops) - 1}"
-            pl.ops.append({"op": "addNotes", "clipId": cref, "notes": [note_json(on, m, min(d, lp.body - (on - lp.start)), v, lp.start) for on, m, d, v in first]})
+            pl.ops.append({"op": "addNotes", "clipId": cref, "notes": [note_json(on, m, min(d, lp.body - (on - lp.start)), v, lp.start, hs) for on, m, d, v in first]})
         # new plain clips: from the first bar a run starts in to the bar its last note ends in; a gap of 8+ empty bars splits a run
         runs: list[list] = []
         for n in rest:
@@ -837,7 +942,7 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
             start, stop = tl.bar_start(b0), tl.bar_start(max(b1, b0) + 1)
             pl.ops.append({"op": "addMidiClip", "trackId": track_ref, "start": _tick(start / ppq, ppq), "length": _tick((stop - start) / ppq, ppq), **view})
             cref = f"${len(pl.ops) - 1}"
-            pl.ops.append({"op": "addNotes", "clipId": cref, "notes": [note_json(on, m, d, v, start / ppq) for on, m, d, v in run]})
+            pl.ops.append({"op": "addNotes", "clipId": cref, "notes": [note_json(on, m, d, v, start / ppq, hs) for on, m, d, v in run]})
 
     # existing tracks: diff
     for t in snap["tracks"]:
@@ -853,6 +958,8 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
         have = defaultdict(list)
         for n in old:
             have[(Fraction(n["on"]), n["midi"])].append(n)
+        hs = hintlib.note_hints(score, parts) if hints and not t.get("drums") else {}
+        origin = {c["id"]: _frac(c["startTick"]) / ppq for c in t["clips"]}
         added, changed = [], 0
         for on, midi, dur, v in sorted(new):
             hit = have.get((on, midi))
@@ -863,11 +970,16 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
                     patch["d"] = _tick(dur, ppq)
                 if n["pv"] != v:
                     patch["v"] = v
+                h = hs.get((on, midi))
+                # a changed length makes the project's hint stale, so the note's hint goes with it; otherwise only a changed hint is sent
+                if h and not n["readonly"] and ("d" in patch or ("hint" in n and n["hint"] != h)):
+                    patch["hint"] = hintlib.shift(h, origin[n["clip"]])
                 if patch:
                     if n["readonly"]:
                         raise BridgeError(f"{t['name']}: a note in a read-only looped clip changed; those are read-only here")
                     pl.ops.append({"op": "updateNotes", "notes": [{"id": n["id"], **patch}]})
                     pl.updates += 1
+                    pl.hints += "hint" in patch
                     changed += 1
             else:
                 added.append((on, midi, dur, v))
@@ -880,9 +992,15 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
             pl.ops.append({"op": "removeNotes", "ids": [n["id"] for n in gone]})
             pl.removes += len(gone)
         if added:
-            clip_ops(t["id"], eff, added, t["name"], t.get("drums", False), loops)
+            clip_ops(t["id"], eff, added, t["name"], t.get("drums", False), loops, hs)
             pl.adds += len(added)
             new_notes_total += len(added)
+        clefs = hintlib.clefs_of(score, parts) if hints and not t.get("drums") else None
+        old_clefs = t.get("clefs")
+        # the clefs the piece engraves with; a track the project gave none keeps the score view's choice unless this push writes to it
+        if clefs and clefs != old_clefs and (old_clefs or gone or added or changed):
+            pl.ops.append({"op": "updateTrack", "id": t["id"], "clefs": clefs})
+            pl.summary.append(f"{t['name']}: clefs {'+'.join(clefs)}")
         if gone or added or changed:
             pl.summary.append(f"{t['name']}: +{len(added)} -{len(gone)} ~{changed} notes")
 
@@ -908,6 +1026,9 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
             raise BridgeError(f"new drum part {root!r}: say which track's drum devices it plays (--like <drum track>): "
                               "a drum kit is one keyed one-shot device per drum, which a piece cannot describe")
         op = {"op": "addTrack", "name": heard[names[0]]["track"] + " (heard)" if is_guide else root}
+        hs = {} if (is_guide or not hints or drums) else hintlib.note_hints(score, names)
+        if hs:
+            op["clefs"] = hintlib.clefs_of(score, names)
         if src:
             op["like"] = src
         elif preset:
@@ -925,7 +1046,7 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
         if is_guide:
             pl.ops.append({"op": "updateTrack", "id": ref, "muted": True})
             pl.guided += names
-        clip_ops(ref, [], ev, root, drums, [lp for lp in score.loops if lp.part.name in names])
+        clip_ops(ref, [], ev, root, drums, [lp for lp in score.loops if lp.part.name in names], hs)
         pl.new_tracks += 1
         pl.adds += len(ev)
         new_notes_total += len(ev)
@@ -1071,6 +1192,8 @@ def push_main(argv: list[str]) -> int:
                     help=f"new tracks get this named sound ({', '.join(patches.PATCHES)}); a bare NAME applies to every new part; repeatable")
     ap.add_argument("--guide", action="store_true", help="push the heard parts as muted MIDI tracks (to see and fix what was heard)")
     ap.add_argument("--json", action="store_true", help="print the ops as JSON")
+    ap.add_argument("--no-hints", action="store_true",
+                    help="send notes without notation hints and tracks without clefs (for a server that predates them)")
     args = ap.parse_args(argv)
     from .views import has_errors
     snap = read_snapshot(snapshot_path(args.piece))
@@ -1086,11 +1209,12 @@ def push_main(argv: list[str]) -> int:
     for x in args.patch:
         k, eq, v = x.partition("=")
         patch[k if eq else "*"] = v if eq else k
-    p = plan(score, snap, like or None, args.preset, patch or None, args.guide)
+    p = plan(score, snap, like or None, args.preset, patch or None, args.guide, hints=not args.no_hints)
     if p.empty:
         print("nothing to push: the piece matches the project as pulled")
         return 0
-    print(f"{len(p.ops)} ops: +{p.adds} -{p.removes} ~{p.updates} notes, {p.new_tracks} new tracks")
+    print(f"{len(p.ops)} ops: +{p.adds} -{p.removes} ~{p.updates} notes, {p.new_tracks} new tracks"
+          + (f", {p.hints} notes with notation hints" if p.hints else ""))
     for line in p.summary:
         print("  " + line)
     if args.json:

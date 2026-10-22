@@ -78,13 +78,15 @@ class Bridge(unittest.TestCase):
             pl = plan(score, snap, like="Cello")
             kinds = [o["op"] for o in pl.ops]
             self.assertEqual(kinds.count("addTrack"), 1)
-            self.assertEqual(pl.ops[kinds.index("addTrack")], {"op": "addTrack", "name": "violin 3", "like": "Cello"})
+            self.assertEqual(pl.ops[kinds.index("addTrack")], {"op": "addTrack", "name": "violin 3", "like": "Cello", "clefs": ["treble"]})
             self.assertEqual(pl.new_tracks, 1)
             clip = pl.ops[kinds.index("addMidiClip")]
             self.assertEqual(clip["start"], 2 * 2880)          # bar 3 in 3/4
             self.assertEqual(clip["length"], 2 * 2880)
             adds = next(o for o in pl.ops if o["op"] == "addNotes" and o["clipId"].startswith("$"))["notes"]
-            self.assertIn({"op": "addNotes", "clipId": "c1", "notes": [{"p": 65, "t": 8640, "d": 2880, "v": 98}]}, pl.ops)
+            self.assertIn({"op": "addNotes", "clipId": "c1", "notes": [
+                {"p": 65, "t": 8640, "d": 2880, "v": 98, "hint": {"on": [9, 1], "len": [3, 1], "staff": 1, "voice": 1, "spell": "F4"}}]}, pl.ops)
+            self.assertIn({"op": "updateTrack", "id": "t1", "clefs": ["treble"]}, pl.ops)       # a push that writes to a track sets its clefs
             self.assertEqual(pl.removes, 1)                          # the cello's old last note
             self.assertEqual([(n["p"], n["t"], n["d"]) for n in adds], [(69, 0, 2880), (67, 2880, 2880)])
 

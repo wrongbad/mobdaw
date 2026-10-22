@@ -279,6 +279,7 @@ class _Item:
     end: Fraction
     notes: list
     voice: int | None
+    tuplet: tuple[int, int] | None = None    # the ratio the notes were written with (n, of), when the source says
 
     @property
     def art(self) -> str:
@@ -290,7 +291,11 @@ class _Item:
 
 
 def _lines(items: list[_Item]) -> list[list[_Item]]:
-    """Share items out between monophonic lines. With voices known, each voice
+    return [l for _, l in _lines_tagged(items)]
+
+
+def _lines_tagged(items: list[_Item]) -> list[tuple[int | None, list[_Item]]]:
+    """(voice, items) per line. Share items out between monophonic lines. With voices known, each voice
     is a line (more lines for the voice if it overlaps itself). Otherwise
     each item goes to the lowest line that is free and whose last pitch is
     within an octave, else the nearest-pitched free line, else a new line."""
@@ -314,7 +319,7 @@ def _lines(items: list[_Item]) -> list[list[_Item]]:
         line["end"], line["pitch"] = it.end, it.mean
     if voices:
         lines.sort(key=lambda l: l["voice"])
-    return [l["items"] for l in lines]
+    return [(l["voice"], l["items"]) for l in lines]
 
 
 # --- build_score ---------------------------------------------------------------
@@ -529,7 +534,7 @@ def _place(score: Score, part, line: list[_Item], marks: list[tuple[Fraction, Ma
         cuts = [it.onset] + [x for x in mt if it.onset < x < it.end] + [it.end]
         pitches = [_pitch(n) for n in it.notes]
         for x, y in zip(cuts, cuts[1:]):
-            part._place(x, [Motif(Note(pitches, y - x, tied=y != it.end, art=it.art if x == it.onset else ""))])
+            part._place(x, [Motif(Note(pitches, y - x, tied=y != it.end, art=it.art if x == it.onset else "", tuplet=it.tuplet))])
         at = it.end
     if marks:
         rests(at, starts[-1])
