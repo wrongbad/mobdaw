@@ -1047,7 +1047,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const rulerBar = (clientX: number) => barAtPx(tmap(), clientX - rulerBody.getBoundingClientRect().left, pps())
   let rulerHold = 0 // a long press on the ruler (touch) opens the menu at that bar, like a right click
   ruler.onpointerdown = (e) => {
-    if (e.button !== 0) return
+    if (e.button !== 0 || (e.target instanceof Element && e.target.closest('.corner'))) return // (the corner is the master header: its controls are not the ruler)
     seek(fromX(e.clientX - rulerBody.getBoundingClientRect().left))
     if (e.pointerType !== 'touch') return
     const { clientX, clientY } = e

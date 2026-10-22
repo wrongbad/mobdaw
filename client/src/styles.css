@@ -293,6 +293,9 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .fx-row::before, .auto-row::before { margin-top: -1px; }
 /* the global section is a lane like any other (fx, then its automation, in one block), with a neutral bar */
 /* the master drawers hang flush off the ruler: no tile margin or top corners */
+/* (their left cells run from the screen edge, as the ruler's corner does, so the lane's rounded lower-left corner shows) */
+.lane.master .fx-toggle { left: 0; width: calc(var(--head) + var(--gutter)); padding-left: calc(var(--gutter) + 12px); box-shadow: none; }
+.lane.master .fx-row::before { left: 0; }
 .lane.master { --tc: var(--line-strong); margin: 0; border-radius: 0 0 var(--r-md) var(--r-md); }
 .lane-body.arming { cursor: crosshair; }
 /* looper regions: coloured outline boxes over the track's audio */
