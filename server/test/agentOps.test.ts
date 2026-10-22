@@ -1,9 +1,35 @@
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { getClips, getDevices, getMarkers, getNotes, getRegions, getTracks, getKey, addTrack, MASTER_TRACK } from '@mobdaw/shared'
+import { agentText, agentView, getLanes, getPoints, getClips, getDevices, getMarkers, getNotes, getRegions, getTracks, getKey, addTrack, MASTER_TRACK } from '@mobdaw/shared'
 import { OpError, applyAtomic, parseOps, runOps } from '../src/agentOps.ts'
 
 const run = (doc: Y.Doc, ops: unknown[]) => runOps(doc, parseOps(ops))
+
+describe('agent ops: automation', () => {
+  it('writes lanes and points in the param\'s units and shows them back', () => {
+    const doc = new Y.Doc()
+    const track = run(doc, [{ op: 'addTrack', name: 'Flute' }])[0] as string
+    const mix = getDevices(doc).find((d) => d.trackId === track && d.type === 9)!
+    const [lane, pts] = run(doc, [
+      { op: 'addLane', deviceId: mix.id, param: 'volume', points: [{ t: '1', v: 1 }, { t: '3', v: 0.5, curve: 'hold' }] },
+      { op: 'addPoints', laneId: '$0', points: [{ t: '5', v: 0 }] },
+    ]).slice(0, 2) as [string, string[]]
+    const p = getPoints(doc).sort((a, b) => a.pos - b.pos)
+    expect(p.map((x) => [x.pos, x.value, x.curve])).toEqual([[0, 0.5, 'linear'], [2 * 2 * 48000, 0.25, 'hold'], [4 * 2 * 48000, 0, 'linear']])
+    expect(getLanes(doc)).toMatchObject([{ id: lane, enabled: true, scope: track, owner: mix.id }])
+    const txt = agentText(doc)
+    expect(txt).toContain('1.1.0=1')
+    expect(txt).toContain('3.1.0=0.5 hold')
+    expect(agentView(doc).tracks[0].lanes![0].points.map((x) => x.v)).toEqual([1, 0.5, 0])
+    run(doc, [{ op: 'updatePoints', points: [{ id: pts[0], v: 2 }] }, { op: 'updateLane', id: lane, enabled: false }, { op: 'removePoints', ids: [p[0].id] }])
+    expect(getLanes(doc)[0].enabled).toBe(false)
+    expect(getPoints(doc)).toHaveLength(2)
+    run(doc, [{ op: 'removeLane', id: lane }])
+    expect(getLanes(doc)).toEqual([])
+    expect(getPoints(doc)).toEqual([])
+    expect(() => run(doc, [{ op: 'addLane', deviceId: 'nope', param: 'volume' }])).toThrow('no device')
+  })
+})
 
 describe('agent ops', () => {
   it('build a song with references, and edit it', () => {

@@ -96,8 +96,11 @@ unit text: `"4 bars"`, `"1 bar 2 beats"`, `"3 beats"`, `"240 ticks"`. Pitches `"
 | `setRegion` / `removeRegion` | `id` or `bar`, `bpm?`, `meter?`, `rampTo?` (null clears), `free?` / `id` or `bar` |
 | `addMarker` / `updateMarker` / `removeMarker` | `bar`, `label`, `text?` / `id`, ... / `id` |
 | `setKey` | `key` (display only; `""` clears) |
+| `addLane` | `deviceId`, `param` (name; no drop-downs), `points?: [{t, v, curve?}]`: automate a device param (mix fader and pan too, on a track or `master`); creates and enables the lane, or adds to the param's existing one. `t` is a position (`"9.3.240"` or ticks), `v` the value in the param's own units (clamped; log params interpolate on their own scale), `curve` `linear` (default) or `hold` |
+| `updateLane` / `removeLane` | `id`, `enabled` / `id` |
+| `addPoints` / `updatePoints` / `removePoints` | `laneId`, `points: [{t, v, curve?}]` / `points: [{id, t?, v?, curve?}]` / `ids` |
 
-Not in v1: audio import, automation lanes, loopers, per-track presets (client-side content).
+Lanes show in the state as `lanes` on a track (and on `master`): `{id, deviceId, device, param, enabled, points: [{id, t, tick, v, curve}]}`; the text outline has one `automation ...` line per lane. Not in v1: audio import, looper automation and LFO lanes, loopers, per-track presets (client-side content).
 
 ### Notation hints
 A note may say how it is **written**, so the score view draws it so and does not guess (docs/SCORE-PLAN.md, "Notation hints"; the

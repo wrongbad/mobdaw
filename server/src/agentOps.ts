@@ -4,7 +4,7 @@
 // transaction attributed to "<user> (api)": all-or-nothing, and one history entry.
 import * as Y from 'yjs'
 import {
-  DEVICES, FINNWAVE, MASTER_TRACK, MIX, PositionError, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, apiName,
+  DEVICES, FINNWAVE, MASTER_TRACK, addLane, addPoint, deleteLane, deletePoint, lanesMap, paramToPos, pointsMap, setLaneEnabled, updatePoint, MIX, PositionError, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, apiName,
   clipsMap, deleteClip, deleteDevice, deleteMarker, deleteNote, deleteRegion, deleteTrack, deviceType, devicesMap, getRegions, getTimeMap,
   ensureMixDevice, getDevices, isFutureDoc, markersMap, notesMap, paramOf, parseDuration, parseNote, parsePosition, regionAtBar, regionsMap, setKey, setParam, setRegion,
   getTracks, noteName, tracksMap, updateClip, updateDevice, updateMarker, updateNote, updateTrack, type DeviceDef, type Frac, type NoteHint, type Region, type RegionPatch, type ScoreClef,
@@ -46,6 +46,12 @@ const SPECS: Record<string, Spec> = {
   updateMarker: { id: 'str', bar: 'num?', label: 'str?', text: 'str?' },
   removeMarker: { id: 'str' },
   setKey: { key: 'str' },
+  addLane: { deviceId: 'str', param: 'any', points: 'list?' },
+  updateLane: { id: 'str', enabled: 'bool' },
+  removeLane: { id: 'str' },
+  addPoints: { laneId: 'str', points: 'list' },
+  updatePoints: { points: 'list' },
+  removePoints: { ids: 'list' },
 }
 export type Op = { op: keyof typeof SPECS } & Record<string, unknown>
 
@@ -77,6 +83,12 @@ export function parseOps(raw: unknown): Op[] {
     const spec = SPECS[o.op]
     if (!spec) throw new OpError(i, `unknown op "${o.op}" (ops: ${Object.keys(SPECS).join(', ')})`)
     checkFields(i, o.op, o, spec, ['op'])
+    if (Array.isArray(o.points)) {
+      o.points.forEach((n, j) => {
+        if (!isObj(n)) throw new OpError(i, `points[${j}] must be an object`)
+        checkFields(i, `points[${j}]`, n, o.op === 'updatePoints' ? POINT_PATCH : NEW_POINT)
+      })
+    }
     if (Array.isArray(o.notes)) {
       notes += o.notes.length
       o.notes.forEach((n, j) => {
@@ -88,6 +100,8 @@ export function parseOps(raw: unknown): Op[] {
   if (notes > MAX_NOTES) throw new OpError(-1, `at most ${MAX_NOTES} notes per batch`)
   return raw as Op[]
 }
+const NEW_POINT: Spec = { t: 'any', v: 'any', curve: 'str?' }
+const POINT_PATCH: Spec = { id: 'str', t: 'any?', v: 'any?', curve: 'str?' }
 const NEW_NOTE: Spec = { pitch: 'any?', p: 'any?', t: 'any', d: 'any', v: 'num?', hint: 'any?' }
 const NOTE_PATCH: Spec = { id: 'str', pitch: 'any?', p: 'any?', t: 'any?', d: 'any?', v: 'num?', hint: 'any?' }
 
@@ -243,6 +257,37 @@ function copyDevices(doc: Y.Doc, from: string, to: string) {
     const id = addDevice(doc, to, d.type, { ...(d.name ? { name: d.name } : {}), ...(d.keyLo != null ? { keyLo: d.keyLo } : {}), ...(d.keyHi != null ? { keyHi: d.keyHi } : {}) }, d.params)
     if (d.bypass) updateDevice(doc, id, { bypass: true })
   }
+}
+
+/** The device a lane op names, its track (or MASTER_TRACK) and the param's definition. */
+function laneTarget(doc: Y.Doc, i: number, deviceId: string, param: unknown) {
+  const d = devicesMap(doc).get(deviceId)
+  if (!d) return bad(i, `no device "${deviceId}"`)
+  const def = DEVICES[d.get('type') as number]
+  const p = paramOf(def, param)
+  if (!p) return bad(i, `${def.name} has no param ${JSON.stringify(param)} (params: ${def.params.map((x) => x.name).join(', ')})`)
+  if (p.options) return bad(i, `${p.name} of ${def.name} is a drop-down: it cannot be automated`)
+  return { scope: d.get('trackId') as string, owner: deviceId, def: p }
+}
+
+/** A point's value in the param's own units (or its range): clamped to the range and normalised along the lane's scale. */
+function pointValue(i: number, where: string, def: { min: number; max: number; scale?: 'lin' | 'log' | 'pow' }, v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return bad(i, `${where}: "v" must be a number in the param's own units (${def.min}..${def.max})`)
+  return paramToPos(def as Parameters<typeof paramToPos>[0], v)
+}
+const curveOf = (i: number, where: string, v: unknown): 'linear' | 'hold' => (v == null ? 'linear' : v === 'linear' || v === 'hold' ? v : bad(i, `${where}: curve must be "linear" or "hold"`))
+
+/** The range a lane's normalised points mean (stored on the lane; the param's current one for an old lane). */
+function laneRange(doc: Y.Doc, i: number, lane: Y.Map<unknown> | undefined) {
+  if (!lane) return bad(i, 'the point\'s lane is gone')
+  const min = lane.get('min') as number | undefined, max = lane.get('max') as number | undefined
+  if (min != null && max != null) return { min, max, scale: (lane.get('scale') as 'lin' | 'log' | 'pow' | undefined) ?? 'lin' }
+  const t = laneTarget(doc, i, lane.get('owner') as string, Number(lane.get('param')))
+  return { min: t.def.min, max: t.def.max, scale: t.def.scale }
+}
+/** Devices are on a track's chain: automation lanes of effects and instruments differ only in `kind`. */
+function getDeviceKind(doc: Y.Doc, id: string): 'synth' | 'effect' {
+  return DEVICES[devicesMap(doc).get(id)!.get('type') as number].instrument ? 'synth' : 'effect'
 }
 
 function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
@@ -529,6 +574,76 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
       deleteMarker(doc, id)
       return id
     }
+    case 'addLane': {
+      const tg = laneTarget(doc, i, r(op.deviceId), op.param)
+      const target = { scope: tg.scope, kind: getDeviceKind(doc, tg.owner), owner: tg.owner, param: String(tg.def.id) }
+      const m = map()
+      let id = ''
+      doc.transact(() => {
+        id = addLane(doc, target, { min: tg.def.min, max: tg.def.max, scale: tg.def.scale })
+        const lane = lanesMap(doc).get(id)!
+        const range = { min: lane.get('min') as number ?? tg.def.min, max: lane.get('max') as number ?? tg.def.max, scale: (lane.get('scale') as 'lin' | 'log' | 'pow' | undefined) ?? tg.def.scale }
+        for (const [j, n] of ((op.points as Record<string, unknown>[] | undefined) ?? []).entries()) {
+          const where = `points[${j}]`
+          const pos = m.tickToSample(position(i, () => parsePosition(m, n.t)))
+          addPoint(doc, id, pos, pointValue(i, where, range, n.v), curveOf(i, where, n.curve))
+        }
+        setLaneEnabled(doc, id, true)
+      })
+      return id
+    }
+    case 'updateLane': {
+      const id = r(op.id)
+      if (!lanesMap(doc).has(id)) return bad(i, `no lane "${id}"`)
+      setLaneEnabled(doc, id, op.enabled as boolean)
+      return id
+    }
+    case 'removeLane': {
+      const id = r(op.id)
+      if (!lanesMap(doc).has(id)) return bad(i, `no lane "${id}"`)
+      deleteLane(doc, id)
+      return id
+    }
+    case 'addPoints': {
+      const laneId = r(op.laneId)
+      const lane = lanesMap(doc).get(laneId)
+      if (!lane) return bad(i, `no lane "${laneId}"`)
+      const def = laneRange(doc, i, lane)
+      const m = map()
+      const ids: string[] = []
+      doc.transact(() => {
+        for (const [j, n] of (op.points as Record<string, unknown>[]).entries()) {
+          const where = `points[${j}]`
+          ids.push(addPoint(doc, laneId, m.tickToSample(position(i, () => parsePosition(m, n.t))), pointValue(i, where, def, n.v), curveOf(i, where, n.curve)))
+        }
+      })
+      return ids
+    }
+    case 'updatePoints': {
+      const m = map()
+      const ids: string[] = []
+      doc.transact(() => {
+        for (const [j, n] of (op.points as Record<string, unknown>[]).entries()) {
+          const id = r(n.id)
+          const cur = pointsMap(doc).get(id)
+          if (!cur) return bad(i, `points[${j}]: no point "${id}"`)
+          const where = `points[${j}]`
+          const patch: { pos?: number; value?: number; curve?: 'linear' | 'hold' } = {}
+          if (n.t !== undefined) patch.pos = m.tickToSample(position(i, () => parsePosition(m, n.t)))
+          if (n.v !== undefined) patch.value = pointValue(i, where, laneRange(doc, i, lanesMap(doc).get(cur.get('laneId') as string)), n.v)
+          if (n.curve != null) patch.curve = curveOf(i, where, n.curve)
+          updatePoint(doc, id, patch)
+          ids.push(id)
+        }
+      })
+      return ids
+    }
+    case 'removePoints': {
+      const ids = (op.ids as unknown[]).map(r)
+      for (const id of ids) if (!pointsMap(doc).has(id)) return bad(i, `no point "${id}"`)
+      doc.transact(() => ids.forEach((id) => deletePoint(doc, id)))
+      return ids
+    }
     case 'setKey':
       setKey(doc, str('key').trim().slice(0, 40) || undefined)
       return null
@@ -585,4 +700,7 @@ Ops
 - addMarker {bar, label, text?}; updateMarker {id, bar?, label?, text?}; removeMarker {id}.
 - setKey {key} (display only, e.g. "D minor"; "" clears).
 
-Not available: importing audio, automation, loopers.`
+- addLane {deviceId, param (name), points?: [{t, v, curve?}]}: automate a device's param (an instrument or effect, mix fader and pan included; not drop-downs); the lane is created if the param has none yet, and enabled. t is a position ("9.3.240" or ticks from bar 1), v the param's value in its own units (as setParam, clamped to its range; a log param is interpolated on its own scale), curve "linear" (default, ramps to the next point) or "hold" (steps). Before its first point and after its last a lane holds that point's value. While enabled the lane replaces the param's static value.
+- updateLane {id, enabled}; removeLane {id}; addPoints {laneId, points: [{t, v, curve?}]}; updatePoints {points: [{id, t?, v?, curve?}]}; removePoints {ids: []}.
+
+Not available: importing audio, loopers (and their automation), LFO lanes.`

@@ -3,10 +3,10 @@
 // The position helpers (`formatPosition`, `parsePosition`, `parseDuration`) are what the ops layer (server/src/agentOps.ts) reads
 // positions with, so what the view prints is what the ops accept.
 import type * as Y from 'yjs'
-import { DEVICES, MIX, type DeviceDef, type ParamDef } from './devices.ts'
+import { DEVICES, MIX, paramToValue, type DeviceDef, type ParamDef } from './devices.ts'
 import { noteName } from './noteName.ts'
 import {
-  MASTER_TRACK, getClips, getDevices, getKey, getMarkers, getNotes, getPpq, getRegions, getSampleRate, getSamples, getTimeMap, getTracks,
+  MASTER_TRACK, getClips, getDevices, getLanes, getPoints, getKey, getMarkers, getNotes, getPpq, getRegions, getSampleRate, getSamples, getTimeMap, getTracks,
   type Device, type NoteHint, type Region, type SampleStatus, type ScoreClef,
 } from './schema.ts'
 import type { TimeMap } from './timemap.ts'
@@ -114,6 +114,11 @@ export type AgentAudioClip = {
 }
 /** A sample an audio clip plays; `status: 'incoming'` means the take is still on the recorder's device (not downloadable yet). */
 export type AgentSample = { name: string; duration: number; mime: string; status?: SampleStatus }
+/** An automation lane of a device param: `v` is in the param's own units. `t` is "bar.beat.tick", `tick` the same from bar 1. */
+export type AgentLane = {
+  id: string; deviceId: string; device: string; param: string; enabled: boolean; mode?: 'lfo'
+  points: { id: string; t: string; tick: number; v: number; curve: 'linear' | 'hold' }[]
+}
 export type AgentTrack = {
   id: string; name: string; kind: string; muted: boolean; soloed: boolean; color?: number
   /** `'click'` on the metronome's track (the project has a timing reference); absent on every other track. */
@@ -121,6 +126,8 @@ export type AgentTrack = {
   /** One clef per staff of the score view, top first (absent: the score view picks). */
   clefs?: ScoreClef[]
   devices: AgentDevice[]; clips: (AgentMidiClip | AgentAudioClip)[]
+  /** Automation lanes (absent when there are none). */
+  lanes?: AgentLane[]
 }
 export type AgentRegion =
   | { id: string; bar: number; kind: 'metered'; bpm: number; meter: string; groups?: number[]; rampTo?: number; beatTicks: number; barTicks: number }
@@ -134,7 +141,7 @@ export type AgentView = {
   /** The samples the audio clips in this view play, by hash (`sourceHash`). */
   samples: Record<string, AgentSample>
   tracks: AgentTrack[]
-  master: { devices: AgentDevice[] }
+  master: { devices: AgentDevice[]; lanes?: AgentLane[] }
 }
 
 /** The device type a name or number stands for: "reverb", "lofi drum", 3. */
@@ -206,11 +213,26 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
       })),
     }
   }
+  const allPoints = new Map<string, ReturnType<typeof getPoints>>()
+  for (const p of getPoints(doc)) (allPoints.get(p.laneId) ?? allPoints.set(p.laneId, []).get(p.laneId)!).push(p)
+  const lanesOf = (scope: string): AgentLane[] => getLanes(doc).filter((l) => l.scope === scope && l.kind !== 'looper').flatMap((l) => {
+    const dev = devices.find((d) => d.id === l.owner)
+    const def = dev ? DEVICES[dev.type] : undefined
+    const pd = def?.params.find((x) => String(x.id) === l.param)
+    if (!dev || !def || !pd) return []
+    const range = { ...pd, ...(l.min != null && l.max != null && l.scale ? { min: l.min, max: l.max, scale: l.scale } : {}) }
+    const pts = (allPoints.get(l.id) ?? []).sort((a, b) => a.pos - b.pos).map((p) => {
+      const tick = map.sampleToTick(p.pos)
+      return { id: p.id, t: formatPosition(map, tick), tick: r3(tick), v: r3(paramToValue(range, p.value)), curve: p.curve }
+    })
+    return [{ id: l.id, deviceId: dev.id, device: def.name, param: pd.name, enabled: l.enabled, ...(l.mode === 'lfo' ? { mode: 'lfo' as const } : {}), points: pts }]
+  })
   const tracks = getTracks(doc).filter((t) => !wanted || wanted.includes(t.id.toLowerCase()) || wanted.includes(t.name.toLowerCase())).map((t) => ({
     id: t.id, name: t.name, kind: t.kind, muted: t.muted, soloed: t.soloed, ...(t.color != null ? { color: t.color } : {}), ...(t.role === 'click' ? { role: 'click' as const } : {}),
     ...(t.clefs?.length ? { clefs: t.clefs } : {}),
     devices: devices.filter((d) => d.trackId === t.id).map(deviceView),
     clips: clips.filter((c) => c.trackId === t.id && inWindow(c)).map(clipView),
+    ...(lanesOf(t.id).length ? { lanes: lanesOf(t.id) } : {}),
   }))
   const used: Record<string, AgentSample> = {}
   for (const t of tracks) for (const c of t.clips) {
@@ -232,7 +254,7 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
     markers: getMarkers(doc).map((m) => ({ id: m.id, bar: m.bar, label: m.label, ...(m.text ? { text: m.text } : {}) })),
     samples: used,
     tracks,
-    master: { devices: devices.filter((d) => d.trackId === MASTER_TRACK).map(deviceView) },
+    master: { devices: devices.filter((d) => d.trackId === MASTER_TRACK).map(deviceView), ...(lanesOf(MASTER_TRACK).length ? { lanes: lanesOf(MASTER_TRACK) } : {}) },
   }
 }
 
@@ -241,6 +263,9 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
 const fmtParams = (p: AgentParams) => Object.entries(p).map(([k, v]) => `${k}=${v}`).join(' ')
 const devLine = (d: AgentDevice) =>
   `${d.type}${d.name ? ` "${d.name}"` : ''} [${d.id}]${d.bypass ? ' (bypassed)' : ''}${d.key != null ? ` key ${d.key}` : ''}${d.keyLo != null ? ` keys ${d.keyLo}-${d.keyHi ?? 127}` : ''}: ${fmtParams(d.params)}`
+
+const laneLine = (l: AgentLane) =>
+  `  automation ${l.device} [${l.deviceId}] ${l.param} [${l.id}]${l.enabled ? '' : ' (off)'}${l.mode ? ` ${l.mode}` : ''}: ${l.points.map((p) => `${p.t}=${p.v}${p.curve === 'hold' ? ' hold' : ''} [${p.id}]`).join('  ')}`
 
 /** `h` after a note that carries a notation hint still true of it, `h?` when it is stale (the note changed since; the text view leaves the hint itself to the JSON view). */
 const hintMark = (n: AgentNote) => (!n.hint ? '' : Math.abs(n.hint.at[0] - n.t) < 1e-3 && Math.abs(n.hint.at[1] - n.d) < 1e-3 && n.hint.at[2] === n.pitch ? ' h' : ' h?')
@@ -263,6 +288,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
   for (const t of v.tracks) {
     out.push(`track "${t.name}" [${t.id}] ${t.kind}${t.role ? ` ${t.role}` : ''}${t.muted ? ' muted' : ''}${t.soloed ? ' soloed' : ''}${t.clefs ? ` clefs ${t.clefs.join('+')}` : ''}`)
     for (const d of t.devices) out.push(`  device ${devLine(d)}`)
+    for (const l of t.lanes ?? []) out.push(laneLine(l))
     for (const c of t.clips) {
       if (c.kind === 'audio') {
         out.push(`  audio clip [${c.id}] at ${c.start} (${c.startSeconds} s), ${c.lengthSeconds} s${c.sample ? `, "${c.sample}"` : ''}${c.sourceHash ? ` sample ${c.sourceHash}` : ''}${c.sourceOffsetSeconds ? `, from ${c.sourceOffsetSeconds} s` : ''}${v.samples[c.sourceHash]?.status ? ` (${v.samples[c.sourceHash].status})` : ''}${c.loopSeconds ? `, loop ${c.loopSeconds} s${c.loopPhaseSeconds ? ` from ${c.loopPhaseSeconds} s in` : ''}` : ''}`)
@@ -275,6 +301,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
   if (v.master.devices.length) {
     out.push('master:')
     for (const d of v.master.devices) out.push(`  device ${devLine(d)}`)
+    for (const l of v.master.lanes ?? []) out.push(laneLine(l))
   }
   return out.join('\n')
 }
