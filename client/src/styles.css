@@ -132,7 +132,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .score-hint { padding: 48px 12px; text-align: center; font-size: 13px; }
 .score-playbar { position: absolute; z-index: 1; pointer-events: none; background: var(--accent-soft); border-radius: var(--r-sm); }
 .content { position: relative; min-width: 100%; }
-.ruler { display: flex; height: 64px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
+.ruler { --rx: 24px; /* the main ruler keeps its 40px layout, floated to the bottom of the taller bar (the corner needs the room) */ display: flex; height: 64px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
 /* the ruler's bottom line is a pseudo-element under the playhead copies (a real border would draw over them) */
 .ruler::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); z-index: 0; pointer-events: none; }
 /* tracks are tiles with a gutter around them: the ruler's corner is the track header plus the gutter, so its line meets the headers' */
@@ -145,19 +145,19 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .ruler-body { position: relative; height: 100%; overflow: hidden; }
 .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
 /* the main ruler (ui/ruler.tsx): markers on top, then the tempo / meter badges, then bar numbers; beats grow shorter, groups a little taller */
-.rl { position: absolute; top: 12px; bottom: 0; border-left: 1px solid var(--line); padding: 12px 0 0 4px; font-size: 10px; line-height: 14px; color: var(--dim); pointer-events: none; white-space: nowrap; }
+.rl { position: absolute; top: calc(var(--rx, 0px) + 12px); bottom: 0; border-left: 1px solid var(--line); padding: 12px 0 0 4px; font-size: 10px; line-height: 14px; color: var(--dim); pointer-events: none; white-space: nowrap; }
 /* (`header.bar` below is the top bar: a bar line must not match it) */
 .rl.bar { border-left-color: var(--line-strong, var(--dim)); }
-.rl.group { top: 30px; padding: 0; }
-.rl.beat { top: 34px; padding: 0; }
+.rl.group { top: calc(var(--rx, 0px) + 30px); padding: 0; }
+.rl.beat { top: calc(var(--rx, 0px) + 34px); padding: 0; }
 .rl.free { border-left-style: dashed; }
-.rl-free { position: absolute; top: 12px; bottom: 0; pointer-events: none; background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--dim) 16%, transparent) 5px 6px); }
-.rl-s { position: absolute; top: 0; bottom: 0; padding: 12px 0 0 3px; border-left: 1px solid var(--line); font-size: 9px; line-height: 14px; color: var(--dim); }
+.rl-free { position: absolute; top: calc(var(--rx, 0px) + 12px); bottom: 0; pointer-events: none; background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--dim) 16%, transparent) 5px 6px); }
+.rl-s { position: absolute; top: var(--rx, 0px); bottom: 0; padding: 12px 0 0 3px; border-left: 1px solid var(--line); font-size: 9px; line-height: 14px; color: var(--dim); }
 .rl-badge, .rl-marker { position: absolute; z-index: 1; height: 12px; max-width: 220px; padding: 0 4px; border: 0; border-left: 2px solid var(--accent); font-size: 9px; line-height: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); cursor: pointer; }
-.rl-badge { top: 12px; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
-.rl-marker { top: 0; max-width: 140px; border-left-color: var(--fg); background: var(--raise); }
+.rl-badge { top: calc(var(--rx, 0px) + 12px); background: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
+.rl-marker { top: var(--rx, 0px); max-width: 140px; border-left-color: var(--fg); background: var(--raise); }
 .rl-badge:hover, .rl-marker:hover { background: var(--line); }
-.rl-ramp { position: absolute; top: 13px; z-index: 0; fill: none; stroke: var(--accent); stroke-width: 1.5; pointer-events: none; overflow: visible; }
+.rl-ramp { position: absolute; top: calc(var(--rx, 0px) + 13px); z-index: 0; fill: none; stroke: var(--accent); stroke-width: 1.5; pointer-events: none; overflow: visible; }
 /* audio clips that were on a bar or beat line before a tempo edit and no longer are: dimmed for a moment (MIDI moved with the bars, audio did not) */
 .clip.ghost { opacity: .4; outline: 1px dashed var(--dim); outline-offset: -2px; }
 .clip { transition: opacity .3s; }
@@ -292,8 +292,8 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 }
 .fx-row::before, .auto-row::before { margin-top: -1px; }
 /* the global section is a lane like any other (fx, then its automation, in one block), with a neutral bar */
-/* the master drawers hang flush off the ruler: no tile margin or corner */
-.lane.master { --tc: var(--line-strong); margin: 0; border-radius: 0; }
+/* the master drawers hang flush off the ruler: no tile margin or top corners */
+.lane.master { --tc: var(--line-strong); margin: 0; border-radius: 0 0 var(--r-md) var(--r-md); }
 .lane-body.arming { cursor: crosshair; }
 /* looper regions: coloured outline boxes over the track's audio */
 .loop-box { position: absolute; top: 0; bottom: 0; cursor: grab; z-index: 1; background: color-mix(in srgb, var(--c) 14%, transparent); }

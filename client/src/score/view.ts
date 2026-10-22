@@ -73,7 +73,7 @@ export function mountScore(host: HTMLElement, deps: ScoreDeps): ScoreView {
     if (chips.dataset.sig === sig) return
     chips.dataset.sig = sig
     chips.replaceChildren(...tracks.map((t) => {
-      const b = h('button', { className: 'score-chip', title: `show / hide ${t.name} in the score` }, t.name, ...(t.drums ? [h('span', { className: 'score-chip-hint' }, 'drums')] : []))
+      const b = h('button', { className: 'score-chip', title: `show / hide ${t.name} in the score` }, t.name, ...(t.drums && !/drum/i.test(t.name) ? [h('span', { className: 'score-chip-hint' }, 'drums')] : []))
       b.classList.toggle('on', !hidden.has(t.id))
       b.onclick = () => {
         if (!hidden.delete(t.id)) hidden.add(t.id)
