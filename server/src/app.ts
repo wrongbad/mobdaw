@@ -34,5 +34,5 @@ export function createApp(ctx: Ctx, storage: Storage, collab: Collab, hub: Agent
     console.error(e)
     return c.json({ error: 'internal' }, 500)
   })
-  return new Hono().route('/api', api).route('/mcp', mcpRoutes(ctx, agent))
+  return new Hono().route('/api', api).route('/mcp', mcpRoutes(ctx, agent, storage))
 }

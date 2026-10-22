@@ -265,7 +265,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
     for (const d of t.devices) out.push(`  device ${devLine(d)}`)
     for (const c of t.clips) {
       if (c.kind === 'audio') {
-        out.push(`  audio clip [${c.id}] at ${c.start} (${c.startSeconds} s), ${c.lengthSeconds} s${c.sample ? `, "${c.sample}"` : ''}${c.sourceOffsetSeconds ? `, from ${c.sourceOffsetSeconds} s` : ''}${v.samples[c.sourceHash]?.status ? ` (${v.samples[c.sourceHash].status})` : ''}${c.loopSeconds ? `, loop ${c.loopSeconds} s${c.loopPhaseSeconds ? ` from ${c.loopPhaseSeconds} s in` : ''}` : ''}`)
+        out.push(`  audio clip [${c.id}] at ${c.start} (${c.startSeconds} s), ${c.lengthSeconds} s${c.sample ? `, "${c.sample}"` : ''}${c.sourceHash ? ` sample ${c.sourceHash}` : ''}${c.sourceOffsetSeconds ? `, from ${c.sourceOffsetSeconds} s` : ''}${v.samples[c.sourceHash]?.status ? ` (${v.samples[c.sourceHash].status})` : ''}${c.loopSeconds ? `, loop ${c.loopSeconds} s${c.loopPhaseSeconds ? ` from ${c.loopPhaseSeconds} s in` : ''}` : ''}`)
         continue
       }
       out.push(`  clip [${c.id}] ${c.start} to ${c.end} (${c.length}, ${c.lengthTicks} ticks)${c.loopTicks ? `, loop ${c.loopTicks} ticks` : ''}${c.forever ? ' forever' : ''}${c.view ? `, ${c.view} view` : ''}, ${c.notes.length} notes`)

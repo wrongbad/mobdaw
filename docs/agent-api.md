@@ -156,7 +156,8 @@ and project; the project's document is kept loaded for as long as an agent is pr
 ## MCP
 `POST /mcp` is a stateless streamable-HTTP MCP server (JSON responses; GET and DELETE answer 405), authenticated with the same
 Bearer token. Tools: `list_projects`, `get_state {projectId, format, tracks?, fromBar?, toBar?}`, `apply_ops {projectId, label?, ops}`, `send_chat`,
-`get_chat`, `wait_for_events {projectId, since?, wait?}`, `get_history`, `revert {projectId, seq}`, `restore`. The `apply_ops`
+`get_chat`, `wait_for_events {projectId, since?, wait?}`, `get_sample_url {projectId, hash}` (the signed audio URL; the hash is
+on the audio clip in `get_state`), `get_history`, `revert {projectId, seq}`, `restore`. The `apply_ops`
 description carries the ops reference. They are wrappers over the same functions as the routes.
 
 ```

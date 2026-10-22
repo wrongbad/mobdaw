@@ -330,6 +330,24 @@ describe('samples', () => {
     expect((await client(t.base, bt).get(`/api/agent/projects/${other}/samples/${oh}/url`)).status).toBe(404) // not a member
   })
 
+  it('gives the sample url through MCP, with the hash shown on the audio clip', async () => {
+    const hash = await upload(admin, projectId, Buffer.from('RIFF-mcp-sample'))
+    addSample(a.doc, meta(hash))
+    const tr = addTrack(a.doc, 'McpAudio', 'audio')
+    const clip = addAudioClip(a.doc, { trackId: tr, sourceHash: hash, start: 0, length: 96000 })
+    await until(() => !!getClips(b.doc).find((c) => c.id === clip))
+    const mcp = new McpClient({ name: 'test', version: '0' })
+    await mcp.connect(new StreamableHTTPClientTransport(new URL(`${t.base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }))
+    const text = (r: any) => r.content[0].text as string
+    expect(text(await mcp.callTool({ name: 'get_state', arguments: { projectId, format: 'text' } }))).toContain(`sample ${hash}`)
+    const got = await mcp.callTool({ name: 'get_sample_url', arguments: { projectId, hash } })
+    expect(await (await fetch(t.base + JSON.parse(text(got)).url)).text()).toBe('RIFF-mcp-sample')
+    const bad = await mcp.callTool({ name: 'get_sample_url', arguments: { projectId, hash: '0'.repeat(64) } })
+    expect(bad.isError).toBe(true)
+    expect(text(bad)).toContain('not_found')
+    await mcp.close()
+  })
+
   it('answers 409 sample_incoming while the take is on the recorder\'s device, shows it in the view and emits an event when it lands', async () => {
     const bytes = Buffer.from('RIFF-incoming-take')
     const hash = sha(bytes)

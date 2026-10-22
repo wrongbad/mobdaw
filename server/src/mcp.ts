@@ -12,6 +12,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { agentAuth, MAX_BODY_BYTES, type AgentEnv } from './routes/agent.ts'
 import { oauthIssuer } from './oauth.ts'
 import type { Ctx } from './auth.ts'
+import type { Storage } from './storage/index.ts'
 
 type Result = { content: { type: 'text'; text: string }[]; isError?: boolean }
 const json = (v: unknown): Result => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }] })
@@ -19,7 +20,7 @@ const json = (v: unknown): Result => ({ content: [{ type: 'text', text: typeof v
 const ME = 'You act as "<your user> (api)" in the project, with that user\'s access. Mention a person in chat as @username; mention yourself or another agent as @username(api).'
 
 /** One MCP server for one authenticated request. */
-export function mcpServerFor(svc: AgentService, user: AgentUser): McpServer {
+export function mcpServerFor(svc: AgentService, user: AgentUser, storage: Storage): McpServer {
   const server = new McpServer({ name: 'mobdaw', version: '1.0.0' }, { instructions: `mobdaw is a collaborative music workstation. ${ME} Typical loop: wait_for_events, read what people asked in chat, get_state, apply_ops with a short label, reply with send_chat.` })
   const run = (fn: () => Promise<unknown>) => async (): Promise<Result> => {
     try {
@@ -53,6 +54,11 @@ export function mcpServerFor(svc: AgentService, user: AgentUser): McpServer {
       ops: z.array(z.record(z.string(), z.any())).describe('the ops, in order'),
     },
   }, ({ projectId, label, ops }) => run(async () => svc.ops(user, projectId, { label, ops }))())
+
+  server.registerTool('get_sample_url', {
+    description: 'A short-lived (15 min) signed download URL for the audio of a sample, by the hash get_state shows on an audio clip ("sample <hash>"). Fetch it with plain HTTP (no auth) to get the audio file, e.g. to analyse its pitch or timing. An audio clip plays the sample from sourceOffsetSeconds on. Errors: not_found if the hash is not a sample of this project; sample_incoming while the take is still only on the recorder\'s device: wait for the sample event or retry.',
+    inputSchema: { projectId, hash: z.string().describe('sample hash from get_state') },
+  }, ({ projectId, hash }) => run(async () => ({ url: await storage.downloadUrl(await svc.sampleOwner(user, projectId, hash), hash) }))())
 
   server.registerTool('send_chat', {
     description: 'Post a message in the project chat as you ("<user> (api)"). @username mentions a person (they get a badge), @username(api) another agent.',
@@ -88,13 +94,13 @@ export function mcpServerFor(svc: AgentService, user: AgentUser): McpServer {
 }
 
 /** `/mcp`: POST only (stateless; no server-initiated stream). */
-export function mcpRoutes(ctx: Ctx, svc: AgentService) {
+export function mcpRoutes(ctx: Ctx, svc: AgentService, storage: Storage) {
   const r = new Hono<AgentEnv>()
   // (the challenge points OAuth-capable clients at the metadata in oauth.ts)
   r.use('*', agentAuth(ctx, `Bearer resource_metadata="${oauthIssuer(ctx.config.publicUrl)}/.well-known/oauth-protected-resource"`))
   r.use('*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json({ jsonrpc: '2.0', error: { code: -32000, message: `request body over ${MAX_BODY_BYTES >> 20} MB: split the batch` }, id: null }, 413) }))
   r.post('/', async (c) => {
-    const server = mcpServerFor(svc, c.var.agent)
+    const server = mcpServerFor(svc, c.var.agent, storage)
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     try {
       await server.connect(transport)
