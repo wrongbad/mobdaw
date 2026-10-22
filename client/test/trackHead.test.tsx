@@ -136,13 +136,16 @@ describe('track header', () => {
 })
 
 describe('master header', () => {
-  it('has a name, a mix row and fx / auto tabs', () => {
+  it('has the project name, a mix row and fx / auto tabs', () => {
     const t = setup()
     addDevice(t.doc, MASTER_TRACK, 1)
     const host = document.createElement('div')
     const refs: { gain?: HTMLInputElement } = {}
-    cleanup.push(mountMasterHead(host, t.ctx, (r) => (refs.gain = r.gain)))
-    expect(host.querySelector('.name')!.textContent).toBe('master')
+    const title = document.createElement('button')
+    title.className = 'project-name'
+    title.textContent = 'my song'
+    cleanup.push(mountMasterHead(host, t.ctx, [title], (r) => (refs.gain = r.gain)))
+    expect(host.querySelector('.head-top .project-name')!.textContent).toBe('my song')
     expect([...host.querySelectorAll('.tab')].map((b) => b.textContent)).toEqual(['fx', 'auto'])
     expect(refs.gain).toBe(host.querySelector('.gain'))
   })

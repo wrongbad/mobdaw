@@ -114,11 +114,11 @@ function MixRow(p: { ctx: HeadCtx; scope: string; refs: (gain: HTMLInputElement)
   return <div class="ctl gain-row">{gain}{pan.el}</div>
 }
 
-/** The master bus's header: its name, fader and pan, and the tabs of its drawers. */
-export function MasterHead(p: { ctx: HeadCtx; refs: (r: HeadRefs) => void }) {
+/** The master bus's header, in the ruler's corner: the project's name (`top`), the master fader and pan, and the tabs of its drawers. */
+export function MasterHead(p: { ctx: HeadCtx; top: Node[]; refs: (r: HeadRefs) => void }) {
   return (
     <>
-      <div class="head-top"><span class="name">master</span></div>
+      <div class="head-top">{p.top}</div>
       <MixRow ctx={p.ctx} scope={MASTER_TRACK} refs={(gain) => p.refs({ gain, meter: null })} />
       <Tabs ctx={p.ctx} id={MASTER_TRACK} names={TABS.master} />
     </>
@@ -218,7 +218,7 @@ export function TrackHead(p: { ctx: HeadCtx; id: string; host: HTMLElement; refs
   return out
 }
 
-export const mountMasterHead = (host: HTMLElement, ctx: HeadCtx, refs: (r: HeadRefs) => void) => render(() => <MasterHead ctx={ctx} refs={refs} />, host)
+export const mountMasterHead = (host: HTMLElement, ctx: HeadCtx, top: Node[], refs: (r: HeadRefs) => void) => render(() => <MasterHead ctx={ctx} top={top} refs={refs} />, host)
 
 /** Fill `host` (the lane's `.head`) with the header of track `id`; `refs` gets the elements the timeline drives (fader and input meter). */
 export function mountTrackHead(host: HTMLElement, ctx: HeadCtx, id: string): { refs: HeadRefs; dispose(): void } {

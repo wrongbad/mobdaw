@@ -132,7 +132,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .score-hint { padding: 48px 12px; text-align: center; font-size: 13px; }
 .score-playbar { position: absolute; z-index: 1; pointer-events: none; background: var(--accent-soft); border-radius: var(--r-sm); }
 .content { position: relative; min-width: 100%; }
-.ruler { display: flex; height: 40px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
+.ruler { display: flex; height: 64px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
 /* the ruler's bottom line is a pseudo-element under the playhead copies (a real border would draw over them) */
 .ruler::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); z-index: 0; pointer-events: none; }
 /* tracks are tiles with a gutter around them: the ruler's corner is the track header plus the gutter, so its line meets the headers' */
@@ -232,7 +232,6 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 .tab.on { color: var(--tc, var(--accent)); box-shadow: inset 0 -1px 0 var(--tc, var(--accent)); }
 .tab[hidden] { display: none; }
-.lane.master .lane-row { height: 72px; }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {
@@ -517,9 +516,13 @@ button.danger:hover { color: var(--danger); }
 .lane.locked .fx { opacity: 0.6; }
 /* a muted track is dimmed through its children (dimming the lane itself would fade its background tile too) */
 .lane.muted > * { opacity: .45; }
-.project-name { display: block; width: 100%; height: 100%; text-align: left; font-weight: bold; font-size: 12px; border: 0; background: none; padding: 0 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.corner { display: flex; align-items: center; min-width: 0; }
-.where { flex: none; display: inline-flex; align-items: center; padding-left: 8px; }
+.project-name { display: block; width: 100%; height: 100%; min-width: 0; text-align: left; font-weight: bold; font-size: 12px; border: 0; background: none; padding: 0 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the ruler's corner is the master bus's header: the project's name, then the master fader and pan, then the fx / auto tabs */
+.corner { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 4px 8px 0 calc(var(--gutter) + 6px); }
+.corner > * { flex: none; }
+.corner .tabs { margin: auto -8px 0 calc(-1 * (var(--gutter) + 6px)); }
+.corner .head-top { gap: 0; }
+.where { flex: none; display: inline-flex; align-items: center; padding-left: 0; }
 .where + .project-name { flex: 1; min-width: 0; width: auto; padding-left: 5px; }
 .project-name:hover { background: var(--raise); }
 
