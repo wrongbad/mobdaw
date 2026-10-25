@@ -68,7 +68,7 @@ export function buildDemo(doc: Y.Doc) {
     const tape = drumKit('tape')!
     addDrumKit(doc, kick, { ...tape, drums: tape.drums.filter((d) => d.key === GM.kick) })
     addDrumKit(doc, kit, { ...tape, drums: tape.drums.filter((d) => d.key !== GM.kick) })
-    addDevice(doc, drums, SIMPLE_FILTER, {}, { 0: 5, 1: 100, 2: 0.7071, 3: 10 }) // a bell at 100 Hz, +10 dB: the kick's weight
+    addDevice(doc, drums, SIMPLE_FILTER, {}, { 0: 5, 1: 100, 2: 0.7071, 3: 5 }) // a bell at 100 Hz, +5 dB: the kick's weight
     addDevice(doc, drums, COMPRESSOR, {}, { 0: -20, 1: 3, 2: 0.1, 3: 60, 4: 6 }) // shaves the noise peaks, lifts the kick
     addInstrument(doc, bass, instrumentPreset('round-bass')!)
     addInstrument(doc, keys, instrumentPreset('electric-piano')!)
