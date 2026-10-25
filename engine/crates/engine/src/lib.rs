@@ -15,11 +15,12 @@ pub mod clip;
 pub mod device;
 pub mod engine;
 pub mod handle_map;
+pub mod routing;
 pub mod source;
 pub mod transport;
 mod test_voice;
 
-pub use engine::{Engine, BLOCK, LANE_DEVICE, LANE_LOOPER, LOOPER_CUTOFF, LOOPER_GAIN, LOOPER_SAT, LOOPER_SPEED, LOOPER_WARBLE, MASTER_TRACK};
+pub use engine::{Engine, BLOCK, LANE_DEVICE, LANE_LOOPER, LOOPER_CUTOFF, LOOPER_GAIN, LOOPER_SAT, LOOPER_SPEED, LOOPER_WARBLE, MASTER_TRACK, KIND_BUS};
 pub use test_voice::{PARAM_CUTOFF, PARAM_DAMPING, PARAM_FREQ, PARAM_GAIN, PARAM_GATE, PARAM_ROLLOFF};
 
 /// Create an engine. Returns an owning pointer; free it with `engine_free`.
@@ -475,4 +476,28 @@ pub unsafe extern "C" fn engine_point_remove(e: *mut Engine, h: u32) {
 #[no_mangle]
 pub unsafe extern "C" fn engine_param_set(e: *mut Engine, device: u32, param: u32, value: f32) {
     (*e).param_set(device, param, value);
+}
+
+// ---- routing (docs/routing.md) ---------------------------------------------------------------
+
+/// Where track (or bus) `h` sums: bus `parent`, or `0xFFFFFFFF` (`MASTER_TRACK`) for the master. Only a parent that
+/// exists and is a bus (`engine_track_upsert` kind 3) counts; anything else, and any member of a parent loop, falls back
+/// to the master. Call it after the track's `engine_track_upsert`; it is ignored for an unknown track.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_track_set_parent(e: *mut Engine, h: u32, parent: u32) {
+    (*e).track_set_parent(h, parent);
+}
+
+/// The tap device `h` reads: `fx recv`'s signal, a compressor's key. `kind` 0 none, 1 the implicit tap of track or bus
+/// `source` (a track handle), 2 the master's implicit tap (`source` ignored), 3 the tap of the `fx send` device `source`
+/// (a device handle). A tap that does not exist reads silence. Ignored for an unknown device.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_device_input(e: *mut Engine, h: u32, kind: u32, source: u32) {
+    (*e).device_input(h, device::Input::from_parts(kind, source));
 }

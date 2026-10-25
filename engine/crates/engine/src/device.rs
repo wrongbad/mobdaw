@@ -13,6 +13,8 @@ pub const KIND_EQ: u32 = 8;
 pub const KIND_MIX: u32 = 9;
 pub const KIND_BORE: u32 = 10;
 pub const KIND_BODY: u32 = 11;
+pub const KIND_SEND: u32 = 12;
+pub const KIND_RECV: u32 = 13;
 
 const SMOOTH_MS: f64 = 10.0;
 
@@ -29,6 +31,33 @@ pub struct Device {
     /// An instrument's note range (MIDI pitches, inclusive): it only gets the notes inside it.
     pub key_lo: u32,
     pub key_hi: u32,
+    /// The tap this device reads (`fx recv`'s signal, the compressor's key); see [`Input`].
+    pub input: Input,
+}
+
+/// A reference to a tap (docs/routing.md): whose signal a device reads on its side input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Input {
+    #[default]
+    None,
+    /// A track's or bus's implicit tap (its chain output before the mix device), by track handle.
+    Track(u32),
+    /// The master's implicit tap.
+    Master,
+    /// An `fx send` device's tap, by device handle.
+    Send(u32),
+}
+
+impl Input {
+    /// Decode the `engine_device_input` arguments (`kind` 0 none, 1 track, 2 master, 3 send).
+    pub fn from_parts(kind: u32, source: u32) -> Self {
+        match kind {
+            1 => Input::Track(source),
+            2 => Input::Master,
+            3 => Input::Send(source),
+            _ => Input::None,
+        }
+    }
 }
 
 /// Boxed so the sorted device map shuffles small structs, not 10 KB synths.
@@ -45,6 +74,8 @@ pub enum DeviceKind {
     Eq(Box<EqDevice>),
     Mix(Box<MixDevice>),
     Bore(Box<BoreSynth>),
+    Send(Box<TapGain>),
+    Recv(Box<TapGain>),
 }
 
 impl Device {
@@ -61,9 +92,11 @@ impl Device {
             KIND_BODY => DeviceKind::Eq(Box::new(EqDevice::body(sample_rate))),
             KIND_MIX => DeviceKind::Mix(Box::new(MixDevice::new(sample_rate, track == crate::engine::MASTER_TRACK))),
             KIND_BORE => DeviceKind::Bore(Box::new(BoreSynth::new(sample_rate))),
+            KIND_SEND => DeviceKind::Send(Box::new(TapGain::new(sample_rate))),
+            KIND_RECV => DeviceKind::Recv(Box::new(TapGain::new(sample_rate))),
             _ => DeviceKind::Unknown,
         };
-        Self { track, order, bypass, kind_id, kind, key_lo: 0, key_hi: 127 }
+        Self { track, order, bypass, kind_id, kind, key_lo: 0, key_hi: 127, input: Input::None }
     }
 
     pub fn is_instrument(&self) -> bool {
@@ -145,6 +178,7 @@ impl Device {
             DeviceKind::Lofi(d) => d.set_param(param, value),
             DeviceKind::Eq(e) => e.set_param(param, value),
             DeviceKind::Mix(m) => m.set_param(param, value),
+            DeviceKind::Send(g) | DeviceKind::Recv(g) => g.set_param(param, value),
             DeviceKind::Unknown => {}
         }
     }
@@ -174,6 +208,7 @@ impl Device {
             DeviceKind::Lofi(d) => d.set_param_smooth(param, value, s),
             DeviceKind::Eq(e) => e.set_param_smooth(param, value, s),
             DeviceKind::Mix(m) => m.set_param_smooth(param, value, s),
+            DeviceKind::Send(g) | DeviceKind::Recv(g) => g.set_param_smooth(param, value, s),
             DeviceKind::Unknown => {}
         }
     }
@@ -193,6 +228,7 @@ impl Device {
             DeviceKind::Lofi(d) => d.is_ramping(),
             DeviceKind::Eq(e) => e.out_db.is_moving() || e.bands.iter().any(|b| b.freq_log2.is_moving() || b.gain_db.is_moving() || b.damping.is_moving()),
             DeviceKind::Mix(m) => m.gain.is_moving() || m.pan.is_moving(),
+            DeviceKind::Send(g) | DeviceKind::Recv(g) => g.gain_db.is_moving(),
             DeviceKind::Unknown => false,
         }
     }
@@ -227,6 +263,8 @@ impl Device {
             DeviceKind::Delay(d) => d.is_asleep(),
             DeviceKind::Eq(e) => e.bands.iter().all(|b| b.st == [[0.0; 2]; 2]),
             DeviceKind::Mix(_) => true,
+            // (a recv adds its tap, so the engine also checks that the tap it reads is silent)
+            DeviceKind::Send(_) | DeviceKind::Recv(_) => true,
             DeviceKind::Synth(_) | DeviceKind::Lofi(_) | DeviceKind::Bore(_) => false,
         }
     }
@@ -255,6 +293,7 @@ impl Device {
             DeviceKind::Lofi(_) => matches!(param, dsp::lofidrum::P_CUTOFF | dsp::lofidrum::P_RESONANCE | dsp::lofidrum::P_GAIN),
             DeviceKind::Eq(e) => param as usize <= 3 * e.bands.len(),
             DeviceKind::Mix(_) => param <= 1,
+            DeviceKind::Send(_) | DeviceKind::Recv(_) => param == 0,
             DeviceKind::Unknown => false,
         }
     }
@@ -272,7 +311,7 @@ impl Device {
             DeviceKind::Delay(d) => d.reset(),
             DeviceKind::Lofi(d) => d.reset(),
             DeviceKind::Eq(e) => e.reset(),
-            DeviceKind::Mix(_) => {}
+            DeviceKind::Mix(_) | DeviceKind::Send(_) | DeviceKind::Recv(_) => {}
             DeviceKind::Unknown => {}
         }
     }
@@ -296,6 +335,8 @@ impl Device {
             DeviceKind::Delay(d) => d.process(l, r),
             DeviceKind::Eq(e) => e.process(l, r, sample_rate),
             DeviceKind::Mix(m) => m.process(l, r),
+            // (a send or recv without a tap: the engine calls `TapGain` directly when it has one)
+            DeviceKind::Send(g) | DeviceKind::Recv(g) => g.skip(l.len()),
             DeviceKind::Synth(s) => {
                 for (l, r) in l.chunks_mut(dsp::finnwave::SUB_BLOCK).zip(r.chunks_mut(dsp::finnwave::SUB_BLOCK)) {
                     let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
@@ -671,6 +712,84 @@ impl MixDevice {
     }
 }
 
+/// Kinds 12 (`fx send`) and 13 (`fx recv`): one param, `gain` (dB, -60..+12, default 0; -60 and below is silence).
+///
+/// * Send: the chain's audio passes through untouched; `gain` times it is written into the device's tap.
+/// * Recv: `gain` times the tap it reads is added into the chain.
+///
+/// The gain is smoothed (linearly in dB across a control segment, then to a linear factor at the segment's
+/// two ends and interpolated per sample), and the first value snaps.
+pub struct TapGain {
+    smooth_samples: f64,
+    gain_db: Ramp,
+    unset: bool,
+}
+
+pub const TAP_GAIN_MIN_DB: f32 = -60.0;
+pub const TAP_GAIN_MAX_DB: f32 = 12.0;
+
+impl TapGain {
+    pub fn new(sample_rate: f32) -> Self {
+        Self { smooth_samples: sample_rate as f64 * SMOOTH_MS * 1e-3, gain_db: Ramp::new(0.0), unset: true }
+    }
+
+    pub fn set_param(&mut self, param: u32, value: f32) {
+        let first = param == 0 && std::mem::take(&mut self.unset);
+        self.set_param_smooth(param, value, if first { 0.0 } else { self.smooth_samples });
+    }
+
+    pub fn set_param_smooth(&mut self, param: u32, value: f32, s: f64) {
+        if param == 0 && value.is_finite() {
+            self.gain_db.set_target(value.clamp(TAP_GAIN_MIN_DB, TAP_GAIN_MAX_DB) as f64, s);
+        }
+    }
+
+    fn linear(db: f64) -> f32 {
+        if db <= TAP_GAIN_MIN_DB as f64 {
+            0.0
+        } else {
+            10f32.powf(db as f32 / 20.0)
+        }
+    }
+
+    /// The linear gain at the start of a stretch of `n` samples and at its end, advancing the ramp.
+    fn span(&mut self, n: usize) -> (f32, f32) {
+        let g0 = Self::linear(self.gain_db.value());
+        (g0, Self::linear(self.gain_db.advance(n)))
+    }
+
+    /// Account for `n` samples without producing any (no tap to write or read).
+    pub fn skip(&mut self, n: usize) {
+        self.span(n);
+    }
+
+    /// Send: `tap = gain * signal`. `tap_*` are as long as `l`/`r`.
+    pub fn write(&mut self, l: &[f32], r: &[f32], tap_l: &mut [f32], tap_r: &mut [f32]) {
+        let n = l.len();
+        let (g0, g1) = self.span(n);
+        let d = (g1 - g0) / n as f32;
+        for (j, (t, x)) in tap_l.iter_mut().zip(l).enumerate() {
+            *t = *x * (g0 + d * (j as u32 + 1) as f32);
+        }
+        for (j, (t, x)) in tap_r.iter_mut().zip(r).enumerate() {
+            *t = *x * (g0 + d * (j as u32 + 1) as f32);
+        }
+    }
+
+    /// Recv: `signal += gain * tap`.
+    pub fn add(&mut self, l: &mut [f32], r: &mut [f32], tap_l: &[f32], tap_r: &[f32]) {
+        let n = l.len();
+        let (g0, g1) = self.span(n);
+        let d = (g1 - g0) / n as f32;
+        for (j, (x, t)) in l.iter_mut().zip(tap_l).enumerate() {
+            *x += *t * (g0 + d * (j as u32 + 1) as f32);
+        }
+        for (j, (x, t)) in r.iter_mut().zip(tap_r).enumerate() {
+            *x += *t * (g0 + d * (j as u32 + 1) as f32);
+        }
+    }
+}
+
 /// Kind 3: stereo reverb. Params: 0 mix (0..1), 1 size (0..1), 2 damping (0..1), 3 predelay (ms).
 /// Mix, size and damping are smoothed (the values at each segment start are used); predelay
 /// jumps, so moving it while sound passes may click.
@@ -786,7 +905,7 @@ impl CompressorDevice {
         self.comp.reset();
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+    fn params(&mut self, n: usize) -> CompParams {
         let p = CompParams {
             threshold_db: self.threshold.value() as f32,
             ratio: self.ratio.value() as f32,
@@ -794,10 +913,21 @@ impl CompressorDevice {
             release_ms: self.release_ms,
             makeup_db: self.makeup.value() as f32,
         };
-        self.threshold.advance(l.len());
-        self.ratio.advance(l.len());
-        self.makeup.advance(l.len());
+        self.threshold.advance(n);
+        self.ratio.advance(n);
+        self.makeup.advance(n);
+        p
+    }
+
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+        let p = self.params(l.len());
         self.comp.process(l, r, &p, sample_rate);
+    }
+
+    /// With a key: the detector reads `key_l`/`key_r`, the gain applies to `l`/`r`.
+    pub fn process_keyed(&mut self, l: &mut [f32], r: &mut [f32], key_l: &[f32], key_r: &[f32], sample_rate: f32) {
+        let p = self.params(l.len());
+        self.comp.process_keyed(l, r, key_l, key_r, &p, sample_rate);
     }
 }
 

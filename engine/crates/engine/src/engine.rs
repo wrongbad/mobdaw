@@ -45,8 +45,9 @@
 //! timeline position, stopped or not.
 
 use crate::clip::{clip_notes, AudioClip, Clip, MidiClip, NoteEntry};
-use crate::device::Device;
+use crate::device::{Device, DeviceKind, Input, KIND_COMPRESSOR, KIND_MIX, KIND_RECV, KIND_SEND};
 use crate::handle_map::HandleMap;
+use crate::routing::{self, BufKey, Bufs, Edge, NONE};
 use crate::source::Source;
 use crate::transport::Transport;
 use crate::test_voice::TestVoice;
@@ -66,6 +67,8 @@ pub const MAX_DEVICES: usize = 1024;
 pub const MAX_LOOPERS: usize = 1024;
 /// Track kind code for a soundscape track (0 audio, 1 midi).
 pub const KIND_SOUNDSCAPE: u32 = 2;
+/// Track kind code for a bus (docs/routing.md): a track with no clips whose chain input is the sum of its children.
+pub const KIND_BUS: u32 = 3;
 /// The track handle that puts a device on the master bus (the "global fx" chain) instead of a track.
 pub const MASTER_TRACK: u32 = u32::MAX;
 pub const MAX_PADS: usize = 16384;
@@ -116,6 +119,25 @@ struct Track {
     /// Post-fader peak per channel since the last [`Engine::meters_read`], as the bits of `|x|` (for
     /// non-negative floats the bit patterns order like the values, and an integer max vectorizes).
     peak: [u32; 2],
+    /// A bus: other tracks may sum into it. (Its chain input is its children's sum; it has no clips of its own.)
+    bus: bool,
+    /// The parent as the host sent it (`engine_track_set_parent`): a bus's handle, or `MASTER_TRACK`. It may dangle or
+    /// name a non-bus; `rebuild_routing` resolves the effective parent.
+    parent_h: u32,
+    // ---- derived by `rebuild_routing` ----
+    /// The effective parent as a node number (a dense track index, or `tracks.len()` for the master).
+    parent: u32,
+    /// Children, as node numbers (ascending) and as the buffer indices of their outputs (same order).
+    child_nodes: Vec<u32>,
+    child_outs: Vec<u32>,
+    /// Nodes that read this node's taps (deduplicated): for solo's "downstream through taps".
+    downstream: Vec<u32>,
+    /// Buffer of this node's output (after the mix device and the mute/solo gain): what its parent sums.
+    out: u32,
+    /// Buffer of its implicit tap (its chain before the mix device), or `NONE` when nothing reads it.
+    tap: u32,
+    /// The buffers this node's chain writes that someone reads (its tap, its sends' taps): silenced when it sleeps.
+    owned: Vec<u32>,
 }
 
 /// A device in a chain, by dense index into the device map (derived by `rebuild_routing`, which
@@ -125,6 +147,111 @@ struct Slot {
     instrument: bool,
     /// Enabled lanes driving this device (indices into the lane map), in lane-handle order.
     lanes: Vec<u32>,
+    /// The mix device (the implicit tap is taken just before it).
+    mix: bool,
+    /// The buffer of the tap this device reads (`fx recv`, a keyed compressor), or `NONE`.
+    tap_in: u32,
+    /// The buffer an `fx send` writes, or `NONE` (not a send, or nothing reads it).
+    tap_out: u32,
+}
+
+/// The derived routing graph (see `routing.rs`) and the buffers it carries.
+struct Route {
+    bufs: Bufs,
+    /// Node run order, the master (node number `tracks.len()`) last.
+    order: Vec<u32>,
+    /// The audio edges (kept for tests and introspection).
+    edges: Vec<Edge>,
+    /// Output buffers of the master's children.
+    master_child_outs: Vec<u32>,
+    /// The master's implicit tap buffer (or `NONE`) and the taps its chain writes that someone reads.
+    master_tap: u32,
+    master_owned: Vec<u32>,
+    /// Scratch for solo's audible set, sized by `rebuild_routing`: no allocation while rendering.
+    audible: Vec<bool>,
+    work: Vec<u32>,
+}
+
+/// Solo: which nodes are audible while some track is soloed. The soloed nodes (and solo-safe ones), every
+/// descendant of a soloed bus, then closed over ancestors and over "downstream through a tap" (the readers of an
+/// audible node's taps), so a soloed vocal's reverb return stays audible and so does the bus carrying it. Mute is
+/// separate and always wins.
+fn compute_audible(tracks: &HandleMap<Track>, aud: &mut [bool], work: &mut Vec<u32>) {
+    let n = tracks.len();
+    aud.fill(false);
+    work.clear();
+    for (i, t) in tracks.values().enumerate() {
+        aud[i] = t.soloed || t.solo_safe;
+        if t.soloed && t.bus {
+            work.push(i as u32);
+        }
+    }
+    while let Some(x) = work.pop() {
+        for &c in &tracks.get_index(x as usize).child_nodes {
+            if !aud[c as usize] {
+                aud[c as usize] = true;
+                work.push(c);
+            }
+        }
+    }
+    work.extend((0..n as u32).filter(|&i| aud[i as usize]));
+    while let Some(x) = work.pop() {
+        let t = tracks.get_index(x as usize);
+        for &c in t.downstream.iter().chain(std::iter::once(&t.parent)) {
+            if (c as usize) < n && !aud[c as usize] {
+                aud[c as usize] = true;
+                work.push(c);
+            }
+        }
+    }
+}
+
+/// Copy `l`/`r` into the first `l.len()` frames of buffer `i` and mark it live.
+fn write_buf(bufs: &mut Bufs, i: u32, l: &[f32], r: &[f32]) {
+    let n = l.len();
+    let (bl, br) = bufs.get_mut(i);
+    bl[..n].copy_from_slice(l);
+    br[..n].copy_from_slice(r);
+    bufs.set_live(i, true);
+}
+
+/// A chain went quiet (asleep or nothing to do): its output and the taps it writes are exact zeros from now on.
+fn go_quiet(bufs: &mut Bufs, out: u32, owned: &[u32]) {
+    bufs.silence(out);
+    for &b in owned {
+        bufs.silence(b);
+    }
+}
+
+/// Break parent loops (which the host never sends, but the engine must not hang on): in each loop the member with the
+/// smallest handle goes to the master. `master` is the master's node number.
+fn break_parent_cycles(parent: &mut [u32], handles: &[u32], master: u32) {
+    let n = parent.len();
+    'again: loop {
+        for i in 0..n {
+            let mut x = i as u32;
+            for _ in 0..n {
+                if x == master {
+                    break;
+                }
+                x = parent[x as usize];
+            }
+            if x == master {
+                continue;
+            }
+            // `x` is on a loop now (a path of fewer than n steps would have reached the master)
+            let (start, mut min, mut y) = (x, x, parent[x as usize]);
+            while y != start {
+                if handles[y as usize] < handles[min as usize] {
+                    min = y;
+                }
+                y = parent[y as usize];
+            }
+            parent[min as usize] = master;
+            continue 'again;
+        }
+        return;
+    }
 }
 
 /// An audio clip's extent on the timeline, and where it is in the clip map.
@@ -377,16 +504,20 @@ fn lane_limit(slot: &Slot, lanes: &HandleMap<Lane>, p: i64, i: usize, n: usize, 
 
 /// Run an effect (or a master-bus device) over the whole buffer `l`/`r`, which starts at timeline
 /// sample `p`. Without lanes that is one call; with lanes, pieces of at most `SUB_BLOCK` ending
-/// at the lanes' breakpoints, each with the lanes' values ramped across it.
+/// at the lanes' breakpoints, each with the lanes' values ramped across it. `bufs` carries the taps:
+/// a send writes its buffer, a recv or a keyed compressor reads theirs.
 #[allow(clippy::too_many_arguments)]
-fn run_device(slot: &Slot, devices: &mut HandleMap<Device>, lanes: &HandleMap<Lane>, p: i64, playing: bool, l: &mut [f32], r: &mut [f32], sr32: f32) {
+fn run_device(slot: &Slot, devices: &mut HandleMap<Device>, lanes: &HandleMap<Lane>, bufs: &mut Bufs, p: i64, playing: bool, l: &mut [f32], r: &mut [f32], sr32: f32) {
     let d = devices.get_index_mut(slot.dev as usize);
     if d.bypass {
+        if slot.tap_out != NONE {
+            bufs.silence(slot.tap_out); // a bypassed send's tap reads silence
+        }
         return;
     }
     let n = l.len();
     if slot.lanes.is_empty() && !d.is_ramping() {
-        d.process(l, r, sr32);
+        process_segment(d, slot, bufs, l, r, 0, sr32);
         return;
     }
     // Lanes or a knob glide: control segments of at most 32 frames, since devices read their
@@ -397,8 +528,37 @@ fn run_device(slot: &Slot, devices: &mut HandleMap<Device>, lanes: &HandleMap<La
         for &li in &slot.lanes {
             apply_lane(d, lanes.get_index(li as usize), p + i as i64, end - i, playing);
         }
-        d.process(&mut l[i..end], &mut r[i..end], sr32);
+        process_segment(d, slot, bufs, &mut l[i..end], &mut r[i..end], i, sr32);
         i = end;
+    }
+}
+
+/// One device over `l`/`r`, which start `at` frames into the block (where the taps' frames line up).
+fn process_segment(d: &mut Device, slot: &Slot, bufs: &mut Bufs, l: &mut [f32], r: &mut [f32], at: usize, sr32: f32) {
+    let m = l.len();
+    match &mut d.kind {
+        DeviceKind::Send(g) => {
+            if slot.tap_out == NONE {
+                g.skip(m);
+            } else {
+                let (tl, tr) = bufs.get_mut(slot.tap_out);
+                g.write(l, r, &mut tl[at..at + m], &mut tr[at..at + m]);
+                bufs.set_live(slot.tap_out, true);
+            }
+        }
+        DeviceKind::Recv(g) => {
+            if slot.tap_in != NONE && bufs.is_live(slot.tap_in) {
+                let (tl, tr) = bufs.get(slot.tap_in);
+                g.add(l, r, &tl[at..at + m], &tr[at..at + m]);
+            } else {
+                g.skip(m); // no tap, or a silent one
+            }
+        }
+        DeviceKind::Compressor(c) if slot.tap_in != NONE => {
+            let (kl, kr) = bufs.get(slot.tap_in);
+            c.process_keyed(l, r, &kl[at..at + m], &kr[at..at + m], sr32);
+        }
+        _ => d.process(l, r, sr32),
     }
 }
 
@@ -445,6 +605,8 @@ pub struct Engine {
     /// What [`Engine::meters_read`] fills: master L, R, then `(handle bits, L, R)` per track. Sized by
     /// `rebuild_routing`, so reading never allocates.
     meters: Vec<f32>,
+    /// Buses, taps and the node schedule (derived by `rebuild_routing`).
+    route: Route,
 }
 
 fn note_order(e: &NoteEntry, clip: u32, tick: f64, handle: u32) -> Ordering {
@@ -482,6 +644,16 @@ impl Engine {
             cycle: None,
             master_peak: [0; 2],
             meters: vec![0.0; 2],
+            route: Route {
+                bufs: Bufs::new(BLOCK),
+                order: vec![0],
+                edges: Vec::new(),
+                master_child_outs: Vec::new(),
+                master_tap: NONE,
+                master_owned: Vec::new(),
+                audible: vec![true],
+                work: Vec::new(),
+            },
         }
     }
 
@@ -697,10 +869,16 @@ impl Engine {
 
     // ---- tracks ---------------------------------------------------------------------------
 
+    /// `kind`: 0 audio, 1 midi, 2 soundscape, 3 bus (docs/routing.md). A new track sums into the master until
+    /// [`Self::track_set_parent`] says otherwise.
     pub fn track_upsert(&mut self, h: u32, kind: u32, muted: bool, soloed: bool, solo_safe: bool) {
         if let Some(t) = self.tracks.get_mut(h) {
             (t.muted, t.soloed, t.solo_safe) = (muted, soloed, solo_safe);
             t.soundscape = kind == KIND_SOUNDSCAPE;
+            if t.bus != (kind == KIND_BUS) {
+                t.bus = !t.bus;
+                self.rebuild_routing(); // others' parents may now (not) resolve to it
+            }
             return;
         }
         self.tracks.insert(
@@ -720,14 +898,56 @@ impl Engine {
                 play_max_end: Vec::new(),
                 soundscape: kind == KIND_SOUNDSCAPE,
                 peak: [0; 2],
+                bus: kind == KIND_BUS,
+                parent_h: MASTER_TRACK,
+                parent: 0,
+                child_nodes: Vec::new(),
+                child_outs: Vec::new(),
+                downstream: Vec::new(),
+                out: NONE,
+                tap: NONE,
+                owned: Vec::new(),
             },
         );
         self.rebuild_routing();
     }
 
+    /// Where track (or bus) `h` sums: bus `parent`, or `MASTER_TRACK`. Only a parent that exists and is a bus counts; a
+    /// parent that is missing (deleted, not sent yet) or not a bus falls back to the master, and so does one member of any
+    /// parent loop, so the audio never depends on the order commands arrive in. Ignored for an unknown `h`.
+    pub fn track_set_parent(&mut self, h: u32, parent: u32) {
+        let Some(t) = self.tracks.get_mut(h) else { return };
+        if t.parent_h != parent {
+            t.parent_h = parent;
+            self.rebuild_routing();
+        }
+    }
+
     pub fn track_remove(&mut self, h: u32) {
         self.tracks.remove(h);
         self.rebuild_routing();
+    }
+
+    /// The tap device `h` reads (`fx recv`'s signal, a compressor's key): see [`Input`]. A tap that does not exist reads
+    /// silence (a recv adds nothing; a compressor keys off its own input). Ignored for an unknown device.
+    pub fn device_input(&mut self, h: u32, input: Input) {
+        let Some(d) = self.devices.get_mut(h) else { return };
+        if d.input != input {
+            d.input = input;
+            self.rebuild_routing();
+        }
+    }
+
+    /// The node run order as track handles, the master (`MASTER_TRACK`) last. For tests.
+    pub fn schedule(&self) -> Vec<u32> {
+        let n = self.tracks.len();
+        self.route.order.iter().map(|&k| if k as usize == n { MASTER_TRACK } else { self.tracks.handle_at(k as usize) }).collect()
+    }
+
+    /// The effective parent of track `h` as seen by the audio: a bus's handle or `MASTER_TRACK`. For tests.
+    pub fn parent_of(&self, h: u32) -> Option<u32> {
+        let t = self.tracks.get(h)?;
+        Some(if t.parent as usize >= self.tracks.len() { MASTER_TRACK } else { self.tracks.handle_at(t.parent as usize) })
     }
 
     // ---- clips and notes ------------------------------------------------------------------
@@ -1002,10 +1222,10 @@ impl Engine {
             }
             // New handle, or the kind changed: start from defaults.
             _ => {
-                let keys = self.devices.get(h).map(|d| (d.key_lo, d.key_hi));
+                let keep = self.devices.get(h).map(|d| (d.key_lo, d.key_hi, d.input));
                 let mut d = Device::new(track, kind, order, bypass, self.sample_rate);
-                if let Some((lo, hi)) = keys {
-                    (d.key_lo, d.key_hi) = (lo, hi); // a kind change resets the sound, not the note range
+                if let Some((lo, hi, input)) = keep {
+                    (d.key_lo, d.key_hi, d.input) = (lo, hi, input); // a kind change resets the sound, not the note range or the tap
                 }
                 self.devices.insert(h, d);
             }
@@ -1040,7 +1260,7 @@ impl Engine {
     /// a device, clip, lane or track, so every such command must end here. Allocation is
     /// allowed here; this is never called from `process`.
     fn rebuild_routing(&mut self) {
-        let Engine { tracks, devices, clips, loopers, pads, master_chain, lanes, tape_refs, meters, .. } = self;
+        let Engine { tracks, devices, clips, loopers, pads, master_chain, lanes, tape_refs, meters, route, .. } = self;
         meters.resize(2 + 3 * tracks.len(), 0.0);
         master_chain.clear();
         for t in tracks.values_mut() {
@@ -1051,7 +1271,7 @@ impl Engine {
             t.play_max_end.clear();
         }
         for (i, (_, d)) in devices.iter().enumerate() {
-            let slot = Slot { dev: i as u32, instrument: d.is_instrument(), lanes: Vec::new() };
+            let slot = Slot { dev: i as u32, instrument: d.is_instrument(), lanes: Vec::new(), mix: d.kind_id == KIND_MIX, tap_in: NONE, tap_out: NONE };
             if d.track == MASTER_TRACK {
                 master_chain.push(slot);
             } else if let Some(t) = tracks.get_mut(d.track) {
@@ -1134,6 +1354,106 @@ impl Engine {
                 _ => {}
             }
         }
+
+        // ---- the routing graph: effective parents, taps, buffers, schedule
+        let nt = tracks.len();
+        let master = nt as u32;
+        let handles: Vec<u32> = tracks.iter().map(|(h, _)| h).collect();
+        let mut parent: Vec<u32> = (0..nt)
+            .map(|i| match tracks.index_of(tracks.get_index(i).parent_h) {
+                Some(j) if j != i && tracks.get_index(j).bus => j as u32,
+                _ => master,
+            })
+            .collect();
+        break_parent_cycles(&mut parent, &handles, master);
+        let node_of = |track: u32, tracks: &HandleMap<Track>| if track == MASTER_TRACK { Some(master) } else { tracks.index_of(track).map(|i| i as u32) };
+
+        // Edges: bus membership, then taps (a device's input resolved to the node that writes it).
+        let edges = &mut route.edges;
+        edges.clear();
+        for t in tracks.values_mut() {
+            t.child_nodes.clear();
+            t.child_outs.clear();
+            t.downstream.clear();
+            t.owned.clear();
+        }
+        route.master_child_outs.clear();
+        for (i, &p) in parent.iter().enumerate() {
+            tracks.get_index_mut(i).parent = p;
+            edges.push(Edge::member(i as u32, p));
+        }
+        let mut want: Vec<BufKey> = handles.iter().map(|&h| BufKey::Out(h)).collect();
+        // Per device (dense index): the buffer key it reads.
+        let mut reads: Vec<Option<BufKey>> = vec![None; devices.len()];
+        for (di, (h, d)) in devices.iter().enumerate() {
+            if d.input == Input::None || !matches!(d.kind_id, KIND_RECV | KIND_COMPRESSOR) {
+                continue;
+            }
+            let Some(reader) = node_of(d.track, tracks) else { continue };
+            let src = match d.input {
+                Input::Track(th) => tracks.index_of(th).map(|i| (i as u32, BufKey::Tap(th))),
+                Input::Master => Some((master, BufKey::MasterTap)),
+                Input::Send(sh) => devices.get(sh).filter(|s| s.kind_id == KIND_SEND).and_then(|s| node_of(s.track, tracks)).map(|w| (w, BufKey::Send(sh))),
+                Input::None => None,
+            };
+            if let Some((writer, key)) = src {
+                edges.push(Edge::tap(writer, key, reader, h));
+                want.push(key);
+                reads[di] = Some(key);
+            }
+        }
+        route.bufs.rebuild(want);
+        let bufs = &route.bufs;
+        for (i, &p) in parent.iter().enumerate() {
+            let out = bufs.index(BufKey::Out(handles[i]));
+            let t = tracks.get_index_mut(i);
+            t.out = out;
+            t.tap = bufs.index(BufKey::Tap(handles[i]));
+            if p == master {
+                route.master_child_outs.push(out);
+            } else {
+                let pt = tracks.get_index_mut(p as usize);
+                pt.child_nodes.push(i as u32);
+                pt.child_outs.push(out);
+            }
+        }
+        for e in edges.iter() {
+            if let (routing::PortRole::Tap(_), true) = (e.from.role, (e.from.node as usize) < nt && e.from.node != e.to.node) {
+                let w = tracks.get_index_mut(e.from.node as usize);
+                if !w.downstream.contains(&e.to.node) {
+                    w.downstream.push(e.to.node);
+                }
+            }
+        }
+        // Slots: which buffers each device reads and writes; and what each chain owns.
+        route.master_tap = bufs.index(BufKey::MasterTap);
+        route.master_owned.clear();
+        if route.master_tap != NONE {
+            route.master_owned.push(route.master_tap);
+        }
+        let set_slots = |chain: &mut Vec<Slot>, owned: &mut Vec<u32>| {
+            for s in chain.iter_mut() {
+                s.tap_in = reads[s.dev as usize].map_or(NONE, |k| bufs.index(k));
+                if devices.get_index(s.dev as usize).kind_id == KIND_SEND {
+                    s.tap_out = bufs.index(BufKey::Send(devices.handle_at(s.dev as usize)));
+                    if s.tap_out != NONE {
+                        owned.push(s.tap_out);
+                    }
+                }
+            }
+        };
+        set_slots(master_chain, &mut route.master_owned);
+        for t in tracks.values_mut() {
+            if t.tap != NONE {
+                t.owned.push(t.tap);
+            }
+            set_slots(&mut t.chain, &mut t.owned);
+        }
+        route.order = routing::schedule(nt + 1, master, edges);
+        route.audible.clear();
+        route.audible.resize(nt + 1, false);
+        route.work.clear();
+        route.work.reserve(nt + 1);
     }
 
     // ---- M1 test voice --------------------------------------------------------------------
@@ -1186,15 +1506,19 @@ impl Engine {
         let sr = self.sr;
         let sr32 = self.sample_rate;
         let smooth = self.smooth_samples;
-        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, lanes, input, monitor, monitor_gain, monitor_track, tape_refs, sleep, sleep_skips, master_peak, .. } = self;
+        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, lanes, input, monitor, monitor_gain, monitor_track, tape_refs, sleep, sleep_skips, master_peak, route, .. } = self;
         let (out_l, out_r) = out.split_at_mut(BLOCK);
         let (out_l, out_r) = (&mut out_l[off..off + n], &mut out_r[off..off + n]);
 
-        // 1. Mute/solo targets. Solo: if any track is soloed, the rest are silent.
-        //    Mute always wins. Silence is a gain target of 0, so it ramps over 10 ms.
+        // 1. Mute/solo targets. Solo: if any track is soloed, the rest are silent, except what the soloed ones
+        //    reach (see `compute_audible`). Mute always wins, and a muted bus silences everything that sums into it.
+        //    Silence is a gain target of 0, so it ramps over 10 ms.
         let any_solo = tracks.values().any(|t| t.soloed);
-        for t in tracks.values_mut() {
-            let audible = !t.muted && (!any_solo || t.soloed || t.solo_safe);
+        if any_solo {
+            compute_audible(tracks, &mut route.audible, &mut route.work);
+        }
+        for (i, t) in tracks.values_mut().enumerate() {
+            let audible = !t.muted && (!any_solo || route.audible[i]);
             let g = if audible { 1.0 } else { 0.0 };
             if t.fresh {
                 t.fresh = false;
@@ -1372,15 +1696,33 @@ impl Engine {
             monitor_gain.advance(n);
         }
 
-        // 3. Per track: instruments in control segments, then the effects over the whole block,
-        //    then gain/pan into the master sum.
-        for t in tracks.values_mut() {
-            if t.chain.is_empty() && !t.has_audio {
-                t.gain.advance(n);
-                continue;
-            }
+        // 3. Per node (track or bus), in schedule order (the master is last, handled in 3b): pull the children's
+        //    outputs (a child that has not run yet this block, because a tap cycle was cut there, gives last block's),
+        //    instruments in control segments, then the effects over the whole block with the implicit tap taken before
+        //    the mix device, then the mute/solo gain into the node's output buffer, which its parent sums.
+        let nodes = route.order.len() - 1;
+        for oi in 0..nodes {
+            let t = tracks.get_index_mut(route.order[oi] as usize);
+            let bufs = &mut route.bufs;
             let (sl, sr_buf) = t.scratch.split_at_mut(BLOCK);
             let (sl, sr_buf) = (&mut sl[..n], &mut sr_buf[..n]);
+            for &b in &t.child_outs {
+                if bufs.is_live(b) {
+                    let (cl, cr) = bufs.get(b);
+                    for (x, y) in sl.iter_mut().zip(&cl[..n]) {
+                        *x += *y;
+                    }
+                    for (x, y) in sr_buf.iter_mut().zip(&cr[..n]) {
+                        *x += *y;
+                    }
+                    t.has_audio = true;
+                }
+            }
+            if t.chain.is_empty() && !t.has_audio {
+                t.gain.advance(n);
+                go_quiet(bufs, t.out, &t.owned);
+                continue;
+            }
 
             // Instruments run in segments of at most 32 frames. MIDI notes go to every sounding
             // instrument whose note range holds the pitch: release due voices, fire the notes
@@ -1443,8 +1785,11 @@ impl Engine {
             // Asleep: every effect is provably silent on zero input and the buffer is all zero, so
             // the chain would output zeros and (up to -120 dB tails) change nothing. Skip it and
             // the gain loop; the gain ramps still advance.
+            // A recv (or keyed compressor) reading a live tap is not asleep: it has input of its own.
             if *sleep
-                && t.chain.iter().filter(|s| !s.instrument).all(|s| s.lanes.is_empty() && devices.get_index(s.dev as usize).is_asleep())
+                && t.chain.iter().filter(|s| !s.instrument).all(|s| {
+                    s.lanes.is_empty() && devices.get_index(s.dev as usize).is_asleep() && (s.tap_in == NONE || !bufs.is_live(s.tap_in))
+                })
                 && sl.iter().chain(sr_buf.iter()).all(|&x| x == 0.0)
             {
                 for s in t.chain.iter().filter(|s| !s.instrument) {
@@ -1452,38 +1797,75 @@ impl Engine {
                 }
                 t.gain.advance(n);
                 *sleep_skips += 1;
+                go_quiet(bufs, t.out, &t.owned);
                 continue;
             }
 
-            // Effects in `order`, each over the whole block (split only at its own lanes' breakpoints).
+            // Effects in `order`, each over the whole block (split only at its own lanes' breakpoints). The
+            // implicit tap is the signal just before the mix device (or the end of the chain without one).
+            let mut tapped = t.tap == NONE;
             for s in t.chain.iter().filter(|s| !s.instrument) {
-                run_device(s, devices, lanes, p, playing, sl, sr_buf, sr32);
+                if s.mix && !tapped {
+                    write_buf(bufs, t.tap, sl, sr_buf);
+                    tapped = true;
+                }
+                run_device(s, devices, lanes, bufs, p, playing, sl, sr_buf, sr32);
+            }
+            if !tapped {
+                write_buf(bufs, t.tap, sl, sr_buf);
             }
 
             // Mute/solo: a linear ramp across the block between the smoothed values at its edges,
             // in closed form (`g0 + dg * (j + 1)`), so the loops are independent per sample.
             let g0 = t.gain.value() as f32;
             let g1 = t.gain.advance(n) as f32;
+            if g0 == 0.0 && g1 == 0.0 {
+                bufs.silence(t.out); // (so its peaks stay as they are, as zeros would leave them)
+                continue;
+            }
             let (l0, r0, dl, dr) = (g0, g0, (g1 - g0) / n as f32, (g1 - g0) / n as f32);
             // The meter's peak rides along: an integer max of the `|v|` bits, which vectorizes (a float max reduction
             // would not without fast-math).
             let (mut pl, mut pr) = (t.peak[0], t.peak[1]);
-            for (j, (o, x)) in out_l.iter_mut().zip(sl.iter()).enumerate() {
+            let (ol, or) = bufs.get_mut(t.out);
+            for (j, (o, x)) in ol[..n].iter_mut().zip(sl.iter()).enumerate() {
                 let v = *x * (l0 + dl * (j as u32 + 1) as f32);
-                *o += v;
+                *o = v;
                 pl = pl.max(v.to_bits() & 0x7fff_ffff);
             }
-            for (j, (o, x)) in out_r.iter_mut().zip(sr_buf.iter()).enumerate() {
+            for (j, (o, x)) in or[..n].iter_mut().zip(sr_buf.iter()).enumerate() {
                 let v = *x * (r0 + dr * (j as u32 + 1) as f32);
-                *o += v;
+                *o = v;
                 pr = pr.max(v.to_bits() & 0x7fff_ffff);
             }
             t.peak = [pl, pr];
+            bufs.set_live(t.out, true);
         }
 
-        // 3b. The global fx chain, over everything the tracks summed.
+        // 3b. The master: the sum of its children, then the global fx chain over it (the master's implicit tap is
+        //     taken before its mix device, like any node's).
+        let bufs = &mut route.bufs;
+        for &b in &route.master_child_outs {
+            if bufs.is_live(b) {
+                let (cl, cr) = bufs.get(b);
+                for (o, x) in out_l.iter_mut().zip(cl) {
+                    *o += *x;
+                }
+                for (o, x) in out_r.iter_mut().zip(cr) {
+                    *o += *x;
+                }
+            }
+        }
+        let mut tapped = route.master_tap == NONE;
         for s in master_chain.iter() {
-            run_device(s, devices, lanes, p, playing, out_l, out_r, sr32);
+            if s.mix && !tapped {
+                write_buf(bufs, route.master_tap, out_l, out_r);
+                tapped = true;
+            }
+            run_device(s, devices, lanes, bufs, p, playing, out_l, out_r, sr32);
+        }
+        if !tapped {
+            write_buf(bufs, route.master_tap, out_l, out_r);
         }
 
         // 4. Test voice, the master meter and the transport.
