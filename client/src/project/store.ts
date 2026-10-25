@@ -2,7 +2,7 @@
 // entities that changed, so every other entity keeps its object (and its subscribers stay quiet).
 // Components read the derived accessors; the doc stays the single source of truth (all writes go through the schema mutators).
 import {
-  MIX, type AwarenessState, type Moving, type Clip, type Device, type Lane, type Looper, type Note, type Pad, type Point, type SampleMeta, type Track,
+  MIX, tapsOf, type Tap, type AwarenessState, type Moving, type Clip, type Device, type Lane, type Looper, type Note, type Pad, type Point, type SampleMeta, type Track,
   clipsMap, devicesMap, lanesMap, loopersMap, notesMap, padsMap, pointsMap, samplesMap, tracksMap,
 } from '@mobdaw/shared'
 import { batch, createMemo, createRoot, createSignal, getOwner, runWithOwner, type Accessor } from 'solid-js'
@@ -109,6 +109,8 @@ export function createProjectStore(s: {
     const notes = list(notes_.store)
     const devices = list(devices_.store, (a, b) => a.order - b.order)
     const loopers = list(loopers_.store, (a, b) => a.slot - b.slot)
+    /** Every tap a device could read (docs/routing.md); follows renames, additions and deletions. */
+    const taps = createMemo(() => tapsOf(tracks(), devices()), EMPTY as Tap[], { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) })
     const pads = list(pads_.store, (a, b) => a.start - b.start)
     const lanes = list(lanes_.store, (a, b) => a.order - b.order)
     const points = list(points_.store)
@@ -186,7 +188,7 @@ export function createProjectStore(s: {
       trackById: tracks_.store, clipById: clips_.store, noteById: notes_.store, deviceById: devices_.store, looperById: loopers_.store,
       padById: pads_.store, laneById: lanes_.store, pointById: points_.store, samples: samples_.store as Record<string, SampleMeta>,
       /** Sorted as the schema getters sort them. */
-      tracks, clips, notes, devices, loopers, pads, lanes, points,
+      tracks, taps, clips, notes, devices, loopers, pads, lanes, points,
       devicesByTrack, clipsByTrack, notesByClip, pointsByLane,
       /** A track's mix device (its fader and pan), or the master bus's. */
       mixDevice: (scope: string) => devicesByTrack(scope)().find((d) => d.type === MIX),

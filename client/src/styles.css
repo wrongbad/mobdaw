@@ -591,3 +591,15 @@ button.danger:hover { color: var(--danger); }
 .dev.drum .dev-head strong { color: var(--rc); }
 .dev.drum .prm.keys input { color: var(--rc); }
 .dev .kn.same > .dim { display: none; }
+
+/* --- routing: tap pickers and labels on fx send / fx recv / compressor cards (docs/routing.md) */
+.dev .tap-row { display: flex; align-items: center; gap: 6px; padding: 0 8px 6px; font-size: 10px; min-width: 0; }
+.dev .tap-pick { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 110px; min-height: 22px; padding: 0 6px; border: 1px solid var(--line); border-radius: 3px; background: var(--raise); color: var(--fg); font-size: 11px; line-height: 18px; }
+.dev .tap-pick .tp-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev .tap-pick .tp-caret { color: var(--dim); font-size: 9px; }
+.dev .tap-pick.none .tp-label { color: var(--dim); }
+.dev .tap-pick.missing { border-color: var(--rec); color: var(--rec); }
+.dev .tap-label { flex: 1; min-width: 0; width: 70px; height: 22px; padding: 0 5px; border: 1px solid var(--line); border-radius: 3px; background: rgba(0, 0, 0, .3); color: var(--fg); font-size: 11px; }
+.dev .tap-readers { white-space: nowrap; font-size: 9px; }
+.popover button:disabled { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; cursor: default; }
+@media (pointer: coarse) { .dev .tap-pick, .dev .tap-label { min-height: 32px; } }

@@ -526,6 +526,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     commit: (d: string, p: number, v: number) => commitParam(doc, undo, d, p, v),
     commitMany: (d: string, values: Record<number, number>) => commitParams(doc, undo, d, values),
     bypass: (d: string, b: boolean) => updateDevice(doc, d, { bypass: b }),
+    setInput: (d: string, input: string | undefined) => updateDevice(doc, d, { input }),
+    setName: (d: string, name: string) => updateDevice(doc, d, { name }),
     remove: (d: string) => deleteDevice(doc, d),
     rename: (d: string) => {
       const dev = getDevices(doc).find((x) => x.id === d)

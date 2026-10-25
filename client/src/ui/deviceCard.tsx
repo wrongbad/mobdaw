@@ -1,6 +1,6 @@
 // FX chain cards: title (click for the delete menu), on/off switch and param controls for one device. A component: the doc's values
 // come from the store, the peers' drags and the automation's values from signals, so a change patches only the control it is for.
-import { DEVICES, SIMPLE_FILTER, filterHasGain, paramToPos, paramToValue, type Device, type ParamDef, type ParamTarget } from '@mobdaw/shared'
+import { COMPRESSOR, DEVICES, FX_RECV, FX_SEND, SIMPLE_FILTER, filterHasGain, paramToPos, paramToValue, type Device, type ParamDef, type ParamTarget } from '@mobdaw/shared'
 import { createEffect, createMemo, createRenderEffect, createSignal, onCleanup, onMount, batch, type Accessor } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import type { ProjectStore } from '../project/store'
@@ -14,6 +14,7 @@ import { knob } from './knob'
 import { segmented } from './segmented'
 import { SEG_MAX, rows as rows_, span } from './deviceLayout'
 import { formatParam, isBipolar } from './knobMath'
+import { tapPicker } from './tapPicker'
 
 export type CardDeps = {
   /** Apply a value to the local engine immediately (not in the doc). */
@@ -25,6 +26,10 @@ export type CardDeps = {
   /** Write several params at once (one undo step). */
   commitMany(deviceId: string, values: Record<number, number>): void
   bypass(deviceId: string, bypass: boolean): void
+  /** Point a device at a tap (fx recv's input, a compressor's key); undefined clears it. */
+  setInput(deviceId: string, tapId: string | undefined): void
+  /** Set a device's name (an fx send's label; empty = the default). */
+  setName(deviceId: string, name: string): void
   remove(deviceId: string): void
   /** Instruments: rename the card. */
   rename(deviceId: string): void
@@ -212,6 +217,31 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
       {bypass}
     </div>
   ) as HTMLElement
+  /** Routing controls under the knobs: an fx send's label and readers, an fx recv's input, a compressor's key. */
+  const tapRow = (): HTMLElement | null => {
+    const t = dev().type
+    const picker = (title: string, none: string) =>
+      tapPicker({ store, dev, none, title, set: (tap) => deps.setInput(id, tap) })
+    if (t === FX_RECV) return (<div class="tap-row"><span class="dim">input</span>{picker('input', 'none')}</div>) as HTMLElement
+    if (t === COMPRESSOR) return (<div class="tap-row"><span class="dim">key</span>{picker('key', 'self')}</div>) as HTMLElement
+    if (t !== FX_SEND) return null
+    const input = (<input class="tap-label" type="text" aria-label="label" maxlength="40" spellcheck={false} />) as HTMLInputElement
+    const readers = (<span class="dim tap-readers" />) as HTMLElement
+    const commit = () => { if (input.value.trim() !== (dev().name ?? '')) deps.setName(id, input.value.trim()) }
+    input.addEventListener('change', commit)
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); else if (e.key === 'Escape') { input.value = dev().name ?? ''; input.blur() } })
+    createRenderEffect(() => {
+      input.placeholder = store.taps().find((x) => x.id === id)?.label ?? 'send'
+      const n = dev().name ?? ''
+      if (!inUse(input)) input.value = n
+    })
+    createRenderEffect(() => {
+      const n = store.devices().filter((d) => d.input === id).length
+      readers.textContent = n ? `read by ${n}` : 'unread'
+      readers.title = n ? `${n} device${n === 1 ? '' : 's'} read this send` : 'nothing reads this send yet: pick it in an fx recv or a compressor key'
+    })
+    return (<div class="tap-row"><span class="dim">label</span>{input}{readers}</div>) as HTMLElement
+  }
   const el = (
     <div class="dev" classList={{ filter: isFilter }} data-device={id} style={isFilter ? `width:${CARD_W}px` : undefined}>
       {head}
@@ -228,6 +258,7 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
           </div>
         ))}
       </div>
+      {tapRow()}
     </div>
   ) as HTMLElement
   dragToReorder(head, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(id, before), end: deps.reorderEnd })

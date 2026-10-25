@@ -276,7 +276,7 @@ export function orderBetween(before?: number, after?: number): number {
 
 const toMap = (o: object) => new Y.Map<unknown>(Object.entries(o))
 const patchMap = (doc: Y.Doc, m: YM | undefined, patch: object) => {
-  if (m) doc.transact(() => Object.entries(patch).forEach(([k, v]) => m.set(k, v)))
+  if (m) doc.transact(() => Object.entries(patch).forEach(([k, v]) => (v === undefined ? m.delete(k) : m.set(k, v))))
 }
 
 // --- timeline: regions, markers, the cached time map
@@ -567,11 +567,12 @@ export type Tap = { id: string; label: string; kind: 'track' | 'bus' | 'send' | 
  * Every tap a device could read, in picker order: tracks and buses (their implicit taps, id = the track id, in track order), then every
  * `fx send` (id = the device id, label = its name or "send N", N counting sends in track then chain order), then the master.
  */
-export function getTaps(doc: Y.Doc): Tap[] {
-  const tracks = getTracks(doc)
+export const getTaps = (doc: Y.Doc): Tap[] => tapsOf(getTracks(doc), getDevices(doc))
+/** `getTaps` over plain lists (tracks and devices both sorted by `order`), so the client can derive it from its reactive store. */
+export function tapsOf(tracks: readonly Track[], devices: readonly Device[]): Tap[] {
   const out: Tap[] = tracks.map((t) => ({ id: t.id, label: t.name, kind: t.kind === 'bus' ? 'bus' : 'track', owner: t.id }))
   const rank = new Map(tracks.map((t, i) => [t.id, i]))
-  const sends = getDevices(doc).filter((d) => d.type === FX_SEND && (d.trackId === MASTER_TRACK || rank.has(d.trackId)))
+  const sends = devices.filter((d) => d.type === FX_SEND && (d.trackId === MASTER_TRACK || rank.has(d.trackId)))
   sends.sort((a, b) => (a.trackId === b.trackId ? 0 : a.trackId === MASTER_TRACK ? 1 : b.trackId === MASTER_TRACK ? -1 : rank.get(a.trackId)! - rank.get(b.trackId)!))
   sends.forEach((d, i) => out.push({ id: d.id, label: d.name || `send ${i + 1}`, kind: 'send', owner: d.trackId }))
   out.push({ id: MASTER_TRACK, label: 'master', kind: 'master', owner: MASTER_TRACK })
