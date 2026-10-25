@@ -2,16 +2,18 @@
 // device (a new synth, say) falls back to a generic split, so adding a device needs no layout code.
 import { BORE, COMPRESSOR, DELAY, EQ, FINNWAVE, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO, type DeviceDef, type ParamDef } from '@mobdaw/shared'
 
-/** One justified row of cells (knobs and selectors); `title` captions it (only the first row of a section has one). */
-export type Row = { title: string; params: ParamDef[] }
+/** One justified row of cells (knobs and selectors); `title` captions it (only the first row of a section has one). `tap` puts the
+ * device's tap picker first in the row, as a cell captioned with it (the compressor's side chain). */
+export type Row = { title: string; params: ParamDef[]; tap?: string }
 
-/** Explicit rows (param ids) per known device; selectors are given their own rows. Anything unlisted falls to the generic rule. */
-const ROWS: Record<number, [string, number[]][]> = {
+/** Explicit rows (param ids, and the tap picker's caption if it sits in that row) per known device; selectors are given their own rows.
+ * Anything unlisted falls to the generic rule. */
+const ROWS: Record<number, [string, number[], string?][]> = {
   [SIMPLE_FILTER]: [['', [0]], ['', [1, 2, 3]]],
   [FINNWAVE]: [['tone / output', [0, 1, 6]], ['envelope', [2, 3, 4, 5]]],
   [BORE]: [['voice', [0, 1, 2]], ['', [4]], ['bore', [3, 5, 6]], ['breath', [7, 8, 13]], ['vibrato', [9, 10]], ['envelope', [11, 12]]],
   [LOFI_DRUM]: [['filter', [0, 1]], ['voice', [2, 3]]],
-  [COMPRESSOR]: [['detector', [0, 1]], ['timing', [2, 3]], ['output', [4]]],
+  [COMPRESSOR]: [['input', [], 'side chain'], ['', [0, 1]], ['timing', [2, 3]], ['output', [4]]],
   [DELAY]: [['delay', [0, 1, 2]], ['filter', [5]], ['', [6, 7]], ['tape', [3, 4]]],
   [REVERB]: [['reverb', [0, 1]], ['', [2, 3]]],
   [TREMOLO]: [['', [2]], ['tremolo', [0, 1, 3]]],
@@ -55,9 +57,9 @@ export function rows(def: DeviceDef): Row[] {
   const known = ROWS[def.type]
   if (known) {
     const by = new Map(def.params.map((p) => [p.id, p]))
-    const out = known.map(([title, ids]) => ({ title, params: ids.flatMap((id) => by.get(id) ?? []) }))
+    const out: Row[] = known.map(([title, ids, tap]) => ({ title, params: ids.flatMap((id) => by.get(id) ?? []), ...(tap ? { tap } : {}) }))
     const rest = def.params.filter((p) => !known.some(([, ids]) => ids.includes(p.id)))
-    return [...out, ...(rest.length ? chunk('', rest) : [])].filter((r) => r.params.length)
+    return [...out, ...(rest.length ? chunk('', rest) : [])].filter((r) => r.params.length || r.tap)
   }
   // generic: selectors first (packed into rows), then each group as justified rows
   const sel = def.params.filter((p) => p.options)

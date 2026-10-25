@@ -30,7 +30,7 @@ export function tapItems(taps: readonly Tap[], scope: string, current: string | 
 
 /**
  * The picker button for a device (call it inside the card, so it follows the store). `none` is the text for "no tap" ("none" for a
- * recv, "self" for a compressor's key). Picking calls `set` with a tap id, or undefined for none.
+ * recv, "self" for a compressor's side chain). Picking calls `set` with a tap id, or undefined for none.
  */
 export function tapPicker(o: { store: ProjectStore; dev: () => Device; none: string; title: string; set: (tapId: string | undefined) => void }) {
   const text = h('span', { className: 'tp-label' })

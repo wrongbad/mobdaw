@@ -24,7 +24,7 @@ import { projectMenu } from './projectMenu'
 import { h } from '../dom'
 import { mountScore, type ScoreView } from '../score/view'
 import { icon } from '../theme/icons'
-import { HEADER, applyLayout } from './layout'
+import { GUTTER, HEADER, applyLayout } from './layout'
 import { importFile, PLAYBACK_MAX_BYTES } from '../samples'
 import { discardTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, uploadAll, uploadTake } from '../takes'
 import type { Session } from '../project/session'
@@ -73,6 +73,11 @@ const scoreMode = {
   },
 }
 /** A score file (MIDI or MusicXML): its parts become MIDI tracks. */
+/** The colour of the frame a bus draws around its tracks, from the bus's colour; and the master's, around everything. */
+const busFrame = (colour: string) => `color-mix(in srgb, ${colour} 38%, var(--bg))`
+const MASTER_FRAME = 'var(--frame-master)'
+/** A lane header's left shadows: one gutter-wide band per box around it (innermost first), then the page's gutter. */
+const bands = (frames: string[]) => [...frames, 'var(--bg)'].map((f, k) => `${-(k + 1) * GUTTER}px 0 0 ${f}`).join(', ')
 const isScoreFile = (f: Pick<File, 'name' | 'type'>) => isMidiFile(f) || isMusicXmlFile(f)
 const importableFiles = (list: FileList | null | undefined) =>
   [...(list ?? [])].filter((f) => isScoreFile(f) || f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
@@ -80,6 +85,8 @@ const importableFiles = (list: FileList | null | undefined) =>
 type Lane = {
   id: string
   el: HTMLElement; row: HTMLElement; body: HTMLElement; head: HeadRefs
+  /** Buses only: the box its tracks sit in, above its own row (the bus wraps them). */
+  kids: HTMLElement | null
   auto: HTMLElement // the automation section (a drawer component)
   loopTc: TransportControls // loops preview transport
   /** Soundscape tracks only: the source lane, which has its own time axis, scroll and zoom. */
@@ -295,9 +302,10 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
   overlay.append(playhead, snapLine)
   const hint = h('div', { className: 'hint dim' }, 'drop audio or midi files here, or use + track.')
-  const master = h('div', { className: 'lane master', 'data-kind': 'bus' }) // the root bus: a bus lane like the others (header, drawers), closing the list (filled below)
+  // the root bus: a bus like the others, wrapping every track, with its own row (header, drawers) at the bottom (filled below)
+  const master = h('div', { className: 'lane master', 'data-kind': 'bus' }, laneBox)
   const dropLine = h('div', { className: 'drop-line', hidden: true }) // where a dragged track would land
-  const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, addLink, bgPicker, midiPicker, overlay, dropLine)
+  const content = h('div', { className: 'content' }, ruler, master, hint, addLink, bgPicker, midiPicker, overlay, dropLine)
   const scroll = h('div', { className: 'scroll' }, content)
   // Drops outside any lane start a new track.
   scroll.ondragover = (e) => e.preventDefault()
@@ -305,7 +313,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     e.preventDefault()
     void dropFiles(importableFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   }
-  // The master bus closes the track list: the header of a bus (filled by `mountTrackHead` below) and its drawers, as one unit after every track.
+  // The master bus's own row closes the track list: the header of a bus (filled by `mountTrackHead` below) and its drawers, under every track.
   const masterHead = h('div', { className: 'head' })
   let masterGain: HTMLInputElement | null = null // its fader, which doubles as its level meter
   const scorePane = h('div', { className: 'score-pane' })
@@ -574,7 +582,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
   const drawCtx: DrawCtx = { ...headCtx, auto: autoValues, deps: cardDeps, reordering, loops: loopDeps, rows: rowDeps, armed: () => sel.armedLooper, width: totalPx, scale }
   const masterBody = busBody(MASTER_TRACK)
-  master.append(h('div', { className: 'lane-row master-row' }, masterHead, masterBody.el))
+  const masterRow = h('div', { className: 'lane-row master-row' }, masterHead, masterBody.el)
+  master.append(masterRow)
   const masterDrawers = mountLaneDrawers(master, drawCtx, MASTER_TRACK, 'bus') // (the drawers follow the row)
   disposers.push(masterDrawers.dispose, masterBody.dispose)
 
@@ -682,22 +691,24 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     items: (id: string): DropItem[] => {
       const sub = subtreeOf(rows(), id)
       return rows().filter((r) => !r.hidden && !sub.has(r.id) && lanes.has(r.id)).map((r) => {
-        const b = lanes.get(r.id)!.el.getBoundingClientRect()
-        return { id: r.id, top: b.top, bottom: b.bottom, bus: r.bus, expanded: r.bus && r.kids > 0 && !collapsed.isCollapsed(r.id) }
+        const l = lanes.get(r.id)!
+        const b = l.el.getBoundingClientRect()
+        if (!r.bus) return { id: r.id, top: b.top, bottom: b.bottom, bus: false }
+        const foot = l.row.getBoundingClientRect().top
+        return { id: r.id, top: b.top, bottom: b.bottom, bus: true, head: l.kids && !l.kids.hidden ? l.kids.getBoundingClientRect().top + GUTTER : foot, foot }
       })
     },
-    moving: (id: string) => {
-      const sub = subtreeOf(rows(), id)
-      return rows().filter((r) => !r.hidden && sub.has(r.id)).flatMap((r) => lanes.get(r.id)?.el ?? [])
-    },
+    moving: (id: string) => lanes.get(id)?.el ? [lanes.get(id)!.el] : [], // (a bus's tracks are inside its box)
     preview: (id: string, a: { id: string; at: 'before' | 'after' | 'start' | 'end' }) => {
       const tracks = getTracks(doc)
       const slot = slotFor(tracks, id, a)
       if (!slot || isInSlot(tracks, id, slot)) return null
       const top = content.getBoundingClientRect().top
-      const box = (a.id === MASTER_TRACK ? laneBox : lanes.get(a.id)?.el)?.getBoundingClientRect()
+      const l = a.id === MASTER_TRACK ? null : lanes.get(a.id)
+      const box = (a.id === MASTER_TRACK ? laneBox : l?.el)?.getBoundingClientRect()
       if (!box) return null
-      const y = (a.at === 'before' ? box.top : box.bottom) - top + (a.at === 'before' ? -3 : 1)
+      // into a bus at the end: over its own row, under its last track
+      const y = a.at === 'end' && l ? l.row.getBoundingClientRect().top - top - 4 : (a.at === 'before' ? box.top : box.bottom) - top + (a.at === 'before' ? -3 : 1)
       return { y, depth: slot.parent === MASTER_TRACK ? 0 : (rows().find((r) => r.id === slot.parent)?.depth ?? 0) + 1 }
     },
     drop: (id: string, a: { id: string; at: 'before' | 'after' | 'start' | 'end' }) => {
@@ -745,11 +756,12 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
     const loopTc = transportControls({ title: 'play / stop the loops', small: true, onToggle: () => togglePreview(t.id, 'loops') })
     const row = h('div', { className: 'lane-row' }, head, body)
-    const el = h('div', { className: 'lane' }, row, src?.row ?? null)
+    const kids = isBus ? h('div', { className: 'kids' }) : null // a bus is a box around its tracks, its own row at the bottom
+    const el = h('div', { className: 'lane' }, kids, row, src?.row ?? null)
     const drawn = mountLaneDrawers(el, drawCtx, t.id, t.kind, loopTc) // (the drawers follow the rows: instruments, loopers, effects, automation, presets)
     const offBlocks = [isBus ? busRow!.dispose : mountLaneBody(body, clipsCtx, t.id, t.kind), src ? mountSourceBody(src.body, clipsCtx, t.id, src) : () => {}]
     dragTrack(head, t.id, dragDeps)
-    const l: Lane = { id: t.id, el, row, body, head: mounted.refs, auto: drawn.refs.auto, loopTc, src }
+    const l: Lane = { id: t.id, el, row, body, head: mounted.refs, kids, auto: drawn.refs.auto, loopTc, src }
     // the lane's own classes follow the doc, the peers' recordings, the loop pedal and the editor
     el.dataset.kind = t.kind
     createEffect(() => el.style.setProperty('--tc', trackColor(t, index())))
@@ -1012,24 +1024,28 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       map: tmap, markers, keyText, pps, scrollX, viewW, after: rulerHeads,
       onMenu: (t, at, el) => rulerMenu(t, at, el),
     }))
-    // one lane per track, made once; the DOM order, nesting marks and folding follow the tree
+    // one lane per track, made once; the nesting (a bus's lanes inside its box), the DOM order and folding follow the tree
     const made = createMemo(mapArray(() => store.tracks(), (t: Track, i: Accessor<number>) => laneFor(t, i)))
     createEffect(() => {
       const byId = new Map(made().map((l) => [l.id, l]))
       const flat = new Map(store.tracks().map((t, i) => [t.id, i]))
-      const colour = (id: string) => trackColor(store.trackById[id] ?? {}, flat.get(id) ?? 0)
-      let at = laneBox.firstElementChild
+      const frame = (id: string) => busFrame(trackColor(store.trackById[id] ?? {}, flat.get(id) ?? 0))
+      const placed = new Map<Element, number>() // per box: how many of its lanes are in place, in front
       for (const r of rows()) {
         const l = byId.get(r.id)
-        if (!l) continue
-        if (at === l.el) at = at.nextElementSibling
-        else laneBox.insertBefore(l.el, at)
+        const box = r.parent === MASTER_TRACK ? laneBox : byId.get(r.parent)?.kids
+        if (!l || !box) continue
+        const i = placed.get(box) ?? 0
+        if (box.children[i] !== l.el) box.insertBefore(l.el, box.children[i] ?? null)
+        placed.set(box, i + 1)
         l.el.hidden = r.hidden
         l.el.dataset.depth = String(r.depth)
-        l.el.classList.toggle('in-bus', r.depth > 0)
-        l.el.classList.toggle('bus-first', r.depth > 0 && rows().find((x) => x.parent === r.parent)?.id === r.id)
-        l.el.style.setProperty('--depth', String(r.depth))
-        l.el.style.setProperty('--bands', r.ancestors.map((a, k) => `inset ${4 * (k + 1)}px 0 0 ${colour(a)}`).join(', ') || 'inset 0 0 0 transparent')
+        // the boxes around it, innermost first, then the master's: the header's sticky left edge paints them while the list scrolls sideways
+        const frames = [...r.ancestors].reverse().map(frame).concat(MASTER_FRAME)
+        l.el.style.setProperty('--in', `${frames.length * GUTTER}px`)
+        l.el.style.setProperty('--bands', bands(frames))
+        if (r.bus) l.el.style.setProperty('--frame', frame(r.id))
+        if (l.kids) l.kids.hidden = collapsed.isCollapsed(r.id)
         l.el.classList.toggle('folded', r.bus && collapsed.isCollapsed(r.id))
       }
     })

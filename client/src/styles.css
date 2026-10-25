@@ -132,7 +132,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .score-hint { padding: 48px 12px; text-align: center; font-size: 13px; }
 .score-playbar { position: absolute; z-index: 1; pointer-events: none; background: var(--accent-soft); border-radius: var(--r-sm); }
 .content { position: relative; min-width: 100%; }
-.ruler { display: flex; height: 40px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
+.ruler { display: flex; height: 40px; position: sticky; top: 0; z-index: 4; background: var(--panel); cursor: pointer; }
 /* the ruler's bottom line is a pseudo-element under the playhead copies (a real border would draw over them) */
 .ruler::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); z-index: 0; pointer-events: none; }
 /* tracks are tiles with a gutter around them: the ruler's corner is the track header plus the gutter, so its line meets the headers' */
@@ -141,6 +141,10 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .corner { left: 0; width: calc(var(--head) + var(--gutter)); border-bottom: 1px solid var(--line); }
 /* (the shadow keeps the gutter black while clips scroll under the pinned header) */
 .head { left: var(--gutter); width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); }
+/* A lane inside boxes (the master's, a bus's: `--in` is their frames' width, set from the timeline) has its sticky left column moved in
+   by that much and narrowed to match, so every lane's time axis starts at the same x. Its left shadows (`--bands`) paint the frames
+   beside it while the list scrolls sideways. */
+.lane-row > .head, .fx-toggle, .fx-head { left: calc(var(--gutter) + var(--in, 0px)); width: calc(var(--head) - var(--in, 0px)); box-shadow: var(--bands, calc(-1 * var(--gutter)) 0 0 var(--bg)); }
 .corner { border-right: 1px solid var(--line); }
 .ruler-body { position: relative; height: 100%; overflow: hidden; }
 .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
@@ -177,12 +181,12 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .snap-line[hidden] { display: none; }
 
 /* lanes: header, clip row, FX chain */
-.lane { --lane: var(--panel); background: var(--lane); position: relative; margin: var(--gutter) 0 0 var(--gutter); border-radius: var(--r-md); overflow: clip; } /* clip, not hidden: the sticky headers must still stick to the scroller */
+.lane { --lane: var(--panel); background: var(--lane); position: relative; margin: var(--gutter) 0 0; border-radius: var(--r-md); overflow: clip; } /* clip, not hidden: the sticky headers must still stick to the scroller */
 .lane-row { display: flex; height: 72px; }
 .lane.editing .lane-row { height: 320px; }
 /* the drum grid: header, a row per drum, the "add drum" button */
 .lane.editing.drums .lane-row { height: calc(28px + var(--dg-rows, 0) * 18px + 32px); }
-.head { background: var(--lane); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); display: flex; flex-direction: column; justify-content: flex-start; gap: 3px; padding: 4px 8px 0 12px; border-right: 1px solid var(--line); }
+.head { background: var(--lane); display: flex; flex-direction: column; justify-content: flex-start; gap: 3px; padding: 4px 8px 0 12px; border-right: 1px solid var(--line); }
 .head > * { flex: none; }
 .head-top { height: 16px; display: flex; align-items: center; gap: 4px; min-width: 0; }
 .kind { flex: none; display: flex; color: var(--tc, var(--dim)); }
@@ -233,7 +237,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 .tab.on { color: var(--tc, var(--accent)); box-shadow: inset 0 -1px 0 var(--tc, var(--accent)); }
 .tab[hidden] { display: none; }
-.lane.master .lane-row { height: 72px; }
+.lane.master > .lane-row { height: 72px; }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {
@@ -275,7 +279,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 
 /* bottom bar of every lane: the toggle is its header-width left cell, the chain opens to its right */
 .fx-row { position: relative; z-index: 2; display: flex; background: var(--lane); border-top: 1px solid var(--line); }
-.fx-toggle { cursor: default; position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
+.fx-toggle { cursor: default; position: sticky; flex: none; min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
 .fx-toggle.on { color: var(--fg); }
 .fx { position: sticky; left: calc(var(--head) + var(--gutter)); width: calc(100vw - var(--head) - var(--gutter)); display: flex; align-items: stretch; min-height: 72px; overflow-x: auto; overflow-y: hidden; } /* cards stay one row and scroll sideways; they stretch to the row's tallest, so borders line up */
 /* the device rows (synth, effects, loopers, global fx) and the presets drawer never show scroll bars; wheel, trackpad and touch still scroll them */
@@ -288,7 +292,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 /* The track colour bar: --tc is set once on the .lane, and every row of the block (header, fx, automation, presets) draws its slice of one
    continuous bar. A sticky 3px strip over the first pixels of the sticky left column; it also covers the row's 1px top border. */
 .lane-row::before, .fx-row::before {
-  content: ''; position: sticky; left: var(--gutter); z-index: 3; flex: none; align-self: stretch; width: 3px; margin-right: -3px;
+  content: ''; position: sticky; left: calc(var(--gutter) + var(--in, 0px)); z-index: 3; flex: none; align-self: stretch; width: 3px; margin-right: -3px;
   background: var(--tc, transparent); pointer-events: none;
 }
 .fx-row::before, .auto-row::before { margin-top: -1px; }
@@ -475,7 +479,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .transport.sm .play { width: 24px; height: 18px; border: 1px solid var(--line); background: var(--raise); }
 .transport.sm .play::before { width: 8px; height: 10px; }
 .transport.sm .time { width: auto; padding: 0 6px; font-size: 11px; text-align: left; line-height: 18px; }
-.fx-head { position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); display: flex; flex-direction: column; align-items: stretch; background: var(--lane); border-right: 1px solid var(--line); }
+.fx-head { position: sticky; flex: none; display: flex; flex-direction: column; align-items: stretch; background: var(--lane); border-right: 1px solid var(--line); }
 .fx-head .fx-toggle { position: relative; left: 0; width: auto; flex: none; border-right: 0; box-shadow: none; }
 .fx-head .transport.sm { padding: 3px 0 0 6px; }
 .loop-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--c); pointer-events: none; z-index: 2; }
@@ -569,7 +573,7 @@ button.danger:hover { color: var(--danger); }
 .pedal-st { font-size: 11px; color: var(--faint); cursor: default; white-space: nowrap; }
 .pedal-st.rec { color: var(--danger); }
 .pedal-row { margin-bottom: 6px; }
-.lane.current .head { box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), inset 3px 0 0 var(--tc); }
+.lane.current > .lane-row > .head { box-shadow: var(--bands, calc(-1 * var(--gutter)) 0 0 var(--bg)), inset 3px 0 0 var(--tc); }
 .clip.live-loop { --clip: color-mix(in srgb, var(--tc, var(--accent)) 16%, var(--bg)); --clip-head: color-mix(in srgb, var(--tc, var(--accent)) 40%, var(--bg)); pointer-events: none; z-index: 1; }
 .clip.live-loop.forever { background-image: linear-gradient(to right, transparent calc(100% - 24px), var(--bg)), linear-gradient(var(--clip-head), var(--clip-head)); background-size: 100% 100%, 100% 15px; background-position: 0 0, top; background-repeat: no-repeat; }
 /* presets drawer: a column per group (heading over plain-text buttons), side by side, scrolling sideways when narrow */
@@ -592,29 +596,31 @@ button.danger:hover { color: var(--danger); }
 .dev .tap-pick .tp-caret { color: var(--dim); font-size: 9px; }
 .dev .tap-pick.none .tp-label { color: var(--dim); }
 .dev .tap-pick.missing { border-color: var(--rec); color: var(--rec); }
+.dev .kn.tap .tap-pick { width: 88px; max-width: 100%; min-height: 20px; height: 20px; justify-content: space-between; font-size: 10px; }
+.dev .kn.tap > .dim { max-width: 100%; }
 .dev .tap-label { flex: 1; min-width: 0; width: 70px; height: 22px; padding: 0 5px; border: 1px solid var(--line); border-radius: 3px; background: rgba(0, 0, 0, .3); color: var(--fg); font-size: 11px; }
 .dev .tap-readers { white-space: nowrap; font-size: 9px; }
 .popover button:disabled { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; cursor: default; }
-@media (pointer: coarse) { .dev .tap-pick, .dev .tap-label { min-height: 32px; } }
+@media (pointer: coarse) { .dev .tap-pick, .dev .tap-label { min-height: 32px; } .dev .kn.tap .tap-pick { height: 32px; } }
 
 /* ===== buses (docs/routing.md): bus rows, the band that spans a bus's tracks, the fold button, the drag line ===== */
 .fold { flex: none; display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; margin-left: -2px; border-radius: var(--r-sm); background: none; color: var(--tc, var(--dim)); }
 .fold:hover { background: var(--line); color: var(--fg); }
-/* a bus is a track without clips: its header is tinted with its colour and its body is a note (click it to fold the bus) */
-.lane[data-kind=bus] .head { background: color-mix(in srgb, var(--tc, var(--line-strong)) 10%, var(--lane)); }
+/* A bus is a box around its tracks: a thin frame in its colour (`--frame`, set from the timeline) on the top and left, the tracks inside,
+   and its own row (header, then a body that is only a note: click it to fold) with its drawers at the bottom. The master is the same box
+   around everything. Folded, a bus is only its row. */
+.lane[data-kind=bus] { background: var(--frame, var(--panel)); }
+.lane.master { --frame: var(--frame-master); margin: var(--gutter) 0 0 var(--gutter); }
+.content { --frame-master: color-mix(in srgb, var(--line-strong) 45%, var(--bg)); }
+.lanes, .kids { padding: 0 0 var(--gutter) var(--gutter); }
+.kids[hidden] { display: none; }
+.lane[data-kind=bus] > .lane-row > .head { background: color-mix(in srgb, var(--tc, var(--line-strong)) 10%, var(--lane)); }
+.lane[data-kind=bus] > .lane-row, .lane[data-kind=bus] > .fx-row, .lane[data-kind=bus] > .src-row { background: var(--lane); }
 .bus-body { display: flex; align-items: center; background: color-mix(in srgb, var(--tc, var(--line-strong)) 5%, var(--lane)); cursor: pointer; }
-.lane.master .bus-body { cursor: default; }
+.lane.master > .lane-row > .bus-body { cursor: default; }
 .bus-note { position: sticky; left: calc(var(--head) + var(--gutter) + 12px); font-size: 11px; color: var(--dim); white-space: nowrap; }
-/* a track in a bus (`--depth` buses above it): one stripe per bus on the left of its header and drawer cells, outermost bus first, the
-   track's own colour bar after them, and the header indented by the stripes. The tiles sit closer together inside a bus. */
 .lane[hidden] { display: none; }
-.lane.in-bus { --band: calc(4px * var(--depth)); margin-top: 2px; }
-.lane.in-bus .head, .lane.in-bus .fx-toggle { box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), var(--bands); }
-.lane.in-bus.current .head { box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), var(--bands), inset calc(var(--band) + 3px) 0 0 var(--tc); }
-.lane.in-bus .head, .lane.in-bus .fx-toggle { padding-left: calc(12px + var(--band)); }
-.lane.in-bus .lane-row::before, .lane.in-bus .fx-row::before { left: calc(var(--gutter) + var(--band)); margin-left: var(--band); margin-right: calc(-3px - var(--band)); }
-.lane.in-bus.bus-first { margin-top: 2px; }
 .lane.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); }
-.drop-line { position: absolute; z-index: 6; left: calc(var(--gutter) + var(--depth, 0) * 8px); width: calc(var(--head) - var(--depth, 0) * 8px); height: 3px; margin-top: -1px; border-radius: 2px; background: var(--accent); pointer-events: none; }
+.drop-line { position: absolute; z-index: 6; left: calc(var(--gutter) * (var(--depth, 0) + 2)); width: calc(var(--head) - var(--gutter) * (var(--depth, 0) + 1)); height: 3px; margin-top: -1px; border-radius: 2px; background: var(--accent); pointer-events: none; }
 .drop-line[hidden] { display: none; }
 /* ===== end buses ===== */

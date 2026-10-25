@@ -217,13 +217,15 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
       {bypass}
     </div>
   ) as HTMLElement
-  /** Routing controls under the knobs: an fx send's label and readers, an fx recv's input, a compressor's key. */
+  const picker = (title: string, none: string) =>
+    tapPicker({ store, dev, none, title, set: (tap) => deps.setInput(id, tap) })
+  /** The tap picker as a knob-shaped cell in a row of the layout (the compressor's side chain): the drop-down over its caption. */
+  const tapCell = (caption: string) =>
+    (<div class="kn sel tap" style="--span:2">{picker(caption, dev().type === COMPRESSOR ? 'self' : 'none')}<span class="dim">{caption}</span></div>) as HTMLElement
+  /** Routing controls under the knobs: an fx send's label and readers, an fx recv's input. */
   const tapRow = (): HTMLElement | null => {
     const t = dev().type
-    const picker = (title: string, none: string) =>
-      tapPicker({ store, dev, none, title, set: (tap) => deps.setInput(id, tap) })
     if (t === FX_RECV) return (<div class="tap-row"><span class="dim">input</span>{picker('input', 'none')}</div>) as HTMLElement
-    if (t === COMPRESSOR) return (<div class="tap-row"><span class="dim">key</span>{picker('key', 'self')}</div>) as HTMLElement
     if (t !== FX_SEND) return null
     const input = (<input class="tap-label" type="text" aria-label="label" maxlength="40" spellcheck={false} />) as HTMLInputElement
     const readers = (<span class="dim tap-readers" />) as HTMLElement
@@ -238,7 +240,7 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
     createRenderEffect(() => {
       const n = store.devices().filter((d) => d.input === id).length
       readers.textContent = n ? `read by ${n}` : 'unread'
-      readers.title = n ? `${n} device${n === 1 ? '' : 's'} read this send` : 'nothing reads this send yet: pick it in an fx recv or a compressor key'
+      readers.title = n ? `${n} device${n === 1 ? '' : 's'} read this send` : 'nothing reads this send yet: pick it in an fx recv or as a compressor side chain'
     })
     return (<div class="tap-row"><span class="dim">label</span>{input}{readers}</div>) as HTMLElement
   }
@@ -250,7 +252,7 @@ export function DeviceCard(p: { id: string; ctx: CardCtx; chain: Chain }) {
         {rows_(def ?? { type: dev().type, name: '', instrument: false, params: [] }).map((row) => (
           <div class="krow">
             {row.title ? <div class="ktitle">{row.title}</div> : null}
-            <div class="kcells">{row.params.map((pd) => {
+            <div class="kcells">{row.tap ? tapCell(row.tap) : null}{row.params.map((pd) => {
               const c = cells.get(pd)!
               c.classList.toggle('same', row.title === pd.name) // the caption already says it
               return c

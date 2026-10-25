@@ -1,6 +1,6 @@
-// Drag a track (or a bus, with everything in it) by its header to a new place in the list: between two tracks, into a bus (onto its
-// header, or among its tracks) or out of one (below it, at the left of the list's end). The lanes under the dragged one follow the
-// pointer vertically (a transform; the DOM order is left alone), a line shows where it would land, and nothing is written until the drop.
+// Drag a track (or a bus, with everything in it) by its header to a new place in the list: between two tracks, into a bus (among its
+// tracks, or onto its own row at the bottom of its box) or out of one (below its row). The lane follows the pointer vertically (a
+// transform; the DOM order is left alone), a line shows where it would land, and nothing is written until the drop.
 // Touch: a long press on the header lifts it first (see lift.ts), as with the device cards; everything here is also in the header's menu.
 import { MASTER_TRACK } from '@mobdaw/shared'
 import { lift } from './lift'
@@ -8,33 +8,46 @@ import type { Anchor } from '../project/buses'
 
 const THRESHOLD = 4 // px before a press becomes a drag
 const NEAR_TOP = 20 // px of a lane's top edge that mean "in front of it"
-const HEADER_H = 72 // a lane's header row: pointing at a bus header (below the top edge) means "into it"
-
-/** A listed lane as the pointer sees it: its box, and what dropping on it can mean. */
-export type DropItem = { id: string; top: number; bottom: number; bus: boolean; /** A bus whose tracks are listed under it. */ expanded: boolean }
+const HEADER_H = 72 // a lane's header row: pointing at a bus's own row (below its top edge) means "into it"
 
 /**
- * What a pointer at height `y` means among the listed lanes (the dragged lane and what is under it left out). The top edge of a lane is
- * "in front of it"; a bus's header is "into it" (first among the tracks listed under it, else last); the rest of a track's box is "behind
- * it"; below everything is the end of the master's list. Null: no lanes.
+ * A listed lane as the pointer sees it: its box, and what dropping on it can mean. A bus is a box around its tracks with its own row at
+ * the bottom: `head` is where its first track starts (its row's top, `foot`, when it shows none).
+ */
+export type DropItem = { id: string; top: number; bottom: number; bus: false } | { id: string; top: number; bottom: number; bus: true; head: number; foot: number }
+
+/**
+ * What a pointer at height `y` means among the listed lanes, in list order (a bus before its tracks; the dragged lane and what is
+ * under it left out). The top edge of a lane is "in front of it" (for a bus showing its tracks, the frame above the first one); the rest
+ * of a track's box splits at its middle; the space in a bus below its last track, and the top of the bus's own row, is "into it, last";
+ * the rest of that row is "behind it"; below everything is the end of the master's list. Null: no lanes.
  */
 export function anchorAt(items: DropItem[], y: number): Anchor | null {
   if (!items.length) return null
+  const inside: string[] = [] // the buses whose box holds y, outermost first, with their feet
+  const feet = new Map<string, number>()
   for (const it of items) {
+    const box = inside.at(-1)
+    if (box && it.top >= feet.get(box)!) return { id: box, at: 'end' } // past the last track of the bus y is in
     if (y >= it.bottom) continue
     const d = y - it.top
-    if (d < NEAR_TOP) return { id: it.id, at: 'before' }
-    if (!it.bus) return d < (it.bottom - it.top) / 2 ? { id: it.id, at: 'before' } : { id: it.id, at: 'after' }
-    if (it.expanded) return { id: it.id, at: 'start' }
-    return d < HEADER_H - NEAR_TOP ? { id: it.id, at: 'end' } : { id: it.id, at: 'after' }
+    if (!it.bus) return d < NEAR_TOP || d < (it.bottom - it.top) / 2 ? { id: it.id, at: 'before' } : { id: it.id, at: 'after' }
+    if (y < (it.head < it.foot ? it.head : it.top + NEAR_TOP)) return { id: it.id, at: 'before' }
+    if (y < it.foot) {
+      inside.push(it.id)
+      feet.set(it.id, it.foot)
+      continue
+    }
+    return y - it.foot < HEADER_H - NEAR_TOP ? { id: it.id, at: 'end' } : { id: it.id, at: 'after' }
   }
-  return { id: MASTER_TRACK, at: 'end' }
+  const box = inside.at(-1)
+  return box ? { id: box, at: 'end' } : { id: MASTER_TRACK, at: 'end' }
 }
 
 export type TrackDragDeps = {
   /** The lanes in list order, shown ones only, with the boxes to hit-test against. Called on every move. */
   items(id: string): DropItem[]
-  /** The lanes that travel with the dragged one: itself and the tracks under it (if it is a bus). */
+  /** The elements that travel with the pointer: the dragged lane (a bus's box holds its tracks). */
   moving(id: string): HTMLElement[]
   /** What dropping on `anchor` would do: the line to draw, or null when it is not a place for this track (or changes nothing). */
   preview(id: string, anchor: Anchor): { y: number; depth: number } | null

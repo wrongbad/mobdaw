@@ -55,21 +55,24 @@ absent `input` means none.
 
 ## UI
 
-- **Bus rows** look like a tab group: a header (name, fold button, fader and pan, mute, solo, fx / auto / presets tabs) tinted with the
-  bus's colour, and a body that is only a note ("3 tracks"; click it to fold). The bus's tracks are listed directly under it in `order`
-  (`treeRows` in `client/src/project/buses.ts`, from `trackTree`; every place the timeline lists tracks uses it). A track in a bus has one
-  4px stripe per bus above it on the left of its header and drawer cells, outermost bus first, then its own colour bar; its header is
-  indented by the stripes and the tiles sit 2px apart inside a bus. Buses nest. Folding is local view state (`createCollapsed`, like the
-  drawers): a folded bus's lanes stay mounted, hidden.
+- **A bus is a box around its tracks**: a thin frame in the bus's colour on the top and left, its tracks inside (in `order`; `treeRows`
+  in `client/src/project/buses.ts`, from `trackTree`, is the list every place in the timeline uses), and the bus's own row at the bottom:
+  a header (name, fold button, fader and pan, mute, solo, fx / auto / presets tabs) tinted with its colour, a body that is only a note
+  ("3 tracks"; click it to fold), and its drawers below that. Buses nest (box in a box): the DOM nests too (a bus lane's `.kids`). Each
+  frame takes a gutter's width off the left of the headers inside it, so every lane's time axis still starts at the same x; while the
+  list scrolls sideways the headers' left shadows (`--bands`) paint the frames. Folding is local view state (`createCollapsed`, like the
+  drawers): a folded bus is only its row; its lanes stay mounted, hidden.
 - **Moving tracks**: drag a track header (`ui/trackDrag.ts`; a finger long-presses first, as with device cards). The lane follows the
-  pointer and a line shows where it lands: the top edge of a lane is in front of it, a bus header is into the bus (first among its
-  listed tracks, else last), the rest of a track is behind it, below everything is the end of the master. Dragging a bus moves its
+  pointer and a line shows where it lands: the top edge of a lane is in front of it (for an open bus, the frame above its first track), the
+  space under a bus's last track and the top of its own row are into the bus (last), the rest of that row is behind the bus, the rest of
+  a track is behind it, below everything is the end of the master. Dragging a bus moves its
   subtree. Dropping into a folded bus opens it. The header menu (click, right-click, tap) has "move to bus ▸" (master, then every bus
   except the track itself and the buses inside it; the current one is ticked) and "new bus from this track" (a bus at the track's place,
   holding it). "+ bus" is in the add-track menu. All of it works by tap; drag is the shortcut.
-- **The master is the root bus**: the same header and drawers as a bus (`TrackHead` / `mountLaneDrawers` with `MASTER_TRACK`), closing the
-  track list. No fold button, mute, solo, drag or menu; its body note counts every track.
-- **Cards**: `fx send` shows its editable label; `fx recv` shows a tap picker; the compressor shows a "key" tap picker. The tap
+- **The master is the root bus**: a box around every track, like a bus, with its own row (`TrackHead` / `mountLaneDrawers` with
+  `MASTER_TRACK`) at the bottom, closing the track list. No fold button, mute, solo, drag or menu; its body note counts every track.
+- **Cards**: `fx send` shows its editable label; `fx recv` shows a tap picker; the compressor has a "side chain" tap picker, shaped like a knob
+  (the drop-down over its caption), at the top of its "input" section. The tap
   picker lists "none", then tracks and buses (their implicit taps), then sends by label, then the master.
 
 ## Later (not phase 1)
