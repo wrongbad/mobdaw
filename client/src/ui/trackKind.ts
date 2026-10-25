@@ -4,6 +4,7 @@ import { DEVICES, isDrum, type Clip, type Device, type Track } from '@mobdaw/sha
 import type { IconName } from '../theme/icons'
 
 export function trackKind(t: Pick<Track, 'id' | 'kind' | 'role'>, devices: Pick<Device, 'trackId' | 'type' | 'keyLo' | 'keyHi'>[], clips: Pick<Clip, 'trackId' | 'kind'>[]): { icon: IconName; label: string } {
+  if (t.kind === 'bus') return { icon: 'folder', label: 'bus' }
   if (t.kind === 'audio') return { icon: 'wave', label: 'audio track' }
   if (t.kind === 'soundscape') return { icon: 'loop', label: 'soundscape' }
   if (t.role === 'click') return { icon: 'metronome', label: 'click track' }

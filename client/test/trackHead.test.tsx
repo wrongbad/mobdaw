@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import { Awareness } from 'y-protocols/awareness'
 import { createSignal } from 'solid-js'
-import { MASTER_TRACK, addDevice, addTrack, setParam, tracksMap, updateTrack, type AwarenessState } from '@mobdaw/shared'
+import { MASTER_TRACK, addBus, addDevice, addTrack, getTracks, setParam, setParent, tracksMap, updateTrack, type AwarenessState } from '@mobdaw/shared'
 import { createProjectStore } from '../src/project/store'
-import { createDrawers, createMixDrive, createTabAvailability } from '../src/project/viewState'
-import { mountMasterHead, mountTrackHead, type HeadCtx } from '../src/ui/trackHead'
+import { createCollapsed, createDrawers, createMixDrive, createTabAvailability } from '../src/project/viewState'
+import { mountTrackHead, type HeadCtx } from '../src/ui/trackHead'
 import { mountRemoteHeads } from '../src/ui/remoteHeads'
 import { mountBar } from '../src/ui/bar'
 
@@ -24,13 +24,13 @@ function setup() {
     get armedTrack() { return armed() }, get monitoring() { return false }, currentTrack: null,
     arm: async (id: string) => void armedCalls.push(id), toggleMonitoring() {},
   } as unknown as HeadCtx['rec']
-  const drawers = createDrawers(), avail = createTabAvailability(), drive = createMixDrive()
+  const drawers = createDrawers(), avail = createTabAvailability(), drive = createMixDrive(), collapsed = createCollapsed()
   const ctx: HeadCtx = {
-    doc, undo: new Y.UndoManager([tracksMap(doc)]), store, rec, drawers, avail, drive,
+    doc, undo: new Y.UndoManager([tracksMap(doc)]), store, rec, drawers, avail, drive, collapsed,
     toggleTab: (id, tab) => void drawers.toggle(id, tab), autoMenu: () => {},
   }
   cleanup.push(() => store.dispose())
-  return { doc, awareness, store, ctx, setArmed, armedCalls, setPeers: (p: AwarenessState[]) => ((peers = p), awareness.emit('change', [{ added: [], updated: [], removed: [] }, 'test'])) }
+  return { doc, awareness, store, ctx, collapsed, setArmed, armedCalls, setPeers: (p: AwarenessState[]) => ((peers = p), awareness.emit('change', [{ added: [], updated: [], removed: [] }, 'test'])) }
 }
 const head = (t: ReturnType<typeof setup>, id: string) => {
   const host = document.createElement('div')
@@ -136,15 +136,95 @@ describe('track header', () => {
 })
 
 describe('master header', () => {
-  it('has a name, a mix row and fx / auto tabs', () => {
+  it('is the bus header: a name, a mix row and fx / auto tabs, with no mute, solo or menu', () => {
     const t = setup()
     addDevice(t.doc, MASTER_TRACK, 1)
     const host = document.createElement('div')
-    const refs: { gain?: HTMLInputElement } = {}
-    cleanup.push(mountMasterHead(host, t.ctx, (r) => (refs.gain = r.gain)))
+    document.body.append(host)
+    const m = mountTrackHead(host, t.ctx, MASTER_TRACK)
+    cleanup.push(() => (m.dispose(), host.remove()))
     expect(host.querySelector('.name')!.textContent).toBe('master')
-    expect([...host.querySelectorAll('.tab')].map((b) => b.textContent)).toEqual(['fx', 'auto'])
-    expect(refs.gain).toBe(host.querySelector('.gain'))
+    expect([...host.querySelectorAll<HTMLElement>('.tab')].map((b) => b.textContent)).toEqual(['fx', 'auto', 'presets']) // (auto and presets show once there is something to open)
+    expect([...host.querySelectorAll<HTMLElement>('.tab')].filter((b) => !b.hidden).map((b) => b.textContent)).toEqual(['fx'])
+    expect(m.refs.gain).toBe(host.querySelector('.gain'))
+    expect(host.querySelector('.mute, .solo, .record, .fold')).toBeNull()
+    host.querySelector('.name')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    host.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    expect(document.querySelector('.popover')).toBeNull()
+  })
+})
+
+describe('bus header', () => {
+  const items = () => [...document.querySelectorAll<HTMLButtonElement>('.popover button')]
+  const pick = (label: string) => items().find((b) => b.textContent!.includes(label))!.click()
+  const menu = (host: HTMLElement) => host.querySelector('.head-top')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
+  afterEach(() => document.querySelectorAll('.popover').forEach((e) => e.remove()))
+
+  it('has a fold button, mute and solo, and fx / auto / presets tabs, but no record button or input meter', () => {
+    const t = setup()
+    const id = addBus(t.doc, 'drums bus')
+    const { host } = head(t, id)
+    expect(host.querySelector('.name')!.textContent).toBe('drums bus')
+    expect(host.querySelector('.kind')).toBeNull()
+    expect(host.querySelector('.record, .listen, .meter')).toBeNull()
+    expect([...host.querySelectorAll<HTMLElement>('.tab')].map((b) => b.textContent)).toEqual(['fx', 'auto', 'presets'])
+    host.querySelector<HTMLButtonElement>('.mute')!.click()
+    host.querySelector<HTMLButtonElement>('.solo')!.click()
+    expect(tracksMap(t.doc).get(id)!.get('muted')).toBe(true)
+    expect(tracksMap(t.doc).get(id)!.get('soloed')).toBe(true)
+  })
+
+  it('the fold button folds and opens the bus (local view state, not in the doc)', () => {
+    const t = setup()
+    const id = addBus(t.doc, 'b')
+    const { host } = head(t, id)
+    const fold = host.querySelector<HTMLButtonElement>('.fold')!
+    expect(fold.getAttribute('aria-expanded')).toBe('true')
+    fold.click()
+    expect(t.collapsed.isCollapsed(id)).toBe(true)
+    expect(fold.getAttribute('aria-expanded')).toBe('false')
+    fold.click()
+    expect(t.collapsed.isCollapsed(id)).toBe(false)
+    expect(tracksMap(t.doc).get(id)!.has('collapsed')).toBe(false)
+  })
+
+  it('a track\'s menu moves it into a bus and out again, and makes a bus from it', () => {
+    const t = setup()
+    const a = addTrack(t.doc, 'a'), b = addTrack(t.doc, 'b')
+    const bus = addBus(t.doc, 'room')
+    const { host } = head(t, a)
+    menu(host)
+    expect(items().map((i) => i.textContent)).toEqual(['rename', 'move to bus \u25b8', 'new bus from this track', 'delete track'])
+    pick('move to bus')
+    expect(items().map((i) => i.textContent)).toEqual(['\u2713 master (no bus)', 'room'])
+    expect(items()[0].disabled).toBe(true)
+    pick('room')
+    expect(tracksMap(t.doc).get(a)!.get('parent')).toBe(bus)
+    menu(host)
+    pick('move to bus')
+    expect(items().map((i) => i.textContent)).toEqual(['master (no bus)', '\u2713 room'])
+    pick('master')
+    expect(tracksMap(t.doc).get(a)!.has('parent')).toBe(false)
+    // a bus from b: at b's place, with b in it
+    const other = head(t, b)
+    menu(other.host)
+    pick('new bus from this track')
+    const made = getTracks(t.doc).find((x) => x.kind === 'bus' && x.id !== bus)!
+    expect(made.name).toBe('b bus')
+    expect(tracksMap(t.doc).get(b)!.get('parent')).toBe(made.id)
+    expect(made.order).toBeLessThan(getTracks(t.doc).find((x) => x.id === bus)!.order)
+  })
+
+  it('a bus\'s menu lists the buses it could move into without itself or the ones inside it', () => {
+    const t = setup()
+    const outer = addBus(t.doc, 'outer'), inner = addBus(t.doc, 'inner'), other = addBus(t.doc, 'other')
+    setParent(t.doc, inner, outer)
+    const { host } = head(t, outer)
+    menu(host)
+    expect(items().map((i) => i.textContent)).toContain('delete bus')
+    pick('move to bus')
+    expect(items().map((i) => i.textContent)).toEqual(['\u2713 master (no bus)', 'other'])
+    void inner; void other
   })
 })
 

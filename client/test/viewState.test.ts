@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createDrawers, createSelection } from '../src/project/viewState'
+import { createCollapsed, createDrawers, createSelection } from '../src/project/viewState'
 
 describe('drawers', () => {
   it('toggles per track and tab', () => {
@@ -20,6 +20,20 @@ describe('drawers', () => {
     d.closeAll('a')
     expect(d.isOpen('a', 'synth') || d.isOpen('a', 'presets')).toBe(false)
     expect(d.isOpen('b', 'synth')).toBe(true)
+  })
+})
+
+describe('collapsed buses', () => {
+  it('are open until folded, per bus, and only a change fires', () => {
+    const c = createCollapsed()
+    expect(c.isCollapsed('b')).toBe(false)
+    expect(c.toggle('b')).toBe(true)
+    expect(c.isCollapsed('b')).toBe(true)
+    expect(c.isCollapsed('other')).toBe(false)
+    c.set('b', false)
+    expect(c.isCollapsed('b')).toBe(false)
+    c.set('b', false)
+    expect(c.toggle('b')).toBe(true)
   })
 })
 

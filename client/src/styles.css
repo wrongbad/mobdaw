@@ -71,7 +71,7 @@ main.center { margin: auto; text-align: center; }
 /* timeline: top bar with a centred transport */
 .timeline { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 /* the sides never shrink below their content: on a narrow screen the bar scrolls sideways instead of overlapping */
-.bar { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header.bar { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .bar-l, .bar-r, .transport { display: flex; gap: 16px; align-items: center; padding: 0 16px; }
 .bar-r { justify-content: flex-end; padding-right: 0; }
 /* a long message is cut off (tap it to read it all) rather than stretching the bar */
@@ -119,7 +119,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .api-tokens .token-cmd { display: block; overflow-wrap: anywhere; user-select: all; padding: 6px 8px; background: var(--panel); }
 .body { display: flex; flex: 1; min-height: 0; }
 .scroll { flex: 1; min-width: 0; overflow: auto; min-height: 0; }
-/* score mode (ui/timeline.ts swaps .scroll for .score-pane; score/view.ts fills it). abcjs draws in currentColor, so ink follows --fg */
+/* score mode (ui/timeline.ts swaps .scroll for .score-pane; score/view.ts fills it). abcjs draws in currentColor: black ink on a soft, warm paper (the app's --fg tint, dimmed) like printed music */
 .scroll[hidden], .score-pane[hidden], .score-playbar[hidden], .score-hint[hidden] { display: none; }
 .score-pane { flex: 1; min-width: 0; min-height: 0; }
 .score { display: flex; flex-direction: column; color: var(--fg); background: var(--bg); }
@@ -127,7 +127,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .score-chip { height: 24px; padding: 0 10px; border: 1px solid var(--line); border-radius: 12px; background: none; color: var(--dim); font-size: 12px; }
 .score-chip.on { color: var(--fg); background: var(--raise); border-color: var(--line-strong); }
 .score-chip-hint { margin-left: 6px; font-size: 10px; opacity: .7; }
-.score-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; }
+.score-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; background: #d9d5cc; color: #111; }
 .score-sheet svg { display: block; }
 .score-hint { padding: 48px 12px; text-align: center; font-size: 13px; }
 .score-playbar { position: absolute; z-index: 1; pointer-events: none; background: var(--accent-soft); border-radius: var(--r-sm); }
@@ -146,6 +146,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
 /* the main ruler (ui/ruler.tsx): markers on top, then the tempo / meter badges, then bar numbers; beats grow shorter, groups a little taller */
 .rl { position: absolute; top: 12px; bottom: 0; border-left: 1px solid var(--line); padding: 12px 0 0 4px; font-size: 10px; line-height: 14px; color: var(--dim); pointer-events: none; white-space: nowrap; }
+/* (`header.bar` above is the top bar: a bar line must not match it) */
 .rl.bar { border-left-color: var(--line-strong, var(--dim)); }
 .rl.group { top: 30px; padding: 0; }
 .rl.beat { top: 34px; padding: 0; }
@@ -583,3 +584,25 @@ button.danger:hover { color: var(--danger); }
 .dev.drum .dev-head strong { color: var(--rc); }
 .dev.drum .prm.keys input { color: var(--rc); }
 .dev .kn.same > .dim { display: none; }
+
+/* ===== buses (docs/routing.md): bus rows, the band that spans a bus's tracks, the fold button, the drag line ===== */
+.fold { flex: none; display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; margin-left: -2px; border-radius: var(--r-sm); background: none; color: var(--tc, var(--dim)); }
+.fold:hover { background: var(--line); color: var(--fg); }
+/* a bus is a track without clips: its header is tinted with its colour and its body is a note (click it to fold the bus) */
+.lane[data-kind=bus] .head { background: color-mix(in srgb, var(--tc, var(--line-strong)) 10%, var(--lane)); }
+.bus-body { display: flex; align-items: center; background: color-mix(in srgb, var(--tc, var(--line-strong)) 5%, var(--lane)); cursor: pointer; }
+.lane.master .bus-body { cursor: default; }
+.bus-note { position: sticky; left: calc(var(--head) + var(--gutter) + 12px); font-size: 11px; color: var(--dim); white-space: nowrap; }
+/* a track in a bus (`--depth` buses above it): one stripe per bus on the left of its header and drawer cells, outermost bus first, the
+   track's own colour bar after them, and the header indented by the stripes. The tiles sit closer together inside a bus. */
+.lane[hidden] { display: none; }
+.lane.in-bus { --band: calc(4px * var(--depth)); margin-top: 2px; }
+.lane.in-bus .head, .lane.in-bus .fx-toggle { box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), var(--bands); }
+.lane.in-bus.current .head { box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), var(--bands), inset calc(var(--band) + 3px) 0 0 var(--tc); }
+.lane.in-bus .head, .lane.in-bus .fx-toggle { padding-left: calc(12px + var(--band)); }
+.lane.in-bus .lane-row::before, .lane.in-bus .fx-row::before { left: calc(var(--gutter) + var(--band)); margin-left: var(--band); margin-right: calc(-3px - var(--band)); }
+.lane.in-bus.bus-first { margin-top: 2px; }
+.lane.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); }
+.drop-line { position: absolute; z-index: 6; left: calc(var(--gutter) + var(--depth, 0) * 8px); width: calc(var(--head) - var(--depth, 0) * 8px); height: 3px; margin-top: -1px; border-radius: 2px; background: var(--accent); pointer-events: none; }
+.drop-line[hidden] { display: none; }
+/* ===== end buses ===== */
