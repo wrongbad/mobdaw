@@ -1018,6 +1018,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     createEffect(() => sel.pruneClips((id) => (void store.clipById[id], clipsMap(doc).has(id))))
     createEffect(() => sel.prunePad((id) => (void store.padById[id], padsMap(doc).has(id))))
     createEffect(() => sel.pruneNote((id) => (void store.noteById[id], notesMap(doc).has(id) || !!store.noteById[id])))
+    // the playhead is otherwise only placed while playing and on a seek: place it at load, and again when the zoom changes while stopped
+    createEffect(() => (x(1), untrack(drawPlayhead)))
     disposers.push(mountRuler(rulerBody, {
       map: tmap, markers, keyText, pps, scrollX, viewW, after: rulerHeads,
       onMenu: (t, at, el) => rulerMenu(t, at, el),
