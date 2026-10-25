@@ -24,7 +24,7 @@ import { projectMenu } from './projectMenu'
 import { h } from '../dom'
 import { mountScore, type ScoreView } from '../score/view'
 import { icon } from '../theme/icons'
-import { GUTTER, HEADER, applyLayout } from './layout'
+import { FRAME, GUTTER, HEADER, STRIPE, applyLayout } from './layout'
 import { importFile, PLAYBACK_MAX_BYTES } from '../samples'
 import { discardTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, uploadAll, uploadTake } from '../takes'
 import type { Session } from '../project/session'
@@ -73,11 +73,16 @@ const scoreMode = {
   },
 }
 /** A score file (MIDI or MusicXML): its parts become MIDI tracks. */
-/** The colour of the frame a bus draws around its tracks, from the bus's colour; and the master's, around everything. */
-const busFrame = (colour: string) => `color-mix(in srgb, ${colour} 38%, var(--bg))`
-const MASTER_FRAME = 'var(--frame-master)'
-/** A lane header's left shadows: one gutter-wide band per box around it (innermost first), then the page's gutter. */
-const bands = (frames: string[]) => [...frames, 'var(--bg)'].map((f, k) => `${-(k + 1) * GUTTER}px 0 0 ${f}`).join(', ')
+/** The frame a bus draws around its tracks, from the bus's colour (a tint, and the colour itself as the stripe down its left edge); the master's, around everything. */
+const busFrame = (colour: string): Frame => ({ fill: `color-mix(in srgb, ${colour} 38%, var(--bg))`, stripe: colour })
+type Frame = { fill: string; stripe: string }
+const MASTER_FRAME: Frame = { fill: 'var(--frame-master)', stripe: 'var(--line-strong)' }
+/**
+ * A lane header's left shadows: one band per box around it (innermost first), each its frame's fill with the box's colour stripe at its
+ * left edge (a shadow drawn over a wider one in the stripe colour), then the page's gutter.
+ */
+const bands = (frames: Frame[]) =>
+  [...frames.flatMap((f, k) => [`${STRIPE - (k + 1) * FRAME}px 0 0 ${f.fill}`, `${-(k + 1) * FRAME}px 0 0 ${f.stripe}`]), `${-frames.length * FRAME - GUTTER}px 0 0 var(--bg)`].join(', ')
 const isScoreFile = (f: Pick<File, 'name' | 'type'>) => isMidiFile(f) || isMusicXmlFile(f)
 const importableFiles = (list: FileList | null | undefined) =>
   [...(list ?? [])].filter((f) => isScoreFile(f) || f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
@@ -1042,9 +1047,9 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
         l.el.dataset.depth = String(r.depth)
         // the boxes around it, innermost first, then the master's: the header's sticky left edge paints them while the list scrolls sideways
         const frames = [...r.ancestors].reverse().map(frame).concat(MASTER_FRAME)
-        l.el.style.setProperty('--in', `${frames.length * GUTTER}px`)
+        l.el.style.setProperty('--in', `${frames.length * FRAME}px`)
         l.el.style.setProperty('--bands', bands(frames))
-        if (r.bus) l.el.style.setProperty('--frame', frame(r.id))
+        if (r.bus) l.el.style.setProperty('--frame', frame(r.id).fill)
         if (l.kids) l.kids.hidden = collapsed.isCollapsed(r.id)
         l.el.classList.toggle('folded', r.bus && collapsed.isCollapsed(r.id))
       }

@@ -609,10 +609,10 @@ button.danger:hover { color: var(--danger); }
 /* A bus is a box around its tracks: a thin frame in its colour (`--frame`, set from the timeline) on the top and left, the tracks inside,
    and its own row (header, then a body that is only a note: click it to fold) with its drawers at the bottom. The master is the same box
    around everything. Folded, a bus is only its row. */
-.lane[data-kind=bus] { background: var(--frame, var(--panel)); }
+.lane[data-kind=bus] { background: var(--frame, var(--panel)); box-shadow: inset 3px 0 0 var(--tc); } /* the stripe: the row's colour bar, up the whole box */
 .lane.master { --frame: var(--frame-master); margin: var(--gutter) 0 0 var(--gutter); }
 .content { --frame-master: color-mix(in srgb, var(--line-strong) 45%, var(--bg)); }
-.lanes, .kids { padding: 0 0 var(--gutter) var(--gutter); }
+.lanes, .kids { padding: 0 0 var(--gutter) var(--frame-w); }
 .kids[hidden] { display: none; }
 .lane[data-kind=bus] > .lane-row > .head { background: color-mix(in srgb, var(--tc, var(--line-strong)) 10%, var(--lane)); }
 .lane[data-kind=bus] > .lane-row, .lane[data-kind=bus] > .fx-row, .lane[data-kind=bus] > .src-row { background: var(--lane); }
@@ -621,6 +621,6 @@ button.danger:hover { color: var(--danger); }
 .bus-note { position: sticky; left: calc(var(--head) + var(--gutter) + 12px); font-size: 11px; color: var(--dim); white-space: nowrap; }
 .lane[hidden] { display: none; }
 .lane.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); }
-.drop-line { position: absolute; z-index: 6; left: calc(var(--gutter) * (var(--depth, 0) + 2)); width: calc(var(--head) - var(--gutter) * (var(--depth, 0) + 1)); height: 3px; margin-top: -1px; border-radius: 2px; background: var(--accent); pointer-events: none; }
+.drop-line { position: absolute; z-index: 6; left: calc(var(--gutter) + var(--frame-w) * (var(--depth, 0) + 1)); width: calc(var(--head) - var(--frame-w) * (var(--depth, 0) + 1)); height: 3px; margin-top: -1px; border-radius: 2px; background: var(--accent); pointer-events: none; }
 .drop-line[hidden] { display: none; }
 /* ===== end buses ===== */

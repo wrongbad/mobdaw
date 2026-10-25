@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  BORE, DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, MIX, SCHEMA_VERSION, addTrack, clipsMap, devicesMap, getClips, getDevices,
+  BORE, COMPRESSOR, DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, MIX, SCHEMA_VERSION, addTrack, clipsMap, devicesMap, getClips, getDevices,
   getLanes, getNotes, getPoints, getRegions, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, sweepOrphans, undoScope,
   tracksMap, metaMap, type Device,
 } from '@mobdaw/shared'
@@ -192,6 +192,11 @@ describe('templates', () => {
     expect(Math.round(contentEnd(doc, SR) / bar)).toBe(DEMO_BARS)
     expect(getLanes(doc).length).toBeGreaterThanOrEqual(1)
     expect(getDevices(doc).filter((d) => d.trackId === MASTER_TRACK).length).toBeGreaterThanOrEqual(2)
+    // the band bus holds every track but the drums, and its compressor listens to the drums
+    const tracks = getTracks(doc)
+    const drums = tracks.find((t) => t.name === 'drums')!, band = tracks.find((t) => t.kind === 'bus')!
+    expect(tracks.filter((t) => t.parent === band.id).map((t) => t.name)).toEqual(['bass', 'rhodes', 'pad', 'flute', 'vinyl dust'])
+    expect(getDevices(doc).find((d) => d.trackId === band.id && d.type === COMPRESSOR)?.input).toBe(drums.id)
   })
 })
 

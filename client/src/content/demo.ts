@@ -7,8 +7,9 @@
 //   bars 21-28  B       Dm9 | Bbmaj9 | Gm9 | A7b9, twice: busier comping, clap on the backbeat, a new melody; a snare roll
 //   bars 29-32  outro   A's chords once more, resolving to Fmaj9; the drums thin out and the master reverb opens up
 // The loop region (off) covers A and A', bars 5-20. The piano's voicings move by step from chord to chord.
+// Mix: the drums get a 100 Hz bell boost; every other track sums into a "band" bus whose compressor is side-chained to the drums.
 import * as Y from 'yjs'
-import { DELAY, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum } from '@mobdaw/shared'
+import { DELAY, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum, setParent } from '@mobdaw/shared'
 import { MASTER_TRACK, automate, barPos, clip, initProject, rng, track, type ClipWriter, type Song } from './compose'
 import { GM, addDrumKit, addEffectPreset, addInstrument, drumKit, effectPreset, instrumentPreset } from './presets'
 
@@ -54,9 +55,13 @@ export function buildDemo(doc: Y.Doc) {
     const pad = track(s, 'pad', 'midi', { color: 1, gain: 0.4, pan: 0.1 })
     const lead = track(s, 'flute', 'midi', { color: 3, gain: 0.85, pan: 0.15 })
     const dust = track(s, 'vinyl dust', 'midi', { color: 7, gain: 1 })
+    // everything but the drums sums into one bus, which ducks under the drums (below)
+    const band = track(s, 'band', 'bus', { color: 6 })
+    for (const t of [bass, keys, pad, lead, dust]) setParent(doc, t, band)
 
     // --- instruments and inserts
     addDrumKit(doc, drums, drumKit('tape')!)
+    addDevice(doc, drums, SIMPLE_FILTER, {}, { 0: 5, 1: 100, 2: 0.7071, 3: 10 }) // a bell at 100 Hz, +10 dB: the kick's weight
     addDevice(doc, drums, COMPRESSOR, {}, { 0: -20, 1: 3, 2: 0.1, 3: 60, 4: 6 }) // drum bus: shaves the noise peaks, lifts the kick
     addInstrument(doc, bass, instrumentPreset('round-bass')!)
     addInstrument(doc, keys, instrumentPreset('electric-piano')!)
@@ -67,6 +72,8 @@ export function buildDemo(doc: Y.Doc) {
     addDevice(doc, lead, DELAY, {}, { 0: 0.25, 1: Math.round((0.75 * 60000) / DEMO_BPM), 2: 0.38, 3: 0.3, 4: 0.2, 5: 0, 6: 2600, 7: 0 })
     addDevice(doc, lead, REVERB, {}, { 0: 0.22, 1: 0.6, 2: 0.5, 3: 20 })
     addDrum(doc, dust, { key: 60, name: 'crackle', params: { 0: 4500, 1: 0.1, 2: 3, 3: 0.6 } })
+    // the band bus: a compressor keyed on the drums, so the band breathes with the kick
+    addDevice(doc, band, COMPRESSOR, { input: drums }, { 0: -30, 1: 3, 2: 1, 3: 150, 4: 6 })
     // master: glue compression, then a little room
     addEffectPreset(doc, MASTER_TRACK, { id: 'demo-master', name: 'demo master', devices: [{ type: COMPRESSOR, params: { 0: -18, 1: 2.5, 2: 25, 3: 180, 4: 2 } }] })
     const masterVerb = addEffectPreset(doc, MASTER_TRACK, effectPreset('small-room')!)[0]
