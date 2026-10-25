@@ -15,7 +15,7 @@ import { shape } from '../audio/probe'
 import { getInputOffset, setInputOffset } from '../audio/recording'
 import { cmdForKey, getKeys } from '../midi'
 import { render } from 'solid-js/web'
-import { For, createComponent, createSignal, createEffect, createMemo, createRoot, getOwner, onCleanup, runWithOwner, untrack, type Accessor } from 'solid-js'
+import { createSignal, createEffect, createMemo, createRoot, getOwner, mapArray, onCleanup, runWithOwner, untrack, type Accessor } from 'solid-js'
 import type { Meters, PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
 import { renderProject } from '../audio/render'
@@ -33,7 +33,7 @@ import { chatPanel } from './chat'
 import { historyPanel } from './history'
 import { api } from '../api'
 import { automateMenu, type AutoInfo } from './automation'
-import { mountLaneDrawers, mountMasterDrawers, type DrawCtx } from './drawers'
+import { mountLaneDrawers, type DrawCtx } from './drawers'
 import { drawLiveWave } from './clipWave'
 import { mountTicks } from './ticks'
 import { barAtPx, mountRuler } from './ruler'
@@ -48,7 +48,8 @@ import { drawRegion, sourceFrames, type GestureCtx, type LaneGeo } from './gestu
 import { closedBy, popover } from './popover'
 import { transportControls, type TransportControls } from './transport'
 import { mountBar } from './bar'
-import { mountMasterHead, mountTrackHead, type HeadCtx, type HeadRefs } from './trackHead'
+import { mountTrackHead, type HeadCtx, type HeadRefs } from './trackHead'
+import { dragTrack, type DropItem } from './trackDrag'
 import { mountRemoteHeads } from './remoteHeads'
 import { follow, peakToFill } from './meter'
 import { addImportedClip, automateParam, commitParam, commitParams, deleteClips, loopForever, reorderDevice, unloopClip } from '../project/actions'
@@ -59,7 +60,8 @@ import { applyRegionEdits, tempoFromLoop } from '../audio/loopPedal'
 import { createRecorder } from '../project/recorder'
 import { sliderDraft } from '../project/draft'
 import { createProjectStore } from '../project/store'
-import { createAutoValues, createDrawers, createMixDrive, createSelection, createTabAvailability, type TabName } from '../project/viewState'
+import { createAutoValues, createCollapsed, createDrawers, createMixDrive, createSelection, createTabAvailability, type TabName } from '../project/viewState'
+import { isInSlot, moveTrack, newBus, slotFor, subtreeOf, treeRows } from '../project/buses'
 
 /** Whether a project was last left in score mode: per project, per browser. */
 const scoreMode = {
@@ -76,6 +78,7 @@ const importableFiles = (list: FileList | null | undefined) =>
   [...(list ?? [])].filter((f) => isScoreFile(f) || f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
 
 type Lane = {
+  id: string
   el: HTMLElement; row: HTMLElement; body: HTMLElement; head: HeadRefs
   auto: HTMLElement // the automation section (a drawer component)
   loopTc: TransportControls // loops preview transport
@@ -102,6 +105,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   let pb: Playback | null = null // created once the doc has synced (needs meta.sampleRate)
   const sel = createSelection() // clips, the open MIDI editor, note, pad and armed looper (local UI state)
   const drawers = createDrawers() // which drawers each track (or MASTER_TRACK) has open (local UI state, all shut by default)
+  const collapsed = createCollapsed() // which buses are folded shut (local UI state, all open by default)
   const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
   let autoLanes: AutoLane[] = [] // as of the last change
   let autoPoints = new Map<string, Point[]>() // lane id -> its points, sorted
@@ -249,8 +253,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const where = h('span', { className: 'dim where', onpointerdown: (e) => e.stopPropagation(), title: s.local ? 'saved in this browser, on this device' : s.snapshot ? 'a snapshot of a cloud project: your changes are not saved' : 'saved in the cloud' })
   where.append(s.local ? icon('phone', 16) : icon('cloud', 18))
   const bar = h('header', { className: 'bar' }) // (filled by `Bar` once the recorder exists)
-  const corner = h('div', { className: 'corner' }) // the master bus's header (filled by `MasterHead`): the project's name, then its fader, pan and tabs
-  const ruler = h('div', { className: 'ruler' }, corner)
+  const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }, where, projectTitle()))
   const rulerBody = h('div', { className: 'ruler-body' })
   ruler.append(rulerBody)
   const laneBox = h('div', { className: 'lanes' })
@@ -280,6 +283,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
         doc.transact(() => addInstrument(doc, addTrack(doc, `midi ${n}`, 'midi', undefined, undefined, nextTrackColor(getTracks(doc))), INSTRUMENT_PRESETS[0]))
       }],
       ['soundscape', () => addTrack(doc, `soundscape ${n}`, 'soundscape', undefined, undefined, nextTrackColor(getTracks(doc)))],
+      ['bus', () => void newBus(doc)],
       ['upload midi / musicxml', () => midiPicker.click()],
     ])
   } }, '+')
@@ -291,8 +295,9 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
   overlay.append(playhead, snapLine)
   const hint = h('div', { className: 'hint dim' }, 'drop audio or midi files here, or use + track.')
-  const master = h('div', { className: 'lane master' }) // the master bus's drawers (fx, then automation), hanging off the ruler above the tracks (filled below)
-  const content = h('div', { className: 'content' }, ruler, master, laneBox, hint, addLink, bgPicker, midiPicker, overlay)
+  const master = h('div', { className: 'lane master', 'data-kind': 'bus' }) // the root bus: a bus lane like the others (header, drawers), closing the list (filled below)
+  const dropLine = h('div', { className: 'drop-line', hidden: true }) // where a dragged track would land
+  const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, addLink, bgPicker, midiPicker, overlay, dropLine)
   const scroll = h('div', { className: 'scroll' }, content)
   // Drops outside any lane start a new track.
   scroll.ondragover = (e) => e.preventDefault()
@@ -300,7 +305,9 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     e.preventDefault()
     void dropFiles(importableFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   }
-  let masterGain: HTMLInputElement | null = null // the master fader, which doubles as its level meter
+  // The master bus closes the track list: the header of a bus (filled by `mountTrackHead` below) and its drawers, as one unit after every track.
+  const masterHead = h('div', { className: 'head' })
+  let masterGain: HTMLInputElement | null = null // its fader, which doubles as its level meter
   const scorePane = h('div', { className: 'score-pane' })
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, scorePane, chat.el, ...(hist ? [hist.el] : [])))
   // The score mode swaps the tracks for sheet music; the score mounts on first use and stays while hidden (it only draws while shown).
@@ -351,10 +358,12 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   /** The main timeline's extent (samples): the content and 30 s more, at least a minute. */
   const total = inRoot(() => createMemo(() => Math.max(60 * scale().rate, contentEnd() + 30 * scale().rate)))
   const totalPx = inRoot(() => createMemo(() => xs(total()))) // (the automation rows are drawn at both)
+  /** The track list as a tree (a bus's tracks right under it), from `order` and each track's effective parent; with the folded buses marked. */
+  const rows = inRoot(() => createMemo(() => treeRows(store.tracks(), collapsed.isCollapsed)))
   // the peers' knob drags go to our engine as overrides (and show on the cards, which follow `store.drags`)
   const applyOverrides = () => pb?.setOverrides(store.overrides())
   const headCtx: HeadCtx = {
-    doc, undo, store, rec, drawers, avail, drive, toggleTab, autoMenu,
+    doc, undo, store, rec, drawers, avail, drive, collapsed, toggleTab, autoMenu,
     live: (d, p, v) => cardDeps.live(d, p, v), drag: (d) => cardDeps.drag(d), commit: (d, p, v) => cardDeps.commit(d, p, v),
   }
   disposers.push(
@@ -366,7 +375,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       } } }),
     mountRemoteHeads(overlay, { store, offset: HEADER, scale }),
     mountRemoteHeads(rulerHeads, { store, offset: 0, scale }),
-    mountMasterHead(corner, headCtx, [where, projectTitle()], (r) => (masterGain = r.gain)),
+    (() => { const m = mountTrackHead(masterHead, headCtx, MASTER_TRACK); masterGain = m.refs.gain; return m.dispose })(),
     createRoot((dispose) => (createEffect(() => (store.overrides(), applyOverrides())), dispose)),
   )
   const ne = noteEditor({
@@ -564,8 +573,10 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     snap: (smp: number) => gridSnap(tmap(), smp, pps()) ?? smp, // (automation points snap to the bar grid; in a free region they stay where they are)
   }
   const drawCtx: DrawCtx = { ...headCtx, auto: autoValues, deps: cardDeps, reordering, loops: loopDeps, rows: rowDeps, armed: () => sel.armedLooper, width: totalPx, scale }
-  const masterDrawers = mountMasterDrawers(master, drawCtx)
-  disposers.push(masterDrawers.dispose)
+  const masterBody = busBody(MASTER_TRACK)
+  master.append(h('div', { className: 'lane-row master-row' }, masterHead, masterBody.el))
+  const masterDrawers = mountLaneDrawers(master, drawCtx, MASTER_TRACK, 'bus') // (the drawers follow the row)
+  disposers.push(masterDrawers.dispose, masterBody.dispose)
 
   function autoMenu(label: HTMLElement, target: () => ParamTarget, clickToo = true) {
     const lane = () => laneOf(doc, target())
@@ -586,6 +597,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
 
   function reveal(scope: string) {
+    for (const a of rows().find((r) => r.id === scope)?.ancestors ?? []) collapsed.set(a, false) // (not inside a folded bus)
     drawers.open(scope, 'auto')
     ;(scope === MASTER_TRACK ? masterDrawers.refs.auto : lanes.get(scope)?.auto)?.scrollIntoView({ block: 'nearest' })
   }
@@ -647,13 +659,65 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     }
   }
 
-  /** The lane of a track: its header, body (clips or regions), source lane and drawers. Made once, inside the `<For>` over the tracks. */
+  /** A bus's lane body (and the master's): no clips, a note of what is in it that also folds it (click). */
+  function busBody(id: string) {
+    const note = h('span', { className: 'bus-note' })
+    const el = h('div', { className: 'lane-body bus-body', 'data-track': id }, note)
+    if (id !== MASTER_TRACK) el.onclick = (e) => { if (e.target === el || e.target === note) collapsed.toggle(id) }
+    const dispose = createRoot((dispose) => {
+      createEffect(() => (el.style.width = `${totalPx()}px`))
+      createEffect(() => {
+        const all = rows()
+        const n = id === MASTER_TRACK ? all.length : all.find((r) => r.id === id)?.below ?? 0
+        const what = `${n} ${n === 1 ? 'track' : 'tracks'}`
+        note.textContent = n === 0 ? (id === MASTER_TRACK ? 'no tracks yet' : 'empty: move tracks in from their menu') : collapsed.isCollapsed(id) ? `${what} folded` : id === MASTER_TRACK ? `${what} in total` : what
+      })
+      return dispose
+    })
+    return { el, dispose }
+  }
+
+  /** Dragging a track header (docs/routing.md): the lanes it hit-tests, the line it shows, and the write on the drop. */
+  const dragDeps = {
+    items: (id: string): DropItem[] => {
+      const sub = subtreeOf(rows(), id)
+      return rows().filter((r) => !r.hidden && !sub.has(r.id) && lanes.has(r.id)).map((r) => {
+        const b = lanes.get(r.id)!.el.getBoundingClientRect()
+        return { id: r.id, top: b.top, bottom: b.bottom, bus: r.bus, expanded: r.bus && r.kids > 0 && !collapsed.isCollapsed(r.id) }
+      })
+    },
+    moving: (id: string) => {
+      const sub = subtreeOf(rows(), id)
+      return rows().filter((r) => !r.hidden && sub.has(r.id)).flatMap((r) => lanes.get(r.id)?.el ?? [])
+    },
+    preview: (id: string, a: { id: string; at: 'before' | 'after' | 'start' | 'end' }) => {
+      const tracks = getTracks(doc)
+      const slot = slotFor(tracks, id, a)
+      if (!slot || isInSlot(tracks, id, slot)) return null
+      const top = content.getBoundingClientRect().top
+      const box = (a.id === MASTER_TRACK ? laneBox : lanes.get(a.id)?.el)?.getBoundingClientRect()
+      if (!box) return null
+      const y = (a.at === 'before' ? box.top : box.bottom) - top + (a.at === 'before' ? -3 : 1)
+      return { y, depth: slot.parent === MASTER_TRACK ? 0 : (rows().find((r) => r.id === slot.parent)?.depth ?? 0) + 1 }
+    },
+    drop: (id: string, a: { id: string; at: 'before' | 'after' | 'start' | 'end' }) => {
+      if (future()) return
+      const slot = slotFor(getTracks(doc), id, a)
+      if (slot && moveTrack(doc, id, slot) && slot.parent !== MASTER_TRACK) collapsed.set(slot.parent, false) // (it lands where you can see it)
+    },
+    scroller: scroll,
+    line: dropLine,
+  }
+
+  /** The lane of a track: its header, body (clips or regions), source lane and drawers. Made once for each track (by `mapArray`). */
   function laneFor(t: Track, index: Accessor<number>): Lane {
     const head = h('div', { className: 'head' })
     const mounted = mountTrackHead(head, headCtx, t.id)
-    const body = h('div', { className: 'lane-body', 'data-track': t.id })
+    const isBus = t.kind === 'bus'
+    const busRow = isBus ? busBody(t.id) : null // a bus has no clips: its lane body is a note that folds it
+    const body = busRow?.el ?? h('div', { className: 'lane-body', 'data-track': t.id })
     body.onpointerdown = (e) => {
-      if (e.target !== body) return
+      if (e.target !== body || isBus) return
       sel.clickEmptyLane()
       select([])
     }
@@ -662,8 +726,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       if (e.target !== body || t.kind !== 'midi') return
       newMidiClip(t.id, atX(e))
     }
-    body.ondragover = (e) => e.preventDefault()
-    body.ondrop = (e) => {
+    if (!isBus) body.ondragover = (e) => e.preventDefault()
+    if (!isBus) body.ondrop = (e) => {
       e.preventDefault()
       e.stopPropagation()
       const kind = tracksMap(doc).get(t.id)?.get('kind')
@@ -683,8 +747,9 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     const row = h('div', { className: 'lane-row' }, head, body)
     const el = h('div', { className: 'lane' }, row, src?.row ?? null)
     const drawn = mountLaneDrawers(el, drawCtx, t.id, t.kind, loopTc) // (the drawers follow the rows: instruments, loopers, effects, automation, presets)
-    const offBlocks = [mountLaneBody(body, clipsCtx, t.id, t.kind), src ? mountSourceBody(src.body, clipsCtx, t.id, src) : () => {}]
-    const l: Lane = { el, row, body, head: mounted.refs, auto: drawn.refs.auto, loopTc, src }
+    const offBlocks = [isBus ? busRow!.dispose : mountLaneBody(body, clipsCtx, t.id, t.kind), src ? mountSourceBody(src.body, clipsCtx, t.id, src) : () => {}]
+    dragTrack(head, t.id, dragDeps)
+    const l: Lane = { id: t.id, el, row, body, head: mounted.refs, auto: drawn.refs.auto, loopTc, src }
     // the lane's own classes follow the doc, the peers' recordings, the loop pedal and the editor
     el.dataset.kind = t.kind
     createEffect(() => el.style.setProperty('--tc', trackColor(t, index())))
@@ -720,6 +785,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     lanes.set(t.id, l)
     onCleanup(() => {
       lanes.delete(t.id)
+      el.remove()
       offBlocks.forEach((f) => f())
       drawn.dispose()
       mounted.dispose()
@@ -919,8 +985,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
 
   // --- layout: explicit effects, each following what it reads (no pass over the whole project)
-  /** The playhead lines run through the ruler, the master drawers and the lanes, not the empty space below them. */
-  const layout = () => (overlay.style.height = `${laneBox.offsetTop + laneBox.offsetHeight}px`)
+  /** The playhead lines run through the ruler, the lanes and the master automation, not the empty space below them. */
+  const layout = () => (overlay.style.height = `${master.offsetTop + master.offsetHeight}px`)
   /** The scroller's visible size (resize, the chat panel opening). */
   function measure() {
     setViewW(scroll.clientWidth)
@@ -946,7 +1012,27 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       map: tmap, markers, keyText, pps, scrollX, viewW, after: rulerHeads,
       onMenu: (t, at, el) => rulerMenu(t, at, el),
     }))
-    disposers.push(render(() => createComponent(For, { get each() { return store.tracks() }, children: (t: Track, i: Accessor<number>) => laneFor(t, i).el }), laneBox))
+    // one lane per track, made once; the DOM order, nesting marks and folding follow the tree
+    const made = createMemo(mapArray(() => store.tracks(), (t: Track, i: Accessor<number>) => laneFor(t, i)))
+    createEffect(() => {
+      const byId = new Map(made().map((l) => [l.id, l]))
+      const flat = new Map(store.tracks().map((t, i) => [t.id, i]))
+      const colour = (id: string) => trackColor(store.trackById[id] ?? {}, flat.get(id) ?? 0)
+      let at = laneBox.firstElementChild
+      for (const r of rows()) {
+        const l = byId.get(r.id)
+        if (!l) continue
+        if (at === l.el) at = at.nextElementSibling
+        else laneBox.insertBefore(l.el, at)
+        l.el.hidden = r.hidden
+        l.el.dataset.depth = String(r.depth)
+        l.el.classList.toggle('in-bus', r.depth > 0)
+        l.el.classList.toggle('bus-first', r.depth > 0 && rows().find((x) => x.parent === r.parent)?.id === r.id)
+        l.el.style.setProperty('--depth', String(r.depth))
+        l.el.style.setProperty('--bands', r.ancestors.map((a, k) => `inset ${4 * (k + 1)}px 0 0 ${colour(a)}`).join(', ') || 'inset 0 0 0 transparent')
+        l.el.classList.toggle('folded', r.bus && collapsed.isCollapsed(r.id))
+      }
+    })
   })
 
   // --- incoming takes (docs/engine.md §9.3)
@@ -1049,7 +1135,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const rulerBar = (clientX: number) => barAtPx(tmap(), clientX - rulerBody.getBoundingClientRect().left, pps())
   let rulerHold = 0 // a long press on the ruler (touch) opens the menu at that bar, like a right click
   ruler.onpointerdown = (e) => {
-    if (e.button !== 0 || (e.target instanceof Element && e.target.closest('.corner'))) return // (the corner is the master header: its controls are not the ruler)
+    if (e.button !== 0) return
     seek(fromX(e.clientX - rulerBody.getBoundingClientRect().left))
     if (e.pointerType !== 'touch') return
     const { clientX, clientY } = e

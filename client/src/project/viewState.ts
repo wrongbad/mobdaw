@@ -45,6 +45,18 @@ export function createTabAvailability() {
 
 export type Drawers = ReturnType<typeof createDrawers>
 
+/** Which buses are folded shut: their tracks are not listed. View state like the drawers (never in the doc, all open by default). */
+export function createCollapsed() {
+  const f = flags()
+  return {
+    isCollapsed: (id: string) => f.get(id),
+    /** Fold it if open, open it if folded; returns whether it is now folded. */
+    toggle(id: string) { const now = !f.get(id); f.set(id, now); return now },
+    set: (id: string, v: boolean) => f.set(id, v),
+  }
+}
+export type Collapsed = ReturnType<typeof createCollapsed>
+
 /** What is selected or being edited. The fields are read directly; every change goes through a method. */
 export function createSelection() {
   // (signals behind the fields, so the clips, pads and loop boxes follow the selection without a draw)

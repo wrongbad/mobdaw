@@ -3,11 +3,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import { Awareness } from 'y-protocols/awareness'
 import { createSignal } from 'solid-js'
-import { MASTER_TRACK, REVERB, SIMPLE_FILTER, addDevice, addTrack, devicesMap, lanesMap, setParam, tracksMap, updateTrack, type AwarenessState } from '@mobdaw/shared'
+import { MASTER_TRACK, REVERB, SIMPLE_FILTER, addBus, addDevice, addTrack, devicesMap, lanesMap, setParam, tracksMap, updateTrack, type AwarenessState } from '@mobdaw/shared'
 import { automateParam } from '../src/project/actions'
 import { createProjectStore } from '../src/project/store'
 import { createAutoValues, createDrawers, createMixDrive, createTabAvailability } from '../src/project/viewState'
-import { mountLaneDrawers, mountMasterDrawers, type DrawCtx } from '../src/ui/drawers'
+import { mountLaneDrawers, type DrawCtx } from '../src/ui/drawers'
 import { transportControls } from '../src/ui/transport'
 
 const cleanup: (() => void)[] = []
@@ -170,11 +170,25 @@ describe('device cards', () => {
     const t = setup()
     addDevice(t.doc, MASTER_TRACK, REVERB)
     const host = document.createElement('div')
-    cleanup.push(mountMasterDrawers(host, t.ctx).dispose)
+    cleanup.push(mountLaneDrawers(host, t.ctx, MASTER_TRACK, 'bus').dispose)
     t.ctx.drawers.open(MASTER_TRACK, 'fx')
     expect(host.querySelector('.fx-toggle')!.textContent).toBe('master fx (1)')
     expect(host.querySelector('.dev .knob')!.classList.contains('disabled')).toBe(false)
     expect(host.querySelector<HTMLButtonElement>('.add-fx')!.disabled).toBe(false)
+  })
+
+  it('a bus has effects, automation and presets like a track, and no instruments or loopers', () => {
+    const t = setup()
+    const id = addBus(t.doc, 'drums bus')
+    addDevice(t.doc, id, REVERB)
+    const host = lane(t, id, 'bus')
+    expect([...host.querySelectorAll('.fx-toggle')].map((n) => n.textContent)).toEqual(['fx', 'automation (0)', 'presets'])
+    t.ctx.drawers.open(id, 'fx')
+    expect(host.querySelectorAll('.dev').length).toBe(1)
+    expect(host.querySelector('.add-fx')!.getAttribute('title')).toBe('add effect')
+    t.ctx.drawers.open(id, 'presets')
+    expect(host.querySelector('.preset-col h4')!.textContent).toBe('effects')
+    expect(t.ctx.avail.has(id, 'presets')).toBe(true)
   })
 })
 

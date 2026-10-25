@@ -1,12 +1,13 @@
-// A track's header (and the master bus's): name, kind icon, M / S / R / I, input meter, fader and pan, and the drawer tabs. Mounted
+// A track's header (and a bus's, and the master's): name, kind icon, M / S / R / I, input meter, fader and pan, and the drawer tabs. Mounted
 // into the lane's `.head` with `render()`. The widgets that are not Solid (`knob`, `ticks`, `valueTip`, `popover`) are used as they are.
-import { MASTER_TRACK, MIX_GAIN, MIX_PAN, deleteTrack, tracksMap, updateTrack, type ParamTarget } from '@mobdaw/shared'
+import { MASTER_TRACK, MIX_GAIN, MIX_PAN, deleteTrack, effectiveParent, getTracks, tracksMap, updateTrack, type ParamTarget, type Track } from '@mobdaw/shared'
 import { render } from 'solid-js/web'
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from 'solid-js'
 import type * as Y from 'yjs'
 import type { Recorder } from '../project/recorder'
 import type { ProjectStore } from '../project/store'
-import type { createDrawers, createMixDrive, createTabAvailability, TabName } from '../project/viewState'
+import { busTargets, moveTrack, newBusFrom, treeRows } from '../project/buses'
+import type { createCollapsed, createDrawers, createMixDrive, createTabAvailability, TabName } from '../project/viewState'
 import { icon, setIcon } from '../theme/icons'
 import { inUse } from './held'
 import { knob } from './knob'
@@ -18,7 +19,7 @@ import { valueTip } from './valueTip'
 const TAB_LABEL: Record<TabName, string> = { source: 'src', synth: 'synth', loopers: 'loops', fx: 'fx', auto: 'auto', presets: 'presets' }
 const TAB_TITLE: Record<TabName, string> = { source: 'source audio', synth: 'instruments', loopers: 'loopers', fx: 'effects', auto: 'automation lanes', presets: 'presets' }
 export const TABS: Record<string, TabName[]> = {
-  audio: ['fx', 'auto', 'presets'], midi: ['synth', 'fx', 'auto', 'presets'], soundscape: ['source', 'loopers', 'fx', 'auto', 'presets'], master: ['fx', 'auto'],
+  audio: ['fx', 'auto', 'presets'], midi: ['synth', 'fx', 'auto', 'presets'], soundscape: ['source', 'loopers', 'fx', 'auto', 'presets'], bus: ['fx', 'auto', 'presets'],
 }
 
 /** What the headers share. */
@@ -30,6 +31,8 @@ export type HeadCtx = {
   drawers: ReturnType<typeof createDrawers>
   avail: ReturnType<typeof createTabAvailability>
   drive: ReturnType<typeof createMixDrive>
+  /** Which buses are folded shut (local view state). */
+  collapsed?: ReturnType<typeof createCollapsed>
   /** The tab to open or shut one drawer. */
   toggleTab(id: string, tab: TabName): void
   /** Right-click (and click) on a control offers automation. */
@@ -114,36 +117,33 @@ function MixRow(p: { ctx: HeadCtx; scope: string; refs: (gain: HTMLInputElement)
   return <div class="ctl gain-row">{gain}{pan.el}</div>
 }
 
-/** The master bus's header, in the ruler's corner: the project's name (`top`), the master fader and pan, and the tabs of its drawers. */
-export function MasterHead(p: { ctx: HeadCtx; top: Node[]; refs: (r: HeadRefs) => void }) {
-  return (
-    <>
-      <div class="head-top">{p.top}</div>
-      <MixRow ctx={p.ctx} scope={MASTER_TRACK} refs={(gain) => p.refs({ gain, meter: null })} />
-      <Tabs ctx={p.ctx} id={MASTER_TRACK} names={TABS.master} />
-    </>
-  )
-}
+const MASTER: Pick<Track, 'id' | 'name' | 'kind' | 'muted' | 'soloed'> = { id: MASTER_TRACK, name: 'master', kind: 'bus', muted: false, soloed: false }
 
 /**
  * A track's header, in `host` (the lane's `.head`, which the menu anchors to). Click or right-click on it, off its controls,
- * offers the track's menu.
+ * offers the track's menu. A bus has the same header (no record button, and a fold button for the tracks under it), and the master
+ * bus (`MASTER_TRACK`) is a bus that can't be renamed, muted, soloed, moved or deleted: it has no menu.
  */
 export function TrackHead(p: { ctx: HeadCtx; id: string; host: HTMLElement; refs: (r: HeadRefs) => void }) {
   const { doc, store, rec } = p.ctx
   const id = p.id
+  const root = id === MASTER_TRACK
   // (the track can be gone from the doc a moment before its lane is: keep showing the last one)
-  const track = createMemo<ReturnType<typeof store.tracks>[number]>((prev) => store.trackById[id] ?? prev)
+  const track = createMemo<Pick<Track, 'id' | 'name' | 'kind' | 'muted' | 'soloed'>>((prev) => (root ? MASTER : store.trackById[id] ?? prev))
   const locked = () => store.locks().has(id)
   const audio = track().kind === 'audio'
-  const kind = createMemo(() => trackKind(track(), store.devicesByTrack(id)(), store.clipsByTrack(id)()))
+  const bus = track().kind === 'bus'
+  const kind = createMemo(() => (root ? { icon: 'mixer' as const, label: 'master bus' } : trackKind(track() as Track, store.devicesByTrack(id)(), store.clipsByTrack(id)())))
   const kindIcon = createMemo(() => kind().icon)
   const kindLabel = createMemo(() => kind().label)
   const glyph = icon('wave', 14)
   createEffect(on(kindIcon, (n) => setIcon(glyph, n)))
+  const folded = () => !!p.ctx.collapsed?.isCollapsed(id)
+  const chevron = icon('chevron-down', 14)
+  createEffect(() => setIcon(chevron, folded() ? 'chevron-right' : 'chevron-down'))
 
   const [renaming, setRenaming] = createSignal(false)
-  const rename = () => setRenaming(true)
+  const rename = () => !root && setRenaming(true)
   const Name = () => (
     <Show when={renaming()} fallback={<span class="name" on:dblclick={rename}>{track().name}</span>}>
       <input class="rename" value={track().name}
@@ -162,14 +162,28 @@ export function TrackHead(p: { ctx: HeadCtx; id: string; host: HTMLElement; refs
     if (ok && input.value.trim()) updateTrack(doc, id, { name: input.value.trim() })
   }
 
-  const delTrack = () => !locked() && confirm('delete this track and its clips?') && deleteTrack(doc, id)
+  const delTrack = () => !locked() && confirm(bus ? 'delete this bus? the tracks in it move up a level.' : 'delete this track and its clips?') && deleteTrack(doc, id)
+  /** "move to bus": the master (no bus) and every bus this track is not in or above, as a menu of its own. */
+  const moveMenu = (at: [number, number]) => {
+    const tracks = getTracks(doc)
+    const now = effectiveParent(tracks).get(id) ?? MASTER_TRACK
+    const depth = new Map(treeRows(tracks).map((r) => [r.id, r.depth]))
+    const to = (parent: string) => () => void moveTrack(doc, id, { parent, before: null })
+    popover(p.host, [
+      { label: `${now === MASTER_TRACK ? '✓ ' : ''}master (no bus)`, run: to(MASTER_TRACK), disabled: now === MASTER_TRACK },
+      ...busTargets(tracks, id).map((b) => ({ label: `${b.id === now ? '✓ ' : ''}${' '.repeat(depth.get(b.id) ?? 0)}${b.name}`, run: to(b.id), disabled: b.id === now })),
+    ], at)
+  }
   let menuClosed = false // this press just closed the menu: don't open it again
   const trackMenu = (e: MouseEvent) => {
-    if (locked()) return
+    if (locked() || root) return
+    const at: [number, number] = [e.clientX, e.clientY]
     popover(p.host, [
       ['rename', () => setRenaming(true)],
-      ['delete track', () => void delTrack()],
-    ], [e.clientX, e.clientY])
+      ['move to bus ▸', () => moveMenu(at)],
+      ['new bus from this track', () => void newBusFrom(doc, id)],
+      [bus ? 'delete bus' : 'delete track', () => void delTrack()],
+    ], at)
   }
   const press = (e: Event) => (menuClosed = closedBy(e))
   const click = (e: MouseEvent) => {
@@ -195,20 +209,25 @@ export function TrackHead(p: { ctx: HeadCtx; id: string; host: HTMLElement; refs
   const out = (
     <>
       <div class="head-top">
-        <span class="kind" data-icon={kindIcon()} title={kindLabel()}>{glyph}</span>
+        <Show when={bus && !root} fallback={<span class="kind" data-icon={kindIcon()} title={kindLabel()}>{glyph}</span>}>
+          <button class="fold" aria-expanded={!folded()} title={folded() ? 'show the tracks in this bus' : 'fold the tracks in this bus'}
+            on:click={() => p.ctx.collapsed?.toggle(id)}>{chevron}</button>
+        </Show>
         <Name />
-        <div class="ctl track-btns">
-          <button class="mute" classList={{ on: track().muted }} title="mute"
-            on:click={() => updateTrack(doc, id, { muted: !tracksMap(doc).get(id)?.get('muted') })}>M</button>
-          <button class="solo" classList={{ on: track().soloed }} title="solo"
-            on:click={() => updateTrack(doc, id, { soloed: !tracksMap(doc).get(id)?.get('soloed') })}>S</button>
-          <Show when={audio}>
-            <button class="record" classList={{ on: armed() }} title="arm for recording" on:click={() => void rec.arm(id)}>R</button>
-            <button class="listen" classList={{ on: rec.monitoring }} hidden={!armed()} title="monitor the input through this track's effects (use headphones)"
-              on:click={() => rec.toggleMonitoring()}>I</button>
-            <i class="meter" hidden={!armed()} title="input level" ref={(el) => (meter = el)} />
-          </Show>
-        </div>
+        <Show when={!root}>
+          <div class="ctl track-btns">
+            <button class="mute" classList={{ on: track().muted }} title="mute"
+              on:click={() => updateTrack(doc, id, { muted: !tracksMap(doc).get(id)?.get('muted') })}>M</button>
+            <button class="solo" classList={{ on: track().soloed }} title="solo"
+              on:click={() => updateTrack(doc, id, { soloed: !tracksMap(doc).get(id)?.get('soloed') })}>S</button>
+            <Show when={audio}>
+              <button class="record" classList={{ on: armed() }} title="arm for recording" on:click={() => void rec.arm(id)}>R</button>
+              <button class="listen" classList={{ on: rec.monitoring }} hidden={!armed()} title="monitor the input through this track's effects (use headphones)"
+                on:click={() => rec.toggleMonitoring()}>I</button>
+              <i class="meter" hidden={!armed()} title="input level" ref={(el) => (meter = el)} />
+            </Show>
+          </div>
+        </Show>
       </div>
       <MixRow ctx={p.ctx} scope={id} refs={(g) => (gainEl = g)} />
       <Tabs ctx={p.ctx} id={id} names={TABS[track().kind] ?? TABS.audio} />
@@ -217,8 +236,6 @@ export function TrackHead(p: { ctx: HeadCtx; id: string; host: HTMLElement; refs
   p.refs({ gain: gainEl, meter })
   return out
 }
-
-export const mountMasterHead = (host: HTMLElement, ctx: HeadCtx, top: Node[], refs: (r: HeadRefs) => void) => render(() => <MasterHead ctx={ctx} top={top} refs={refs} />, host)
 
 /** Fill `host` (the lane's `.head`) with the header of track `id`; `refs` gets the elements the timeline drives (fader and input meter). */
 export function mountTrackHead(host: HTMLElement, ctx: HeadCtx, id: string): { refs: HeadRefs; dispose(): void } {

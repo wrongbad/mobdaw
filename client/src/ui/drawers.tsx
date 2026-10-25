@@ -1,4 +1,4 @@
-// The drawers below a track's lane (instruments, loopers, effects, automation, presets) and the master bus's (effects, automation):
+// The drawers below a track's lane (instruments, loopers, effects, automation, presets); a bus's and the master's have no instruments or loopers:
 // Solid components over the project store. Mounted once per lane into the lane's element, they follow the doc, the peers' drags and the
 // automation's values by themselves; the timeline only draws what is left.
 import {
@@ -200,10 +200,14 @@ function AutoSection(p: { ctx: DrawCtx; scope: string; title: string; ref?: (el:
   )
 }
 
-/** A track's drawers, in the order they sit under its lane: instruments (MIDI), loopers (soundscape), effects, automation and presets. */
-function LaneDrawers(p: { ctx: DrawCtx; id: string; kind: string; tc: TransportControls; refs: (r: { auto: HTMLElement }) => void }) {
+/**
+ * A track's drawers, in the order they sit under its lane: instruments (MIDI), loopers (soundscape), effects, automation and presets.
+ * A bus (and the master, `MASTER_TRACK`) has no instruments or loopers: effects, automation and presets only.
+ */
+function LaneDrawers(p: { ctx: DrawCtx; id: string; kind: string; tc?: TransportControls; refs: (r: { auto: HTMLElement }) => void }) {
   const { ctx, id } = p
   const { drawers, doc } = ctx
+  const root = id === MASTER_TRACK // (the master bus: a bus like the others, named in its labels)
   const effects = chainOf(ctx, id, false)
   const instruments = chainOf(ctx, id, true)
   let auto!: HTMLElement
@@ -213,9 +217,10 @@ function LaneDrawers(p: { ctx: DrawCtx; id: string; kind: string; tc: TransportC
         <DevicesRow ctx={ctx} devices={instruments} open={() => drawers.isOpen(id, 'synth')} label={() => 'synth'}
           add={{ title: 'add instrument', items: () => INSTRUMENTS.map((d) => [d.name, () => (d.type === LOFI_DRUM ? addDrum(doc, id) : addDevice(doc, id, d.type))] as [string, () => void]) }} />
       </Show>
-      <Show when={p.kind === 'soundscape'}><LoopersRow ctx={ctx} id={id} tc={p.tc} /></Show>
-      <DevicesRow ctx={ctx} devices={effects} open={() => drawers.isOpen(id, 'fx')} label={() => 'fx'} add={{ title: 'add effect', items: effectItems(ctx, id) }} />
-      <AutoSection ctx={ctx} scope={id} title="automation" ref={(el) => (auto = el)} />
+      <Show when={p.kind === 'soundscape'}><LoopersRow ctx={ctx} id={id} tc={p.tc!} /></Show>
+      <DevicesRow ctx={ctx} devices={effects} open={() => drawers.isOpen(id, 'fx')} label={() => (root && effects().length ? `master fx (${effects().length})` : root ? 'master fx' : 'fx')}
+        add={{ title: 'add effect', items: effectItems(ctx, id) }} />
+      <AutoSection ctx={ctx} scope={id} title={root ? 'master automation' : 'automation'} ref={(el) => (auto = el)} />
       <PresetsDrawer ctx={ctx} id={id} />
     </>
   )
@@ -223,31 +228,10 @@ function LaneDrawers(p: { ctx: DrawCtx; id: string; kind: string; tc: TransportC
   return out
 }
 
-/** The master bus: its effects, then its automation. */
-function MasterDrawers(p: { ctx: DrawCtx; refs: (r: { auto: HTMLElement }) => void }) {
-  const { ctx } = p
-  const effects = chainOf(ctx, MASTER_TRACK, false)
-  let auto!: HTMLElement
-  const out = (
-    <>
-      <DevicesRow ctx={ctx} devices={effects} open={() => ctx.drawers.isOpen(MASTER_TRACK, 'fx')} label={() => (effects().length ? `master fx (${effects().length})` : 'master fx')}
-        add={{ title: 'add effect', items: effectItems(ctx, MASTER_TRACK) }} />
-      <AutoSection ctx={ctx} scope={MASTER_TRACK} title="master automation" ref={(el) => (auto = el)} />
-    </>
-  )
-  p.refs({ auto })
-  return out
-}
-
 /** Append a track's drawers to `host` (its `.lane`, after the rows the timeline made). `refs.auto` is the automation section. */
-export function mountLaneDrawers(host: HTMLElement, ctx: DrawCtx, id: string, kind: string, tc: TransportControls) {
+/** (`tc`, the loopers' preview transport, is for soundscapes; buses and the master have none.) */
+export function mountLaneDrawers(host: HTMLElement, ctx: DrawCtx, id: string, kind: string, tc?: TransportControls) {
   let refs!: { auto: HTMLElement }
   const dispose = render(() => <LaneDrawers ctx={ctx} id={id} kind={kind} tc={tc} refs={(r) => (refs = r)} />, host)
-  return { refs, dispose }
-}
-
-export function mountMasterDrawers(host: HTMLElement, ctx: DrawCtx) {
-  let refs!: { auto: HTMLElement }
-  const dispose = render(() => <MasterDrawers ctx={ctx} refs={(r) => (refs = r)} />, host)
   return { refs, dispose }
 }
