@@ -24,7 +24,7 @@ import { projectMenu } from './projectMenu'
 import { h } from '../dom'
 import { mountScore, type ScoreView } from '../score/view'
 import { icon } from '../theme/icons'
-import { FRAME, GUTTER, HEADER, STRIPE, applyLayout } from './layout'
+import { FRAME, GUTTER, HEADER, applyLayout } from './layout'
 import { importFile, PLAYBACK_MAX_BYTES } from '../samples'
 import { discardTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, uploadAll, uploadTake } from '../takes'
 import type { Session } from '../project/session'
@@ -73,16 +73,6 @@ const scoreMode = {
   },
 }
 /** A score file (MIDI or MusicXML): its parts become MIDI tracks. */
-/** The frame a bus draws around its tracks, from the bus's colour (a tint, and the colour itself as the stripe down its left edge); the master's, around everything. */
-const busFrame = (colour: string): Frame => ({ fill: `color-mix(in srgb, ${colour} 38%, var(--bg))`, stripe: colour })
-type Frame = { fill: string; stripe: string }
-const MASTER_FRAME: Frame = { fill: 'var(--frame-master)', stripe: 'var(--line-strong)' }
-/**
- * A lane header's left shadows: one band per box around it (innermost first), each its frame's fill with the box's colour stripe at its
- * left edge (a shadow drawn over a wider one in the stripe colour), then the page's gutter.
- */
-const bands = (frames: Frame[]) =>
-  [...frames.flatMap((f, k) => [`${STRIPE - (k + 1) * FRAME}px 0 0 ${f.fill}`, `${-(k + 1) * FRAME}px 0 0 ${f.stripe}`]), `${-frames.length * FRAME - GUTTER}px 0 0 var(--bg)`].join(', ')
 const isScoreFile = (f: Pick<File, 'name' | 'type'>) => isMidiFile(f) || isMusicXmlFile(f)
 const importableFiles = (list: FileList | null | undefined) =>
   [...(list ?? [])].filter((f) => isScoreFile(f) || f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
@@ -308,7 +298,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   overlay.append(playhead, snapLine)
   const hint = h('div', { className: 'hint dim' }, 'drop audio or midi files here, or use + track.')
   // the root bus: a bus like the others, wrapping every track, with its own row (header, drawers) at the bottom (filled below)
-  const master = h('div', { className: 'lane master', 'data-kind': 'bus' }, laneBox)
+  const masterIn = h('div', { className: 'box-in' }, laneBox)
+  const master = h('div', { className: 'lane master', 'data-kind': 'bus' }, h('div', { className: 'stripe' }), masterIn)
   const dropLine = h('div', { className: 'drop-line', hidden: true }) // where a dragged track would land
   const content = h('div', { className: 'content' }, ruler, master, hint, addLink, bgPicker, midiPicker, overlay, dropLine)
   const scroll = h('div', { className: 'scroll' }, content)
@@ -588,8 +579,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const drawCtx: DrawCtx = { ...headCtx, auto: autoValues, deps: cardDeps, reordering, loops: loopDeps, rows: rowDeps, armed: () => sel.armedLooper, width: totalPx, scale }
   const masterBody = busBody(MASTER_TRACK)
   const masterRow = h('div', { className: 'lane-row master-row' }, masterHead, masterBody.el)
-  master.append(masterRow)
-  const masterDrawers = mountLaneDrawers(master, drawCtx, MASTER_TRACK, 'bus') // (the drawers follow the row)
+  masterIn.append(masterRow)
+  const masterDrawers = mountLaneDrawers(masterIn, drawCtx, MASTER_TRACK, 'bus') // (the drawers follow the row)
   disposers.push(masterDrawers.dispose, masterBody.dispose)
 
   function autoMenu(label: HTMLElement, target: () => ParamTarget, clickToo = true) {
@@ -761,9 +752,11 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
     const loopTc = transportControls({ title: 'play / stop the loops', small: true, onToggle: () => togglePreview(t.id, 'loops') })
     const row = h('div', { className: 'lane-row' }, head, body)
-    const kids = isBus ? h('div', { className: 'kids' }) : null // a bus is a box around its tracks, its own row at the bottom
-    const el = h('div', { className: 'lane' }, kids, row, src?.row ?? null)
-    const drawn = mountLaneDrawers(el, drawCtx, t.id, t.kind, loopTc) // (the drawers follow the rows: instruments, loopers, effects, automation, presets)
+    // a bus is a box around its tracks, its own row and drawers at the bottom, its colour stripe down the left of all of it
+    const kids = isBus ? h('div', { className: 'kids' }) : null
+    const inner = isBus ? h('div', { className: 'box-in' }, kids, row) : null
+    const el = inner ? h('div', { className: 'lane' }, h('div', { className: 'stripe' }), inner) : h('div', { className: 'lane' }, row, src?.row ?? null)
+    const drawn = mountLaneDrawers(inner ?? el, drawCtx, t.id, t.kind, loopTc) // (the drawers follow the rows: instruments, loopers, effects, automation, presets)
     const offBlocks = [isBus ? busRow!.dispose : mountLaneBody(body, clipsCtx, t.id, t.kind), src ? mountSourceBody(src.body, clipsCtx, t.id, src) : () => {}]
     dragTrack(head, t.id, dragDeps)
     const l: Lane = { id: t.id, el, row, body, head: mounted.refs, kids, auto: drawn.refs.auto, loopTc, src }
@@ -1033,8 +1026,6 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     const made = createMemo(mapArray(() => store.tracks(), (t: Track, i: Accessor<number>) => laneFor(t, i)))
     createEffect(() => {
       const byId = new Map(made().map((l) => [l.id, l]))
-      const flat = new Map(store.tracks().map((t, i) => [t.id, i]))
-      const frame = (id: string) => busFrame(trackColor(store.trackById[id] ?? {}, flat.get(id) ?? 0))
       const placed = new Map<Element, number>() // per box: how many of its lanes are in place, in front
       for (const r of rows()) {
         const l = byId.get(r.id)
@@ -1045,11 +1036,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
         placed.set(box, i + 1)
         l.el.hidden = r.hidden
         l.el.dataset.depth = String(r.depth)
-        // the boxes around it, innermost first, then the master's: the header's sticky left edge paints them while the list scrolls sideways
-        const frames = [...r.ancestors].reverse().map(frame).concat(MASTER_FRAME)
-        l.el.style.setProperty('--in', `${frames.length * FRAME}px`)
-        l.el.style.setProperty('--bands', bands(frames))
-        if (r.bus) l.el.style.setProperty('--frame', frame(r.id).fill)
+        l.el.style.setProperty('--in', `${(r.depth + 1) * FRAME}px`) // (the master's frame, then one per bus around it)
         if (l.kids) l.kids.hidden = collapsed.isCollapsed(r.id)
         l.el.classList.toggle('folded', r.bus && collapsed.isCollapsed(r.id))
       }

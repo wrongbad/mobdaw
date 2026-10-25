@@ -12,7 +12,7 @@ import { Bridge } from '../src/audio/bridge'
 import { CallQueue } from '../src/audio/schedule'
 import { encodeWavPlanar } from '../src/audio/wav'
 import { contentEnd } from '../src/audio/range'
-import { DRUM_KITS, EFFECT_PRESETS, INSTRUMENT_PRESETS, addDrumKit, effectPreset, instrumentPreset, addEffectPreset, addInstrument, applyPreset, presetsFor } from '../src/content/presets'
+import { DRUM_KITS, EFFECT_PRESETS, GM, INSTRUMENT_PRESETS, addDrumKit, effectPreset, instrumentPreset, addEffectPreset, addInstrument, applyPreset, presetsFor } from '../src/content/presets'
 import { MATCHED_PRESETS } from '../src/content/presets.matched'
 import { TEMPLATES } from '../src/content/templates'
 import { DEMO_BARS, DEMO_BPM, DEMO_NAME, buildDemo, demoContents } from '../src/content/demo'
@@ -192,11 +192,14 @@ describe('templates', () => {
     expect(Math.round(contentEnd(doc, SR) / bar)).toBe(DEMO_BARS)
     expect(getLanes(doc).length).toBeGreaterThanOrEqual(1)
     expect(getDevices(doc).filter((d) => d.trackId === MASTER_TRACK).length).toBeGreaterThanOrEqual(2)
-    // the band bus holds every track but the drums, and its compressor listens to the drums
+    // a drums bus (the kick on its own track, then the kit) and a band bus with every other track, whose compressor listens to the kick
     const tracks = getTracks(doc)
-    const drums = tracks.find((t) => t.name === 'drums')!, band = tracks.find((t) => t.kind === 'bus')!
-    expect(tracks.filter((t) => t.parent === band.id).map((t) => t.name)).toEqual(['bass', 'rhodes', 'pad', 'flute', 'vinyl dust'])
-    expect(getDevices(doc).find((d) => d.trackId === band.id && d.type === COMPRESSOR)?.input).toBe(drums.id)
+    const named = (n: string) => tracks.find((t) => t.name === n)!
+    const kids = (bus: string) => tracks.filter((t) => t.parent === named(bus).id).map((t) => t.name)
+    expect(kids('drums')).toEqual(['kick', 'kit'])
+    expect(kids('band')).toEqual(['bass', 'rhodes', 'pad', 'flute', 'vinyl dust'])
+    expect(getDevices(doc).find((d) => d.trackId === named('band').id && d.type === COMPRESSOR)?.input).toBe(named('kick').id)
+    expect(getNotes(doc).filter((n) => getClips(doc).find((c) => c.id === n.clipId)?.trackId === named('kit').id).some((n) => n.pitch === GM.kick)).toBe(false)
   })
 })
 

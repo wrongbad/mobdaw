@@ -142,9 +142,9 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 /* (the shadow keeps the gutter black while clips scroll under the pinned header) */
 .head { left: var(--gutter); width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); }
 /* A lane inside boxes (the master's, a bus's: `--in` is their frames' width, set from the timeline) has its sticky left column moved in
-   by that much and narrowed to match, so every lane's time axis starts at the same x. Its left shadows (`--bands`) paint the frames
-   beside it while the list scrolls sideways. */
-.lane-row > .head, .fx-toggle, .fx-head { left: calc(var(--gutter) + var(--in, 0px)); width: calc(var(--head) - var(--in, 0px)); box-shadow: var(--bands, calc(-1 * var(--gutter)) 0 0 var(--bg)); }
+   by that much and narrowed to match, so every lane's time axis starts at the same x. Its shadow blanks everything to its left (the
+   boxes' stripes sit above it), so the left of the list stays still while it scrolls sideways. */
+.lane-row > .head, .fx-toggle, .fx-head { left: calc(var(--gutter) + var(--in, 0px)); width: calc(var(--head) - var(--in, 0px)); box-shadow: calc(-1 * (var(--gutter) + var(--in, 0px))) 0 0 var(--bg); }
 .corner { border-right: 1px solid var(--line); }
 .ruler-body { position: relative; height: 100%; overflow: hidden; }
 .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
@@ -237,7 +237,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 .tab.on { color: var(--tc, var(--accent)); box-shadow: inset 0 -1px 0 var(--tc, var(--accent)); }
 .tab[hidden] { display: none; }
-.lane.master > .lane-row { height: 72px; }
+.lane.master > .box-in > .lane-row { height: 72px; }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {
@@ -573,7 +573,7 @@ button.danger:hover { color: var(--danger); }
 .pedal-st { font-size: 11px; color: var(--faint); cursor: default; white-space: nowrap; }
 .pedal-st.rec { color: var(--danger); }
 .pedal-row { margin-bottom: 6px; }
-.lane.current > .lane-row > .head { box-shadow: var(--bands, calc(-1 * var(--gutter)) 0 0 var(--bg)), inset 3px 0 0 var(--tc); }
+.lane.current > .lane-row > .head { box-shadow: calc(-1 * (var(--gutter) + var(--in, 0px))) 0 0 var(--bg), inset 3px 0 0 var(--tc); }
 .clip.live-loop { --clip: color-mix(in srgb, var(--tc, var(--accent)) 16%, var(--bg)); --clip-head: color-mix(in srgb, var(--tc, var(--accent)) 40%, var(--bg)); pointer-events: none; z-index: 1; }
 .clip.live-loop.forever { background-image: linear-gradient(to right, transparent calc(100% - 24px), var(--bg)), linear-gradient(var(--clip-head), var(--clip-head)); background-size: 100% 100%, 100% 15px; background-position: 0 0, top; background-repeat: no-repeat; }
 /* presets drawer: a column per group (heading over plain-text buttons), side by side, scrolling sideways when narrow */
@@ -606,18 +606,19 @@ button.danger:hover { color: var(--danger); }
 /* ===== buses (docs/routing.md): bus rows, the band that spans a bus's tracks, the fold button, the drag line ===== */
 .fold { flex: none; display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; margin-left: -2px; border-radius: var(--r-sm); background: none; color: var(--tc, var(--dim)); }
 .fold:hover { background: var(--line); color: var(--fg); }
-/* A bus is a box around its tracks: a thin frame in its colour (`--frame`, set from the timeline) on the top and left, the tracks inside,
-   and its own row (header, then a body that is only a note: click it to fold) with its drawers at the bottom. The master is the same box
-   around everything. Folded, a bus is only its row. */
-.lane[data-kind=bus] { background: var(--frame, var(--panel)); box-shadow: inset 3px 0 0 var(--tc); } /* the stripe: the row's colour bar, up the whole box */
-.lane.master { --frame: var(--frame-master); margin: var(--gutter) 0 0 var(--gutter); }
-.content { --frame-master: color-mix(in srgb, var(--line-strong) 45%, var(--bg)); }
+/* A bus is a box around its tracks: a stripe in its colour down its whole left edge (sticky, like the headers), the tracks inside it moved
+   in by `--frame-w`, and its own row (header, then a body that is only a note: click it to fold) with its drawers at the bottom. No fill:
+   the gaps between its tracks stay the page's. The master is the same box around everything. Folded, a bus is only its row. */
+.lane[data-kind=bus] { display: flex; background: none; }
+.stripe { position: sticky; left: calc(var(--gutter) + var(--in, 0px)); z-index: 3; flex: none; width: 3px; margin-right: -3px; background: var(--tc); }
+.box-in { flex: 1; min-width: 0; }
+.box-in > :not(.kids) { background: var(--lane); }
+.lane.master { margin: var(--gutter) 0 0 var(--gutter); }
 .lanes, .kids { padding: 0 0 var(--gutter) var(--frame-w); }
 .kids[hidden] { display: none; }
-.lane[data-kind=bus] > .lane-row > .head { background: color-mix(in srgb, var(--tc, var(--line-strong)) 10%, var(--lane)); }
-.lane[data-kind=bus] > .lane-row, .lane[data-kind=bus] > .fx-row, .lane[data-kind=bus] > .src-row { background: var(--lane); }
+.lane[data-kind=bus] > .box-in > .lane-row > .head { background: color-mix(in srgb, var(--tc, var(--line-strong)) 10%, var(--lane)); }
 .bus-body { display: flex; align-items: center; background: color-mix(in srgb, var(--tc, var(--line-strong)) 5%, var(--lane)); cursor: pointer; }
-.lane.master > .lane-row > .bus-body { cursor: default; }
+.lane.master > .box-in > .lane-row > .bus-body { cursor: default; }
 .bus-note { position: sticky; left: calc(var(--head) + var(--gutter) + 12px); font-size: 11px; color: var(--dim); white-space: nowrap; }
 .lane[hidden] { display: none; }
 .lane.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); }

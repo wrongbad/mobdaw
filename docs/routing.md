@@ -55,13 +55,15 @@ absent `input` means none.
 
 ## UI
 
-- **A bus is a box around its tracks**: a thin frame in the bus's colour on the top and left, its tracks inside (in `order`; `treeRows`
-  in `client/src/project/buses.ts`, from `trackTree`, is the list every place in the timeline uses), and the bus's own row at the bottom:
-  a header (name, fold button, fader and pan, mute, solo, fx / auto / presets tabs) tinted with its colour, a body that is only a note
-  ("3 tracks"; click it to fold), and its drawers below that. Buses nest (box in a box): the DOM nests too (a bus lane's `.kids`). Each
-  frame takes a gutter's width off the left of the headers inside it, so every lane's time axis still starts at the same x; while the
-  list scrolls sideways the headers' left shadows (`--bands`) paint the frames. Folding is local view state (`createCollapsed`, like the
-  drawers): a folded bus is only its row; its lanes stay mounted, hidden.
+- **A bus is a box around its tracks**: a stripe in the bus's colour down its whole left edge, its tracks inside (in `order`; `treeRows`
+  in `client/src/project/buses.ts`, from `trackTree`, is the list every place in the timeline uses) moved in by a frame's width, and the
+  bus's own row at the bottom: a header (name, fold button, fader and pan, mute, solo, fx / auto / presets tabs) tinted with its colour,
+  a body that is only a note ("3 tracks"; click it to fold), and its drawers below that. No fill: the gaps between its tracks stay the
+  page's. Buses nest (box in a box): the DOM nests too (a bus lane holds `.stripe` and `.box-in`, which holds `.kids`, its row and its
+  drawers). Each frame takes its width off the left of the headers inside it, so every lane's time axis still starts at the same x. The
+  stripes are sticky like the headers and the headers' shadows blank what is left of them, so the left of the list does not move when it
+  scrolls sideways. Folding is local view state (`createCollapsed`, like the drawers): a folded bus is only its row; its lanes stay
+  mounted, hidden.
 - **Moving tracks**: drag a track header (`ui/trackDrag.ts`; a finger long-presses first, as with device cards). The lane follows the
   pointer and a line shows where it lands: the top edge of a lane is in front of it (for an open bus, the frame above its first track), the
   space under a bus's last track and the top of its own row are into the bus (last), the rest of that row is behind the bus, the rest of

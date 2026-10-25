@@ -7,7 +7,8 @@
 //   bars 21-28  B       Dm9 | Bbmaj9 | Gm9 | A7b9, twice: busier comping, clap on the backbeat, a new melody; a snare roll
 //   bars 29-32  outro   A's chords once more, resolving to Fmaj9; the drums thin out and the master reverb opens up
 // The loop region (off) covers A and A', bars 5-20. The piano's voicings move by step from chord to chord.
-// Mix: the drums get a 100 Hz bell boost; every other track sums into a "band" bus whose compressor is side-chained to the drums.
+// Mix: the kick and the rest of the kit sit in a "drums" bus with a 100 Hz bell boost; every other track sums into a "band" bus whose
+// compressor is side-chained to the kick.
 import * as Y from 'yjs'
 import { DELAY, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum, setParent } from '@mobdaw/shared'
 import { MASTER_TRACK, automate, barPos, clip, initProject, rng, track, type ClipWriter, type Song } from './compose'
@@ -49,20 +50,26 @@ export function buildDemo(doc: Y.Doc) {
     const nudge = (beat: number, ticks = 10) => Math.max(0, beat + ((r() - 0.5) * 2 * ticks) / 960)
 
     // --- tracks (top to bottom), colours from TRACK_COLORS
-    const drums = track(s, 'drums', 'midi', { color: 4, gain: 1 })
+    // the drums: a bus holding the kick on its own track (it drives the band's side chain) and the rest of the kit
+    const drums = track(s, 'drums', 'bus', { color: 4 })
+    const kick = track(s, 'kick', 'midi', { color: 5, gain: 1 })
+    const kit = track(s, 'kit', 'midi', { color: 4, gain: 1 })
+    for (const t of [kick, kit]) setParent(doc, t, drums)
     const bass = track(s, 'bass', 'midi', { color: 2, gain: 0.65 })
     const keys = track(s, 'rhodes', 'midi', { color: 0, gain: 0.6, pan: -0.1 })
     const pad = track(s, 'pad', 'midi', { color: 1, gain: 0.4, pan: 0.1 })
     const lead = track(s, 'flute', 'midi', { color: 3, gain: 0.85, pan: 0.15 })
     const dust = track(s, 'vinyl dust', 'midi', { color: 7, gain: 1 })
-    // everything but the drums sums into one bus, which ducks under the drums (below)
+    // everything but the drums sums into one bus, which ducks under the kick (below)
     const band = track(s, 'band', 'bus', { color: 6 })
     for (const t of [bass, keys, pad, lead, dust]) setParent(doc, t, band)
 
     // --- instruments and inserts
-    addDrumKit(doc, drums, drumKit('tape')!)
+    const tape = drumKit('tape')!
+    addDrumKit(doc, kick, { ...tape, drums: tape.drums.filter((d) => d.key === GM.kick) })
+    addDrumKit(doc, kit, { ...tape, drums: tape.drums.filter((d) => d.key !== GM.kick) })
     addDevice(doc, drums, SIMPLE_FILTER, {}, { 0: 5, 1: 100, 2: 0.7071, 3: 10 }) // a bell at 100 Hz, +10 dB: the kick's weight
-    addDevice(doc, drums, COMPRESSOR, {}, { 0: -20, 1: 3, 2: 0.1, 3: 60, 4: 6 }) // drum bus: shaves the noise peaks, lifts the kick
+    addDevice(doc, drums, COMPRESSOR, {}, { 0: -20, 1: 3, 2: 0.1, 3: 60, 4: 6 }) // shaves the noise peaks, lifts the kick
     addInstrument(doc, bass, instrumentPreset('round-bass')!)
     addInstrument(doc, keys, instrumentPreset('electric-piano')!)
     addDevice(doc, keys, TREMOLO, {}, { 0: 4.2, 1: 0.22, 2: 0, 3: 0.7 }) // the Rhodes' auto-pan
@@ -72,8 +79,8 @@ export function buildDemo(doc: Y.Doc) {
     addDevice(doc, lead, DELAY, {}, { 0: 0.25, 1: Math.round((0.75 * 60000) / DEMO_BPM), 2: 0.38, 3: 0.3, 4: 0.2, 5: 0, 6: 2600, 7: 0 })
     addDevice(doc, lead, REVERB, {}, { 0: 0.22, 1: 0.6, 2: 0.5, 3: 20 })
     addDrum(doc, dust, { key: 60, name: 'crackle', params: { 0: 4500, 1: 0.1, 2: 3, 3: 0.6 } })
-    // the band bus: a compressor keyed on the drums, so the band breathes with the kick
-    addDevice(doc, band, COMPRESSOR, { input: drums }, { 0: -30, 1: 3, 2: 1, 3: 150, 4: 6 })
+    // the band bus: a compressor keyed on the kick alone, so the band breathes with it (not with the snare and hats)
+    addDevice(doc, band, COMPRESSOR, { input: kick }, { 0: -30, 1: 3, 2: 1, 3: 150, 4: 6 })
     // master: glue compression, then a little room
     addEffectPreset(doc, MASTER_TRACK, { id: 'demo-master', name: 'demo master', devices: [{ type: COMPRESSOR, params: { 0: -18, 1: 2.5, 2: 25, 3: 180, 4: 2 } }] })
     const masterVerb = addEffectPreset(doc, MASTER_TRACK, effectPreset('small-room')!)[0]
@@ -82,7 +89,7 @@ export function buildDemo(doc: Y.Doc) {
     automate(s, pad, 'effect', padFilter, SIMPLE_FILTER, 1, [[0, 260], [4, 3500]])
     automate(s, MASTER_TRACK, 'effect', masterVerb, REVERB, 0, [[0, 0.18], [28, 0.18], [32, 0.4]])
 
-    writeDrums(s, drums, human, nudge)
+    writeDrums(s, kick, kit, human, nudge)
     writeBass(s, bass, human, nudge)
     writeKeys(s, keys, pad, human)
     writeLead(s, lead, human, nudge)
@@ -93,8 +100,15 @@ export function buildDemo(doc: Y.Doc) {
 type Human = (v: number, amt?: number) => number
 type Nudge = (beat: number, ticks?: number) => number
 
-function writeDrums(s: Song, t: string, human: Human, nudge: Nudge) {
+/** The drum parts, written as one kit: each clip's kick hits go to the same span on the kick track. */
+function writeDrums(s: Song, kickT: string, kitT: string, human: Human, nudge: Nudge) {
   const K = GM.kick, S = GM.snare, H = GM.closedHat, O = GM.openHat, R = GM.rim, CL = GM.clap, LT = GM.lowTom, MT = GM.midTom
+  const drumClip = (bar: number, bars: number): ClipWriter => {
+    const o = { bar, bars, drums: true }
+    const kit = clip(s, kitT, o)
+    let kick: ClipWriter | null = null // (made at its first hit: the intro has none)
+    return { id: kit.id, note: (beat, pitch, dur, v) => (pitch === K ? (kick ??= clip(s, kickT, o)) : kit).note(beat, pitch, dur, v) }
+  }
   /** One bar of hits: [16th step, key, velocity]. */
   type Hit = [number, number, number]
   const play = (c: ClipWriter, bar: number, hits: Hit[]) => {
@@ -124,12 +138,12 @@ function writeDrums(s: Song, t: string, human: Human, nudge: Nudge) {
   ]
 
   // intro: two bars of nothing, then rim and soft hats, and a pickup
-  const intro = clip(s, t, { bar: 0, bars: 4, drums: true })
+  const intro = drumClip(0, 4)
   play(intro, 2, [[4, R, 0.5], [12, R, 0.55], ...hats(0, 16, 0.3, 0.18)])
   play(intro, 3, [[4, R, 0.5], [12, R, 0.55], ...hats(0, 12, 0.32, 0.2), [13, S, 0.3], [14, S, 0.45], [15, S, 0.6]])
 
   for (const [start, len] of [[4, 8], [12, 8]]) {
-    const c = clip(s, t, { bar: start, bars: len, drums: true })
+    const c = drumClip(start, len)
     for (let b = 0; b < len; b++) {
       const n = start + b
       if (n === 19) {
@@ -138,7 +152,7 @@ function writeDrums(s: Song, t: string, human: Human, nudge: Nudge) {
       } else play(c, b, grooveA(n))
     }
   }
-  const cb = clip(s, t, { bar: 20, bars: 8, drums: true })
+  const cb = drumClip(20, 8)
   for (let b = 0; b < 8; b++) {
     const n = 20 + b
     if (n === 27) {
@@ -146,7 +160,7 @@ function writeDrums(s: Song, t: string, human: Human, nudge: Nudge) {
       play(cb, b, [[0, K, 0.95], [4, S, 0.85], [10, K, 0.8], ...hats(0, 8), [8, S, 0.35], [10, S, 0.45], [12, S, 0.55], [13, S, 0.62], [14, S, 0.72], [15, S, 0.85], [15, O, 0.3]])
     } else play(cb, b, grooveB(n))
   }
-  const out = clip(s, t, { bar: 28, bars: 4, drums: true })
+  const out = drumClip(28, 4)
   play(out, 0, [[0, K, 0.95], ...grooveA(0).filter(([, k]) => k !== K)])
   play(out, 1, grooveA(3))
   play(out, 2, [[0, K, 0.85], [4, S, 0.6], [10, K, 0.6], ...hats(0, 8, 0.4, 0.22)])
