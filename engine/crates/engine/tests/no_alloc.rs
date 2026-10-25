@@ -83,6 +83,27 @@ fn process_never_allocates_across_a_busy_scene() {
             e.pad_upsert(5000 + t * 10 + g, t, (g * 12_000) as i64 + 1000 * t as i64, 7_000);
         }
     }
+    // routing: a bus holding tracks 1 and 2 (nested in a second bus), a send on track 3 read by a return, a compressor on
+    // track 5 keyed by track 6, a recv of the master's tap, and a tap cycle
+    e.track_upsert(50, 3, false, false, false);
+    e.track_upsert(51, 3, false, false, false);
+    e.track_set_parent(50, 51);
+    e.track_set_parent(1, 50);
+    e.track_set_parent(2, 50);
+    e.device_upsert(1650, 50, 9, 1e6, false); // the bus's mix device
+    e.device_upsert(1651, 51, 6, 1.0, false); // a tape delay on the outer bus
+    e.device_upsert(1301, 3, 12, 2.5, false); // fx send on track 3
+    e.track_upsert(60, 0, false, false, false);
+    e.device_upsert(1601, 60, 13, 1.0, false); // fx recv on a return
+    e.device_input(1601, engine::device::Input::Send(1301));
+    e.device_upsert(1602, 60, 13, 1.5, false);
+    e.device_input(1602, engine::device::Input::Master); // reads the master tap: a cycle through the master
+    e.device_upsert(1305, 5, 4, 3.5, false); // compressor on track 5
+    e.device_input(1305, engine::device::Input::Track(6));
+    e.device_upsert(1701, 7, 13, 2.5, false); // 7 and 8 hear each other
+    e.device_input(1701, engine::device::Input::Track(8));
+    e.device_upsert(1801, 8, 13, 2.5, false);
+    e.device_input(1801, engine::device::Input::Track(7));
     // automation: a filter cutoff and a synth rolloff, a master filter, and a looper's level, speed and tape
     e.device_upsert(900, engine::MASTER_TRACK, 1, 1.0, false);
     for (lane, kind, target, param, min, max, scale) in [
@@ -133,6 +154,12 @@ fn process_never_allocates_across_a_busy_scene() {
             30 => e.seek((block as i64 * 53) % 90_000),
             40 => e.track_upsert(3, 0, block % 2 == 0, block % 3 == 0, false),
             50 => e.param_set(423, 6, 1.5),
+            15 => e.track_upsert(50, 3, block % 2 == 0, block % 3 == 0, false), // mute / solo the bus
+            25 => {
+                e.param_set(1301, 0, -((block % 40) as f32)); // send and recv gains
+                e.param_set(1601, 0, (block % 12) as f32 - 6.0);
+            }
+            45 => e.param_set(1650, 0, (block % 5) as f32 * 0.4),
             35 => {
                 // bore: smoothed knobs, a note-time knob and the bore switch
                 e.param_set(1522, 7, (block % 10) as f32 * 0.1);

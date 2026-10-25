@@ -4,7 +4,7 @@ import { toggleMute } from '../src/audio/loopPedal'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addAudioClip, addClickTrack, addRegion, ensureTimeline, getRegions, getTimeMap, setRegion, addDevice, addDrum, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, getClips, setLaneState, setMixParam, setParam, updateClip, updateDevice, updateLaneLfo, updateTrack, type SampleMeta } from '@mobdaw/shared'
+import { COMPRESSOR, FX_RECV, FX_SEND, addBus, setParent, addAudioClip, addClickTrack, addRegion, ensureTimeline, getRegions, getTimeMap, setRegion, addDevice, addDrum, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, getClips, setLaneState, setMixParam, setParam, updateClip, updateDevice, updateLaneLfo, updateTrack, type SampleMeta } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 import { CallQueue } from '../src/audio/schedule'
 import { readMeters } from '../src/audio/meters'
@@ -446,5 +446,57 @@ describe('bridge + real engine.wasm', () => {
     samples(4096)
     readMeters(x, e)
     expect(readMeters(x, e).silent).toBe(true)
+  })
+
+  it('routing: a bus sums its children through its own fader, a return hears a send, and the key ducks', async () => {
+    const doc = new Y.Doc()
+    const a = addTrack(doc, 'a')
+    const b = addTrack(doc, 'b')
+    const ret = addTrack(doc, 'ret')
+    const bus = addBus(doc, 'bus')
+    const dc = new Float32Array(SR * 4).fill(0.25)
+    addSample(doc, { hash: 'dc', name: 'dc', duration: 4, size: SR * 16, mime: 'audio/wav' })
+    addAudioClip(doc, { trackId: a, sourceHash: 'dc', start: 0, length: SR * 4 })
+    addAudioClip(doc, { trackId: b, sourceHash: 'dc', start: 0, length: SR * 4 })
+    setParent(doc, a, bus)
+    setParent(doc, b, bus)
+    setMixParam(doc, bus, 'pan', -1) // left only, so the sums are easy to read
+    setMixParam(doc, bus, 'gain', 0.5)
+    setMixParam(doc, ret, 'pan', -1)
+    setMixParam(doc, a, 'pan', -1)
+    setMixParam(doc, b, 'pan', -1)
+    const { sink, samples, x, e } = host()
+    const bridge = new Bridge(doc, sink, async () => [dc], SR)
+    await tick()
+    bridge.play(0)
+    samples(4800)
+    expect(samples(256)[255]).toBeCloseTo((0.25 + 0.25) * 0.5, 5) // (a + b) through the bus fader
+
+    // a return fed by a's send (pre-fader of nothing: after a's fx)
+    const send = addDevice(doc, a, FX_SEND)
+    addDevice(doc, ret, FX_RECV, { input: send })
+    samples(4800)
+    expect(samples(256)[255]).toBeCloseTo(0.25 + 0.25, 5) // + the return (0.25 on the master)
+
+    // the bus muted: its children go, the return (a tap taken before the mute) stays
+    updateTrack(doc, bus, { muted: true })
+    samples(4800)
+    expect(samples(256)[255]).toBeCloseTo(0.25, 5)
+    updateTrack(doc, bus, { muted: false })
+
+    // a compressor on b keyed by a: b is quiet (under the threshold on its own), a is loud
+    setMixParam(doc, bus, 'gain', 1)
+    updateClip(doc, getClips(doc).find((c) => c.trackId === b)!.id, { gain: 0.2 })
+    const comp = addDevice(doc, b, COMPRESSOR, { input: a })
+    setParam(doc, comp, 0, -20)
+    setParam(doc, comp, 1, 20)
+    samples(9600)
+    const ducked = samples(256)[255]
+    updateDevice(doc, comp, { input: undefined })
+    samples(24000)
+    const free = samples(256)[255]
+    expect(free).toBeGreaterThan(ducked + 0.02)
+    expect(readMeters(x, e).silent).toBe(false)
+    bridge.destroy()
   })
 })

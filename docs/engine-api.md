@@ -132,17 +132,42 @@ A live source is a source that grows while it is recorded. It is playable from `
 
 ## Tracks
 ```
-engine_track_upsert(e, h, kind: u32 /*0 audio, 1 midi*/,
+engine_track_upsert(e, h, kind: u32 /*0 audio, 1 midi, 2 soundscape, 3 bus*/,
                     muted: u32, soloed: u32, solo_safe: u32)
+engine_track_set_parent(e, h, parent: u32)   // the bus h sums into, or 0xFFFFFFFF (MASTER_TRACK) for the master
+engine_track_order(e, h, order: f64)         // the track's document `order`: ties of the schedule and the order children are summed in
 engine_track_remove(e, h)       // also stops rendering its clips/devices (bridge removes those too)
 ```
 - **No fader or pan on the track:** those are the track's **mix device** (kind 9, below), pinned last in its chain
   by the document schema. The engine only applies mute/solo, as a 10 ms linear ramp of a 0/1 gain.
-- **Solo:** if any track is soloed, non-soloed tracks are silent. Mute always wins.
+- **Solo:** if any track is soloed, the rest are silent, except what the soloed ones reach: the audible set is the soloed
+  nodes, every descendant of a soloed bus, and every node downstream of an audible node through a tap (a recv's or a
+  compressor key's reader), closed over parents (a bus carrying an audible child is audible). Mute always wins.
   A `solo_safe` track (the metronome's click track) ignores other tracks' solo, so it stays audible;
   its own mute still applies.
-- **Signal flow:** clips (audio) or instrument outputs (midi, summed) → effects in `order` →
-  (the mix device is the last effect) → mute/solo gain → master sum → **global fx chain**.
+- **Signal flow:** clips (audio) or instrument outputs (midi, summed) plus the outputs of the track's children (a bus) →
+  effects in `order` (the implicit tap is taken just before the mix device) → (the mix device is the last effect) →
+  mute/solo gain → the track's output, which its parent sums → … → master sum → **global fx chain** (its own mix device last;
+  the master's implicit tap is taken before it).
+- **Buses** (docs/routing.md): `kind` 3 makes a track a bus. It has the same chain, mix device, mute, solo and meter as any
+  track; it just has no clips of its own, and its chain input is the sum of its children's outputs. A bus can be
+  silent (and sleep) when all its children are.
+- **`engine_track_set_parent(h, parent)`**: where `h` (a track or bus) sums. Only a `parent` that exists and is a bus counts;
+  a missing one (deleted, not sent yet), a non-bus, `h` itself, or any member of a parent loop falls back to the master
+  (in a loop the member with the smallest handle goes to the master; the bridge never sends loops, it sends
+  `effectiveParent` from `@mobdaw/shared`). A new track is on the master. The parent is re-resolved after every structural
+  command, so it may be sent before the bus exists, and a bus that comes back is picked up again. Unknown `h`: no-op. The
+  bridge sends it for every track whose effective parent changed (it is a function of the whole track list).
+- **`engine_track_order(h, order)`**: the track's `order` from the document (default 0; non-finite is 0). Handles are chosen per
+  client, the document's order is shared, so the engine breaks every tie with it (then the handle): the schedule's ties, which
+  node runs first where only a cycle remains, and the order a bus sums its children in (float sums depend on it). Without it two
+  peers could cut a feedback loop in different places and hear different audio. The bridge sends it for every track whose order
+  is not 0 and again when it changes. Unknown `h`: no-op.
+- **Order of work.** Nodes (tracks, buses, then the master) run in an order built from the edges (child before parent, tap
+  writer before reader), ties by track order (document `order`, then handle). Where only cycles remain the first remaining node in track order runs next; a read of
+  a tap or output whose writer has not run yet this block gives the writer's previous block (a cycle costs exactly one block
+  of delay on the cut edge, deterministically). The master runs last, so reading its tap is always last block's.
+  `Engine::schedule()` returns the order (handles, master last) for tests.
 - **Global fx:** a device upserted with `track = 0xFFFFFFFF` (`MASTER_TRACK`) sits on the master
   bus instead of a track. Those devices run in `order` over the summed mix, before the test voice.
   In the doc this is a device whose `trackId` is `'master'`.
@@ -300,6 +325,7 @@ engine_note_remove(e, h)
 engine_device_upsert(e, h, track: u32, kind: u32, order: f64, bypass: u32)
 engine_device_keys(e, h, lo: u32, hi: u32)                 // instrument note range, MIDI pitches, inclusive
 engine_device_remove(e, h)
+engine_device_input(e, h, kind: u32, source: u32)          // the tap a device reads (docs/routing.md), see below
 engine_param_set(e, device: u32, param: u32, value: f32)   // smoothed per engine.md §6.4
 ```
 - Devices run in ascending `order` on their track.
@@ -310,7 +336,18 @@ engine_param_set(e, device: u32, param: u32, value: f32)   // smoothed per engin
   an instrument receives. The default is 0..127. It is a property of the device, not a param (never
   smoothed or automated), it is ignored by effects, and an unknown device is a silent no-op. Changing
   the kind of a handle keeps its range.
-- **Changing kind** on an existing handle resets the device (but not its note range).
+- **Changing kind** on an existing handle resets the device (but not its note range or its input).
+- **Tap input** (`engine_device_input`): which tap an `fx recv` (kind 13) adds and a compressor (kind 4) uses as its key.
+  `kind` 0 = none; 1 = the implicit tap of track or bus `source` (a track handle: its chain output before the mix device, so
+  pre-fader and pre-mute); 2 = the master's implicit tap (`source` ignored); 3 = the tap of the `fx send` (kind 12) device `source`
+  (a device handle); 4 = a tap that was named and is gone (the bridge sends it when the document's `input` names something that no
+  longer exists). It is resolved after every structural command, so it may name something that does not exist yet; a tap that
+  does not exist reads silence (a recv adds nothing; a compressor keyed by it never compresses: the key is silence), as docs/routing.md says; no input at all
+  (`kind` 0) is the compressor keying off its own input, as always. Other device kinds
+  ignore it. Unknown `h`: no-op. The bridge maps document tap ids to these handles (an absent `input` sends 0, a missing tap 4). Taps are only
+  written when something reads them.
+- A recv, a keyed compressor and a send are ordinary chain devices: they run in `order`, can be bypassed (a bypassed send's tap
+  reads silence) and automated (`gain`).
 - Defaults apply until `param_set` is called.
 
 ### Automation
@@ -414,8 +451,8 @@ on the louder channel, 6 dB soft knee, one shared gain for both channels.
 
 - Under the threshold with no makeup the gain is exactly 1. Bypass resets the envelope.
 - **Optional key input** (docs/routing.md). The device's `input` (a tap id, document field, not a param) names a signal the detector
-  reads instead of the compressor's own input; the gain it computes still applies to the compressor's own input. Absent, or a tap that
-  no longer exists: keys off its own input, as before. The tap is the implicit tap of a track or bus (post-fx, pre-fader, pre-mute) or a send.
+  reads instead of the compressor's own input; the gain it computes still applies to the compressor's own input. Absent: it keys off its own input, as before. A tap that
+  no longer exists reads silence (so it never compresses). The tap is the implicit tap of a track or bus (post-fx, pre-fader, pre-mute) or a send.
 
 **kind 5: Tremolo** (effect). Amplitude modulation by an LFO, `dsp::tremolo`: `gain = 1 - depth·(0.5 - 0.5·lfo)`,
 so the gain swings between `1 - depth` and 1 and the effect only takes level away.

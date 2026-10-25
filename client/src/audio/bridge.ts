@@ -3,8 +3,8 @@
 // by id: present and parented -> upsert, otherwise -> remove. Command order never matters.
 import * as Y from 'yjs'
 import {
-  KEY_MAX, KEY_MIN, LFO_DEFAULTS, foreverSamples, isForever, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
-  looperParamDef, loopersMap, metaMap, notesMap, padsMap, paramToPos, pointsMap, regionsMap, resolveTarget, samplesMap, tracksMap, getTimeMap,
+  FX_SEND, KEY_MAX, KEY_MIN, LFO_DEFAULTS, foreverSamples, isForever, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
+  looperParamDef, loopersMap, metaMap, notesMap, padsMap, paramToPos, pointsMap, regionsMap, resolveTarget, samplesMap, tracksMap, getTimeMap, getTracks, effectiveParent,
   type AudioClip, type Clip, type Device, type Lane, type Looper, type MidiClip, type Pad, type Note, type ParamTarget, type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
 import { ENGINE_PPQ, bakeClick, bakeClip, engineBpm, type BakedClip, type BakedNote, type Window } from './bake'
@@ -155,6 +155,12 @@ export class Bridge {
   private sent = new Map<number, { sig: string; notes: Map<string, { h: number; v: string }> }>()
   /** Click-role track ids (their MIDI clips are not sent; the click is generated from the time map). */
   private clicks = new Set<string>()
+  /** The parent handle last sent for each track (absent = the master, which is what a new engine track has). */
+  private sentParent = new Map<string, number>()
+  /** The document `order` last sent for each track with `engine_track_order` (absent = 0, a new engine track's). */
+  private sentOrder = new Map<string, number>()
+  /** The device input (`kind,source`) last sent for each device (absent = none, what a new engine device has). */
+  private sentInput = new Map<string, string>()
 
   constructor(
     private doc: Y.Doc,
@@ -377,12 +383,14 @@ export class Bridge {
   private syncAll() {
     for (const n of getNotes(this.doc)) this.cacheNote(n)
     for (const t of tracksMap(this.doc).values()) this.upsertTrack(t.toJSON() as Track)
+    this.syncParents()
     for (const c of getClips(this.doc)) this.upsertClip(c)
     for (const d of getDevices(this.doc)) this.upsertDevice(d, ALL)
     for (const l of getLoopers(this.doc)) this.upsertLooper(l)
     for (const p of getPads(this.doc)) this.upsertPad(p)
     for (const l of getLanes(this.doc)) this.upsertLane(l)
     for (const p of getPoints(this.doc)) this.upsertPoint(p)
+    this.syncInputs()
   }
 
   private cacheNote(n: Note) {
@@ -422,11 +430,17 @@ export class Bridge {
       else if (ev.path[1] === 'params') for (const p of ev.keys.keys()) of(String(ev.path[0])).params.add(p)
       else of(String(ev.path[0])).fields = true
     }
+    let structural = false
     for (const [id, d] of dirty) {
       const existed = this.handles[kind].has(id)
       const live = this.upsertById(kind, id, d)
       if (live !== existed) this.touchChildren(kind, id) // appeared or vanished: children may now (not) render
+      if (kind === 'device' && (d.all || d.fields)) structural = true
     }
+    // Routing is global: a track changing kind, parent or existence moves other tracks' effective parents, and a track
+    // or send appearing or vanishing changes what the taps that name it resolve to. (A knob move touches neither.)
+    if (kind === 'track') (this.syncParents(), (structural = true))
+    if (structural) this.syncInputs()
   }
 
   private map(kind: Kind) {
@@ -473,6 +487,8 @@ export class Bridge {
     const h = this.handles[kind].get(id)
     if (h == null) return
     this.handles[kind].delete(id)
+    if (kind === 'track') (this.sentParent.delete(id), this.sentOrder.delete(id))
+    if (kind === 'device') this.sentInput.delete(id)
     if (kind === 'track') this.dropPreviews(id), this.trackIds.delete(h), this.dropClick(id)
     if (kind === 'clip') this.dropBaked(h)
     const fn = {
@@ -547,7 +563,7 @@ export class Bridge {
   }
 
   private upsertTrack(t: Track): boolean {
-    const code = ({ audio: 0, midi: 1, soundscape: 2 } as Partial<Record<Track['kind'], number>>)[t.kind] // (buses: the engine side of docs/routing.md)
+    const code = ({ audio: 0, midi: 1, soundscape: 2, bus: 3 } as Partial<Record<Track['kind'], number>>)[t.kind]
     if (code == null) return false
     this.sink.call('engine_track_upsert', this.handle('track', t.id), code, +t.muted, +t.soloed, +(t.role === 'click'))
     const click = t.role === 'click' && t.kind === 'midi'
@@ -559,6 +575,70 @@ export class Bridge {
     }
     if (click) this.bakeClickTrack(t.id)
     return true
+  }
+
+  /**
+   * Send every track's effective parent (docs/routing.md) that differs from what the engine has. The effective parent is a function
+   * of the whole track list (a parent counts only if it is an existing bus and the chain reaches the master without a loop), so any
+   * change to any track re-checks them all. The engine also falls back to the master for a parent it does not know.
+   */
+  private syncParents() {
+    const tracks = getTracks(this.doc)
+    const eff = effectiveParent(tracks)
+    for (const t of tracks) {
+      const h = this.handles.track.get(t.id)
+      if (h == null) continue
+      // The document's order is what the engine breaks ties by (its handles differ per client).
+      if ((this.sentOrder.get(t.id) ?? 0) !== t.order) {
+        if (t.order === 0) this.sentOrder.delete(t.id)
+        else this.sentOrder.set(t.id, t.order)
+        this.sink.call('engine_track_order', h, t.order)
+      }
+    }
+    for (const [id, up] of eff) {
+      const h = this.handles.track.get(id)
+      if (h == null) continue
+      const want = up === MASTER_TRACK ? MASTER_HANDLE : this.handles.track.get(up)
+      if (want == null) continue
+      if ((this.sentParent.get(id) ?? MASTER_HANDLE) === want) continue
+      if (want === MASTER_HANDLE) this.sentParent.delete(id)
+      else this.sentParent.set(id, want)
+      this.sink.call('engine_track_set_parent', h, want)
+    }
+  }
+
+  /**
+   * A tap id as `[kind, source]` for `engine_device_input`: 1 a track or bus's implicit tap, 2 the master's, 3 a send device's;
+   * 0 no input (absent); 4 named but gone (reads silence: docs/routing.md).
+   */
+  private tapRef(id: string | undefined): [number, number] {
+    if (id == null) return [0, 0]
+    if (id === MASTER_TRACK) return [2, 0]
+    if (tracksMap(this.doc).has(id)) return [1, this.handle('track', id)]
+    if (devicesMap(this.doc).get(id)?.get('type') === FX_SEND) return [3, this.handle('device', id)]
+    return [4, 0]
+  }
+
+  private sendInput(deviceId: string, input: string | undefined) {
+    const h = this.handles.device.get(deviceId)
+    if (h == null) return
+    const [kind, source] = this.tapRef(input)
+    const sig = `${kind},${source}`
+    if ((this.sentInput.get(deviceId) ?? '0,0') === sig) return
+    if (sig === '0,0') this.sentInput.delete(deviceId)
+    else this.sentInput.set(deviceId, sig)
+    this.sink.call('engine_device_input', h, kind, source)
+  }
+
+  /** Re-resolve every device input that names a tap (or did): a track or send appearing or vanishing changes what an id resolves to. */
+  private syncInputs() {
+    const seen = new Set<string>()
+    for (const d of getDevices(this.doc)) {
+      if (d.input == null && !this.sentInput.has(d.id)) continue
+      seen.add(d.id)
+      this.sendInput(d.id, d.input)
+    }
+    for (const id of [...this.sentInput.keys()]) if (!seen.has(id)) this.sendInput(id, undefined) // (the doc device is gone or lost its input)
   }
 
   private upsertClip(c: Clip): boolean {
@@ -661,6 +741,7 @@ export class Bridge {
     if (dirty.all || dirty.fields) {
       this.sink.call('engine_device_upsert', h, d.trackId === MASTER_TRACK ? MASTER_HANDLE : this.handle('track', d.trackId), d.type, d.order, +d.bypass)
       this.sink.call('engine_device_keys', h, d.keyLo ?? KEY_MIN, d.keyHi ?? KEY_MAX)
+      this.sendInput(d.id, d.input)
     }
     for (const [p, v] of Object.entries(d.params ?? {})) {
       if (dirty.all || dirty.params.has(p)) {

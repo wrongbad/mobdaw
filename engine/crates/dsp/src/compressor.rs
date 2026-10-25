@@ -79,8 +79,23 @@ impl Compressor {
         }
     }
 
-    /// Process `l`/`r` in place.
+    /// Process `l`/`r` in place; the detector listens to the signal itself.
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], p: &CompParams, sample_rate: f32) {
+        self.run(l, r, p, sample_rate, |_, a, b| a.abs().max(b.abs()));
+    }
+
+    /// Like [`Self::process`], but the detector listens to `key_l`/`key_r` (a side input, e.g. another
+    /// track's signal) while the gain it computes is applied to `l`/`r`. The key must be at least as
+    /// long as the signal. Keyed with the signal itself it is identical to `process`.
+    pub fn process_keyed(&mut self, l: &mut [f32], r: &mut [f32], key_l: &[f32], key_r: &[f32], p: &CompParams, sample_rate: f32) {
+        let n = l.len();
+        let (key_l, key_r) = (&key_l[..n], &key_r[..n]);
+        self.run(l, r, p, sample_rate, |i, _, _| key_l[i].abs().max(key_r[i].abs()));
+    }
+
+    /// The shared loop. `level(i, l[i], r[i])` is the detector's linear level at sample `i`.
+    #[inline(always)]
+    fn run(&mut self, l: &mut [f32], r: &mut [f32], p: &CompParams, sample_rate: f32, level: impl Fn(usize, f32, f32) -> f32) {
         let threshold = p.threshold_db.clamp(THRESHOLD_MIN, THRESHOLD_MAX);
         let ratio = p.ratio.clamp(RATIO_MIN, RATIO_MAX);
         let slope = 1.0 - 1.0 / ratio;
@@ -96,8 +111,8 @@ impl Compressor {
         let makeup_gain = 10f32.powf(makeup / 20.0);
         let db_to_log2 = 1.0 / DB_PER_LOG2;
 
-        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
-            let level = a.abs().max(b.abs());
+        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+            let level = level(i, *a, *b);
             if level < quiet_below && self.reduction == 0.0 {
                 if makeup_gain != 1.0 {
                     *a *= makeup_gain;
@@ -165,6 +180,38 @@ mod tests {
         c.process(&mut l, &mut r, &p, SR);
         assert!((l[255] / 0.01 - 1.995).abs() < 0.01);
         assert!((l[255] / r[255] - 2.0).abs() < 1e-4, "stereo balance preserved");
+    }
+
+    #[test]
+    fn keyed_with_its_own_signal_is_bit_exact_with_unkeyed() {
+        let p = CompParams { threshold_db: -20.0, attack_ms: 1.0, ..Default::default() };
+        let x = sine(0.8, 9600);
+        let (mut l0, mut r0) = (x.clone(), x.clone());
+        Compressor::new().process(&mut l0, &mut r0, &p, SR);
+        let (mut l1, mut r1) = (x.clone(), x.clone());
+        Compressor::new().process_keyed(&mut l1, &mut r1, &x, &x, &p, SR);
+        assert_eq!((l0, r0), (l1, r1));
+    }
+
+    #[test]
+    fn a_loud_key_ducks_a_quiet_signal_and_a_quiet_key_leaves_it_alone() {
+        let p = CompParams { threshold_db: -20.0, ratio: 8.0, attack_ms: 0.1, release_ms: 50.0, makeup_db: 0.0 };
+        let sig = sine(0.05, 24000); // -26 dB: under the threshold on its own
+        let alone = {
+            let (mut l, mut r) = (sig.clone(), sig.clone());
+            Compressor::new().process(&mut l, &mut r, &p, SR);
+            l
+        };
+        assert_eq!(alone, sig, "unkeyed it is transparent");
+        let loud = sine(1.0, 24000);
+        let (mut l, mut r) = (sig.clone(), sig.clone());
+        let mut c = Compressor::new();
+        c.process_keyed(&mut l, &mut r, &loud, &loud, &p, SR);
+        assert!(peak(&l[12000..]) < 0.5 * peak(&sig), "ducked by the key: {}", peak(&l[12000..]));
+        let quiet = vec![0.0f32; 24000];
+        let (mut l, mut r) = (sig.clone(), sig.clone());
+        Compressor::new().process_keyed(&mut l, &mut r, &quiet, &quiet, &p, SR);
+        assert_eq!(l, sig, "a silent key never compresses");
     }
 
     #[test]

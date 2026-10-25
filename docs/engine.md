@@ -246,6 +246,9 @@ fast random reads into multi-GB files. Downloads from S3 are streamed into OPFS.
 - **Sleep:** an effect that provably outputs zero (silent input, and its state is zero or its tail has fallen
   below -120 dB) is skipped, and so is a track whose input is silent, whose instruments are idle and whose
   effects all sleep. Its gain ramps still advance. See [`dsp.md`](dsp.md) §9.
+  With buses and taps (§6.2a) a node's input is also its children's sum, and a `recv` or keyed compressor reading a live
+  tap keeps its chain awake; a node that goes to sleep silences its output and the taps it writes (once), so readers
+  see exact zeros and skip them. A bus whose children are all silent and whose devices have no tail sleeps.
 - **Precision:**
   - Audio buffers are f32.
   - Positions, phase accumulators and time math are f64 or i64.
@@ -266,6 +269,35 @@ fast random reads into multi-GB files. Downloads from S3 are streamed into OPFS.
   - Peaks only, no RMS: the UI does decay and hold. RMS would need a per-sample square and sum per track.
   - The worklet stops posting while everything reads 0 (one all-zero message first), so a silent project costs one
     wasm call per ~1600 frames.
+  - Buses meter like tracks (they are tracks): the peak of the bus's post-fader output, in the same list.
+
+### 6.2a The routing graph (docs/routing.md)
+Everything the audio path needs is derived in `rebuild_routing` (`engine.rs`, `routing.rs`), which every structural command
+ends with, so `process` only walks arrays.
+
+- **Nodes** are the tracks, buses (`engine_track_upsert` kind 3) and the master (node number `tracks.len()`, last). **Edges**
+  are typed port-to-port links (`routing::Edge`: `PortKind::Audio`, a source and a destination `Port`): bus membership
+  (child `Out` to parent `In`) and taps (a node's `Tap` to the `Side` input of a device on the reader's node). Each track's
+  parent comes from `engine_track_set_parent`; only an existing bus counts, anything else (deleted, not yet sent, not a bus)
+  resolves to the master, and a parent loop (which the bridge never sends) is cut at the member with the smallest handle.
+- **Buffers** (`routing::Bufs`): one planar stereo buffer per node output, per read implicit tap and per read send. They persist
+  across blocks and across rebuilds (keyed by handle), and carry a `live` flag (false = exact zeros). Tracks and buses write their
+  output buffer with the mute/solo gain applied; the parent pulls (sums) the live ones of its children; the master sums its
+  children into the output and runs its chain over it.
+- **Taps.** A node's implicit tap is its chain just before the mix device (or the end of the chain without one): pre-fader,
+  pre-mute. It is copied only when something reads it. A send (kind 12) writes `gain * signal` into its own buffer (only if read)
+  and passes the signal through; a recv (kind 13) adds `gain * tap`; a compressor with a key reads the tap for its detector and
+  applies the gain to its own input. A reader that runs before the writer in the schedule sees the previous block: no special case.
+- **Schedule.** Kahn's algorithm over the node-level edges (tap edges and membership), ties by track order (the document's `order`
+  from `engine_track_order`, then the handle, so peers agree); when only cycles remain, the first remaining node in track order runs
+  next, which cuts the cycle there. Edges out of the master
+  never constrain the order (it runs last, so reading its tap is always last block's). The result is an array of node numbers.
+- **Mute and solo** are one gain target per node, as before. A muted bus silences everything that sums into it. While any track
+  is soloed `compute_audible` (allocation-free, per block) marks the soloed (and solo-safe) nodes, every descendant of a soloed bus,
+  then closes over parents and over tap readers; mute still wins.
+- **Real-time safety:** reading a tap allocates and looks up nothing per block; slots hold buffer indices resolved at rebuild. A
+  rebuild keeps buffer contents (so a bypass toggle does not flush a feedback loop); a new buffer starts silent.
+
 - **Transport cycle** (`engine_set_loop`, the doc's `meta.loop`): the engine wraps from `end` to `start` inside
   `engine_process`, splitting the block at the exact sample, rather than the host seeking between blocks.
   - Why in the engine: the host can only act between blocks, so a host-side seek would land up to 127 samples late
