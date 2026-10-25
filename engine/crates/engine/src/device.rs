@@ -46,15 +46,19 @@ pub enum Input {
     Master,
     /// An `fx send` device's tap, by device handle.
     Send(u32),
+    /// A tap that was named and is gone: reads silence (a compressor keyed by it never compresses). The bridge sends it when the
+    /// document's `input` names something that no longer exists, as opposed to `None` (no input: the compressor keys off itself).
+    Missing,
 }
 
 impl Input {
-    /// Decode the `engine_device_input` arguments (`kind` 0 none, 1 track, 2 master, 3 send).
+    /// Decode the `engine_device_input` arguments (`kind` 0 none, 1 track, 2 master, 3 send, 4 missing).
     pub fn from_parts(kind: u32, source: u32) -> Self {
         match kind {
             1 => Input::Track(source),
             2 => Input::Master,
             3 => Input::Send(source),
+            4 => Input::Missing,
             _ => Input::None,
         }
     }

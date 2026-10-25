@@ -72,7 +72,7 @@ describe('bridge routing (docs/routing.md)', () => {
     expect([...eff.values()].filter((v) => v === MASTER_TRACK)).toHaveLength(1)
   })
 
-  it('resolves a device input to the handle of a track, the master or a send, and to none when the tap is missing', () => {
+  it('resolves a device input to the handle of a track, the master or a send, and to silence when the tap is missing', () => {
     const { doc, bridge, take } = setup()
     const t = addTrack(doc, 'a')
     const r = addTrack(doc, 'ret')
@@ -88,13 +88,15 @@ describe('bridge routing (docs/routing.md)', () => {
     updateDevice(doc, recv, { input: MASTER_TRACK })
     expect(fx(take(), 'engine_device_input')).toEqual([['engine_device_input', dh, 2, 0]])
     updateDevice(doc, recv, { input: 'nonexistent' })
-    expect(fx(take(), 'engine_device_input')).toEqual([['engine_device_input', dh, 0, 0]])
+    expect(fx(take(), 'engine_device_input')).toEqual([['engine_device_input', dh, 4, 0]]) // named but gone: silence
+    updateDevice(doc, recv, { input: undefined })
+    expect(fx(take(), 'engine_device_input')).toEqual([['engine_device_input', dh, 0, 0]]) // no input
     updateDevice(doc, recv, { input: send })
     take()
     setParam(doc, recv, 0, -6) // a knob move says nothing about the tap
     expect(fx(take(), 'engine_device_input')).toEqual([])
-    deleteDevice(doc, send) // the tap vanishes: the recv reads none
-    expect(fx(take(), 'engine_device_input')).toEqual([['engine_device_input', dh, 0, 0]])
+    deleteDevice(doc, send) // the tap vanishes: the recv reads silence
+    expect(fx(take(), 'engine_device_input')).toEqual([['engine_device_input', dh, 4, 0]])
   })
 
   it('a compressor key follows its track, and an input set before the tap exists resolves once it does', () => {
@@ -107,13 +109,13 @@ describe('bridge routing (docs/routing.md)', () => {
     const ch = fx(made, 'engine_device_upsert').find((c) => c[3] === COMPRESSOR)![1]
     expect(fx(made, 'engine_device_input')).toEqual([['engine_device_input', ch, 1, kh]])
     deleteTrack(doc, k)
-    expect(fx(take(), 'engine_device_input')).toEqual([['engine_device_input', ch, 0, 0]])
+    expect(fx(take(), 'engine_device_input')).toEqual([['engine_device_input', ch, 4, 0]])
 
     // a tap named before it exists: a send that arrives later under that id (peers' edits merge in any order)
     const comp = [...devicesMap(doc).keys()].find((id) => devicesMap(doc).get(id)!.get('type') === COMPRESSOR)!
     const late = newId()
     updateDevice(doc, comp, { input: late })
-    expect(fx(take(), 'engine_device_input')).toEqual([])
+    expect(fx(take(), 'engine_device_input')).toEqual([]) // (still the missing tap it already had)
     doc.transact(() => {
       const m = new Y.Map<unknown>()
       for (const [key, v] of Object.entries({ id: late, trackId: t, type: FX_SEND, order: 5, bypass: false })) m.set(key, v)
@@ -123,6 +125,21 @@ describe('bridge routing (docs/routing.md)', () => {
     const calls = take()
     const sendH = fx(calls, 'engine_device_upsert').find((c) => c[3] === FX_SEND)![1]
     expect(fx(calls, 'engine_device_input')).toEqual([['engine_device_input', ch, 3, sendH]])
+  })
+
+  it("sends the document's track order, which the engine breaks ties by, once and again when it changes", () => {
+    const { doc, bridge, take } = setup()
+    const a = addTrack(doc, 'a')
+    const b = addTrack(doc, 'b')
+    const first = fx(take(), 'engine_track_order')
+    expect(first).toEqual([
+      ['engine_track_order', bridge.trackHandle(a), getTracks(doc).find((t) => t.id === a)!.order],
+      ['engine_track_order', bridge.trackHandle(b), getTracks(doc).find((t) => t.id === b)!.order],
+    ])
+    updateTrack(doc, a, { muted: true })
+    expect(fx(take(), 'engine_track_order')).toEqual([])
+    updateTrack(doc, a, { order: 99 })
+    expect(fx(take(), 'engine_track_order')).toEqual([['engine_track_order', bridge.trackHandle(a), 99]])
   })
 
   it('a loaded project sends parents and inputs once', () => {

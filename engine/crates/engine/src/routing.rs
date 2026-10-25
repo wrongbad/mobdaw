@@ -70,6 +70,8 @@ pub enum BufKey {
     MasterTap,
     /// An `fx send` device's tap, by device handle.
     Send(u32),
+    /// Exact silence, for readers whose tap is gone. Never written, never live.
+    Silence,
 }
 
 /// Planar stereo buffers (`BLOCK` left, `BLOCK` right each) with a liveness flag: `live` is false only when
@@ -151,11 +153,11 @@ impl Bufs {
 }
 
 /// The run order of nodes `0..n` (`master` last). Topological over the edges (an edge writer ->
-/// reader runs the writer first), ties broken by node number (track order). When only cycles remain,
-/// the remaining node with the smallest number runs next, which cuts the cycle there: whatever it
-/// reads from a node that has not run yet is that node's previous block. Edges out of the master are
-/// back edges by construction (it runs last) and never constrain the order.
-pub fn schedule(n: usize, master: u32, edges: &[Edge]) -> Vec<u32> {
+/// reader runs the writer first), ties broken by track order: `ranked` lists the non-master nodes in
+/// that order. When only cycles remain, the first remaining node in `ranked` runs next, which cuts
+/// the cycle there: whatever it reads from a node that has not run yet is that node's previous block.
+/// Edges out of the master are back edges by construction (it runs last) and never constrain the order.
+pub fn schedule(n: usize, master: u32, edges: &[Edge], ranked: &[u32]) -> Vec<u32> {
     let mut indeg = vec![0u32; n];
     let mut done = vec![false; n];
     // (writer, reader) pairs, deduplicated: two edges between the same nodes count once.
@@ -168,7 +170,7 @@ pub fn schedule(n: usize, master: u32, edges: &[Edge]) -> Vec<u32> {
     }
     let mut order = Vec::with_capacity(n);
     while order.len() + 1 < n {
-        let pick = (0..n).find(|&i| i as u32 != master && !done[i] && indeg[i] == 0).or_else(|| (0..n).find(|&i| i as u32 != master && !done[i]));
+        let pick = ranked.iter().map(|&i| i as usize).find(|&i| !done[i] && indeg[i] == 0).or_else(|| ranked.iter().map(|&i| i as usize).find(|&i| !done[i]));
         let Some(k) = pick else { break };
         done[k] = true;
         order.push(k as u32);
@@ -196,26 +198,28 @@ mod tests {
     fn children_run_before_parents_and_the_master_last() {
         // 0 = bus, 1 and 2 are its children, 3 = master
         let e = [Edge::member(1, 0), Edge::member(2, 0), Edge::member(0, 3)];
-        assert_eq!(schedule(4, 3, &e), vec![1, 2, 0, 3]);
+        assert_eq!(schedule(4, 3, &e, &[0, 1, 2]), vec![1, 2, 0, 3]);
     }
 
     #[test]
     fn a_tap_orders_writer_before_reader_and_ties_keep_track_order() {
         // track 0 reads track 2's tap; 1 is independent
         let e = [Edge::member(0, 3), Edge::member(1, 3), Edge::member(2, 3), tap(2, 0)];
-        assert_eq!(schedule(4, 3, &e), vec![1, 2, 0, 3]);
+        assert_eq!(schedule(4, 3, &e, &[0, 1, 2]), vec![1, 2, 0, 3]);
+        assert_eq!(schedule(4, 3, &e, &[2, 1, 0]), vec![2, 1, 0, 3], "ties follow the ranking, not the node number");
     }
 
     #[test]
     fn a_two_node_cycle_runs_the_lower_track_first() {
         let e = [Edge::member(0, 2), Edge::member(1, 2), tap(0, 1), tap(1, 0)];
-        assert_eq!(schedule(3, 2, &e), vec![0, 1, 2]);
+        assert_eq!(schedule(3, 2, &e, &[0, 1]), vec![0, 1, 2]);
+        assert_eq!(schedule(3, 2, &e, &[1, 0]), vec![1, 0, 2], "the cut follows the ranking");
     }
 
     #[test]
     fn reading_the_master_tap_never_constrains_the_order() {
         let e = [Edge::member(0, 1), tap(1, 0)];
-        assert_eq!(schedule(2, 1, &e), vec![0, 1]);
+        assert_eq!(schedule(2, 1, &e, &[0]), vec![0, 1]);
     }
 
     #[test]

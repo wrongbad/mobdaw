@@ -212,7 +212,7 @@ fn send_passes_through_and_recv_adds_the_tap_with_gain() {
     e.device_upsert(11, 1, SEND, 1.0, true); // a bypassed send's tap is silent, the track still plays
     assert_lr(settle(&mut e), (0.5, 0.5), "bypassed send");
     e.device_upsert(11, 1, SEND, 1.0, false);
-    e.device_input(21, Input::Send(999)); // a tap that does not exist
+    e.device_input(21, Input::Missing); // a tap that does not exist
     assert_lr(settle(&mut e), (0.5, 0.5), "missing tap reads silence");
     e.device_input(21, Input::None);
     assert_lr(settle(&mut e), (0.5, 0.5), "no input");
@@ -290,10 +290,23 @@ fn a_compressor_keyed_by_another_track_ducks_it_and_the_key_may_be_a_ghost() {
     e.device_input(11, Input::None);
     let (l, _) = settle(&mut e);
     assert!(near(l, 0.05), "{l}");
-    // a key that does not exist: keys off its own input
-    e.device_input(11, Input::Track(77));
-    let (l, _) = settle(&mut e);
-    assert!(near(l, 0.05), "{l}");
+}
+
+#[test]
+fn a_key_that_is_gone_reads_silence_but_no_key_keys_off_the_input() {
+    let loud = |input: Input| {
+        let mut e = engine();
+        dc(&mut e, 1, 0.5); // -6 dB: over the -20 dB threshold on its own
+        e.device_upsert(11, 1, COMP, 1.0, false);
+        e.param_set(11, 0, -20.0);
+        e.param_set(11, 1, 20.0);
+        e.device_input(11, input);
+        settle(&mut e).0
+    };
+    assert!(loud(Input::None) < 0.2, "unkeyed it compresses itself");
+    assert!(near(loud(Input::Track(77)), 0.5), "a missing track is a silent key: nothing to compress");
+    assert!(near(loud(Input::Missing), 0.5), "so is a tap the bridge says is gone");
+    assert!(near(loud(Input::Send(99)), 0.5), "and a send that is not there");
 }
 
 /// Track 1 and 2 each hear the other's tap through a recv; track 1 carries an impulse at frame `AT`.
@@ -419,4 +432,27 @@ fn silent_buses_sleep_and_a_live_tap_keeps_a_return_awake() {
     assert_eq!((a.clone(), ar), (b, br), "sleeping changes nothing audible");
     assert!(skipped > 0 && none == 0);
     assert!(a[30_000..].iter().any(|v| v.abs() > 1e-3), "and the sound arrived");
+}
+
+#[test]
+fn the_documents_track_order_not_the_handle_decides_ties_and_where_a_cycle_is_cut() {
+    let build = |order1: f64, order2: f64| {
+        let mut e = engine();
+        dc(&mut e, 1, 0.25);
+        dc(&mut e, 2, 0.25);
+        e.track_order(1, order1);
+        e.track_order(2, order2);
+        e
+    };
+    assert_eq!(build(0.0, 0.0).schedule(), vec![1, 2, MASTER_TRACK], "equal orders: by handle");
+    assert_eq!(build(5.0, 1.5).schedule(), vec![2, 1, MASTER_TRACK], "a peer whose handles came out the other way round still agrees");
+    // a cycle between them: the one first in the document's order runs first, so the delay lands on the other edge
+    let mut e = build(5.0, 1.5);
+    e.device_upsert(11, 1, RECV, 1.0, false);
+    e.device_input(11, Input::Track(2));
+    e.device_upsert(21, 2, RECV, 1.0, false);
+    e.device_input(21, Input::Track(1));
+    assert_eq!(e.schedule(), vec![2, 1, MASTER_TRACK]);
+    e.track_order(2, 9.0);
+    assert_eq!(e.schedule(), vec![1, 2, MASTER_TRACK]);
 }

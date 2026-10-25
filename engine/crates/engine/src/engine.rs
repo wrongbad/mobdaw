@@ -124,6 +124,9 @@ struct Track {
     /// The parent as the host sent it (`engine_track_set_parent`): a bus's handle, or `MASTER_TRACK`. It may dangle or
     /// name a non-bus; `rebuild_routing` resolves the effective parent.
     parent_h: u32,
+    /// The document's `order` of the track (`engine_track_order`): the tie-break of the schedule and the order children are
+    /// summed in, so every peer (and an export) makes the same choices. Equal orders fall back to the handle.
+    order: f64,
     // ---- derived by `rebuild_routing` ----
     /// The effective parent as a node number (a dense track index, or `tracks.len()` for the master).
     parent: u32,
@@ -900,6 +903,7 @@ impl Engine {
                 peak: [0; 2],
                 bus: kind == KIND_BUS,
                 parent_h: MASTER_TRACK,
+                order: 0.0,
                 parent: 0,
                 child_nodes: Vec::new(),
                 child_outs: Vec::new(),
@@ -923,13 +927,24 @@ impl Engine {
         }
     }
 
+    /// The track's place in the document's order (any finite number; fractional is fine). It decides ties when the nodes are
+    /// scheduled and the order children are summed in, which the handles cannot: handles are per-client, the order is shared.
+    pub fn track_order(&mut self, h: u32, order: f64) {
+        let order = if order.is_finite() { order } else { 0.0 };
+        let Some(t) = self.tracks.get_mut(h) else { return };
+        if t.order != order {
+            t.order = order;
+            self.rebuild_routing();
+        }
+    }
+
     pub fn track_remove(&mut self, h: u32) {
         self.tracks.remove(h);
         self.rebuild_routing();
     }
 
     /// The tap device `h` reads (`fx recv`'s signal, a compressor's key): see [`Input`]. A tap that does not exist reads
-    /// silence (a recv adds nothing; a compressor keys off its own input). Ignored for an unknown device.
+    /// silence (a recv adds nothing; a compressor keyed by it never compresses). Ignored for an unknown device.
     pub fn device_input(&mut self, h: u32, input: Input) {
         let Some(d) = self.devices.get_mut(h) else { return };
         if d.input != input {
@@ -1366,6 +1381,9 @@ impl Engine {
             })
             .collect();
         break_parent_cycles(&mut parent, &handles, master);
+        // Track order: by the document's order, then the handle. Everything that must not depend on a client's handles uses it.
+        let mut ranked: Vec<u32> = (0..nt as u32).collect();
+        ranked.sort_by(|&a, &b| tracks.get_index(a as usize).order.total_cmp(&tracks.get_index(b as usize).order).then(handles[a as usize].cmp(&handles[b as usize])));
         let node_of = |track: u32, tracks: &HandleMap<Track>| if track == MASTER_TRACK { Some(master) } else { tracks.index_of(track).map(|i| i as u32) };
 
         // Edges: bus membership, then taps (a device's input resolved to the node that writes it).
@@ -1394,17 +1412,22 @@ impl Engine {
                 Input::Track(th) => tracks.index_of(th).map(|i| (i as u32, BufKey::Tap(th))),
                 Input::Master => Some((master, BufKey::MasterTap)),
                 Input::Send(sh) => devices.get(sh).filter(|s| s.kind_id == KIND_SEND).and_then(|s| node_of(s.track, tracks)).map(|w| (w, BufKey::Send(sh))),
-                Input::None => None,
+                Input::None | Input::Missing => None,
             };
             if let Some((writer, key)) = src {
                 edges.push(Edge::tap(writer, key, reader, h));
                 want.push(key);
                 reads[di] = Some(key);
+            } else {
+                // named but gone: it reads silence (docs/routing.md), not "no input"
+                want.push(BufKey::Silence);
+                reads[di] = Some(BufKey::Silence);
             }
         }
         route.bufs.rebuild(want);
         let bufs = &route.bufs;
-        for (i, &p) in parent.iter().enumerate() {
+        for &i in &ranked {
+            let (i, p) = (i as usize, parent[i as usize]);
             let out = bufs.index(BufKey::Out(handles[i]));
             let t = tracks.get_index_mut(i);
             t.out = out;
@@ -1449,7 +1472,7 @@ impl Engine {
             }
             set_slots(&mut t.chain, &mut t.owned);
         }
-        route.order = routing::schedule(nt + 1, master, edges);
+        route.order = routing::schedule(nt + 1, master, edges, &ranked);
         route.audible.clear();
         route.audible.resize(nt + 1, false);
         route.work.clear();

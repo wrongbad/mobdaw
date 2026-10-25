@@ -157,6 +157,8 @@ export class Bridge {
   private clicks = new Set<string>()
   /** The parent handle last sent for each track (absent = the master, which is what a new engine track has). */
   private sentParent = new Map<string, number>()
+  /** The document `order` last sent for each track with `engine_track_order` (absent = 0, a new engine track's). */
+  private sentOrder = new Map<string, number>()
   /** The device input (`kind,source`) last sent for each device (absent = none, what a new engine device has). */
   private sentInput = new Map<string, string>()
 
@@ -485,7 +487,7 @@ export class Bridge {
     const h = this.handles[kind].get(id)
     if (h == null) return
     this.handles[kind].delete(id)
-    if (kind === 'track') this.sentParent.delete(id)
+    if (kind === 'track') (this.sentParent.delete(id), this.sentOrder.delete(id))
     if (kind === 'device') this.sentInput.delete(id)
     if (kind === 'track') this.dropPreviews(id), this.trackIds.delete(h), this.dropClick(id)
     if (kind === 'clip') this.dropBaked(h)
@@ -581,7 +583,18 @@ export class Bridge {
    * change to any track re-checks them all. The engine also falls back to the master for a parent it does not know.
    */
   private syncParents() {
-    const eff = effectiveParent(getTracks(this.doc))
+    const tracks = getTracks(this.doc)
+    const eff = effectiveParent(tracks)
+    for (const t of tracks) {
+      const h = this.handles.track.get(t.id)
+      if (h == null) continue
+      // The document's order is what the engine breaks ties by (its handles differ per client).
+      if ((this.sentOrder.get(t.id) ?? 0) !== t.order) {
+        if (t.order === 0) this.sentOrder.delete(t.id)
+        else this.sentOrder.set(t.id, t.order)
+        this.sink.call('engine_track_order', h, t.order)
+      }
+    }
     for (const [id, up] of eff) {
       const h = this.handles.track.get(id)
       if (h == null) continue
@@ -594,13 +607,16 @@ export class Bridge {
     }
   }
 
-  /** A tap id as `[kind, source]` for `engine_device_input`: 1 a track or bus's implicit tap, 2 the master's, 3 a send device's; 0 none (absent or gone). */
+  /**
+   * A tap id as `[kind, source]` for `engine_device_input`: 1 a track or bus's implicit tap, 2 the master's, 3 a send device's;
+   * 0 no input (absent); 4 named but gone (reads silence: docs/routing.md).
+   */
   private tapRef(id: string | undefined): [number, number] {
     if (id == null) return [0, 0]
     if (id === MASTER_TRACK) return [2, 0]
     if (tracksMap(this.doc).has(id)) return [1, this.handle('track', id)]
     if (devicesMap(this.doc).get(id)?.get('type') === FX_SEND) return [3, this.handle('device', id)]
-    return [0, 0]
+    return [4, 0]
   }
 
   private sendInput(deviceId: string, input: string | undefined) {

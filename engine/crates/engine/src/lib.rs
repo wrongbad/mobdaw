@@ -491,9 +491,19 @@ pub unsafe extern "C" fn engine_track_set_parent(e: *mut Engine, h: u32, parent:
     (*e).track_set_parent(h, parent);
 }
 
+/// Track (or bus) `h`'s place in the document's order (any finite number): it breaks ties when nodes are scheduled and orders
+/// the children a bus sums, so that every peer and an offline export make the same choices (handles differ per client).
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_track_order(e: *mut Engine, h: u32, order: f64) {
+    (*e).track_order(h, order);
+}
+
 /// The tap device `h` reads: `fx recv`'s signal, a compressor's key. `kind` 0 none, 1 the implicit tap of track or bus
 /// `source` (a track handle), 2 the master's implicit tap (`source` ignored), 3 the tap of the `fx send` device `source`
-/// (a device handle). A tap that does not exist reads silence. Ignored for an unknown device.
+/// (a device handle), 4 a tap that is gone. A tap that does not exist reads silence. Ignored for an unknown device.
 ///
 /// # Safety
 /// `e` must come from `engine_new` and not yet be freed.
