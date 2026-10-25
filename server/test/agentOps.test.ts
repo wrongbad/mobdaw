@@ -203,3 +203,30 @@ describe('agent ops', () => {
     })
   })
 })
+
+describe('agent ops: routing', () => {
+  it('makes a bus, parents tracks into it, sets a device input and shows it', () => {
+    const doc = new Y.Doc()
+    const ids = run(doc, [
+      { op: 'addTrack', name: 'Drums', kind: 'bus' },
+      { op: 'addTrack', name: 'Kick', kind: 'midi' },
+      { op: 'updateTrack', id: '$1', parent: '$0' },
+      { op: 'addTrack', name: 'Bass', kind: 'audio' },
+      { op: 'addDevice', trackId: '$3', type: 'compressor' },
+      { op: 'setInput', deviceId: '$4', input: '$1' },
+    ]) as string[]
+    const v = agentView(doc)
+    expect(v.tracks.find((t) => t.id === ids[1])!.parent).toBe(ids[0])
+    expect(v.tracks.find((t) => t.id === ids[0])!.kind).toBe('bus')
+    const comp = v.tracks.find((t) => t.id === ids[3])!.devices.find((d) => d.id === ids[4])!
+    expect(comp).toMatchObject({ input: ids[1], inputName: 'Kick' })
+    const txt = agentText(doc)
+    expect(txt).toContain(`in bus [${ids[0]}]`)
+    expect(txt).toContain(`reads "Kick" [${ids[1]}]`)
+    run(doc, [{ op: 'updateTrack', id: ids[1], parent: null }, { op: 'setInput', deviceId: ids[4], input: null }])
+    expect(agentView(doc).tracks.find((t) => t.id === ids[1])!.parent).toBeUndefined()
+    expect(() => run(doc, [{ op: 'updateTrack', id: ids[1], parent: ids[3] }])).toThrow('not a bus')
+    expect(() => run(doc, [{ op: 'setInput', deviceId: ids[4], input: 'nope' }])).toThrow('no tap')
+    expect(() => run(doc, [{ op: 'addMidiClip', trackId: ids[0], start: '1', length: '1 bar' }])).toThrow()
+  })
+})

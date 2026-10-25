@@ -1,4 +1,4 @@
-// Yjs document schema v4 (docs/engine.md §3). Every map is flat and keyed by id; children
+// Yjs document schema v5 (docs/engine.md §3). Every map is flat and keyed by id; children
 // reference their parent by id; positions are integer samples at meta.sampleRate, except MIDI clips, which sit in
 // ticks (meta.ppq per quarter note) on the project timeline defined by `regions` (timemap.ts).
 //   meta    Y.Map  { schemaVersion, sampleRate, ppq, key? }
@@ -17,11 +17,11 @@
 //   history Y.Array of plain HistoryEntry (one line per change, written by the server only; docs/spec.md "History"); outside the undo scope
 import { parseMentions } from './mentions.ts'
 import * as Y from 'yjs'
-import { DEVICES, LOFI_DRUM, MIX, MIX_GAIN, MIX_PAN } from './devices.ts'
+import { DEVICES, FX_SEND, LOFI_DRUM, MIX, MIX_GAIN, MIX_PAN } from './devices.ts'
 import type { ParamTarget } from './params.ts'
 import { defaultRegion, normalizeRegions, timeMap, type TimeMap } from './timemap.ts'
 
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 export const DEFAULT_SAMPLE_RATE = 48000
 export const DEFAULT_PPQ = 960
 export const DEFAULT_MIDI_BPM = 120
@@ -44,7 +44,7 @@ export type Marker = { id: string; bar: number; label: string; text?: string }
  * 'soundscape': its audio clips are a *source* lane in their own time world, read by its loopers;
  * pads on the main timeline switch the loopers on. The clips are never played linearly.
  */
-export type TrackKind = 'audio' | 'midi' | 'soundscape'
+export type TrackKind = 'audio' | 'midi' | 'soundscape' | 'bus'
 /** A device whose `trackId` is this sits on the master bus: the project's global fx chain, run over the sum of all tracks. */
 export const MASTER_TRACK = 'master'
 export const LOOPERS_PER_TRACK = 1
@@ -57,7 +57,9 @@ export const LOOP_CUTOFF_MAX = 20000
 export type TrackRole = 'click'
 /** A staff's clef in the score view (`clefs` on a track: one per staff, top first; absent = the score view picks). */
 export type ScoreClef = 'treble' | 'bass' | 'alto' | 'tenor' | 'treble_8' | 'bass_8' | 'perc'
-export type Track = { id: string; name: string; kind: TrackKind; order: number; muted: boolean; soloed: boolean; role?: TrackRole; color?: number; preset?: string; clefs?: ScoreClef[] }
+export type Track = { id: string; name: string; kind: TrackKind; order: number; muted: boolean; soloed: boolean; role?: TrackRole; color?: number; preset?: string; clefs?: ScoreClef[]
+  /** The bus this track sums into; absent = the master. Use `effectiveParent`, never this raw (it may dangle or loop). docs/routing.md. */
+  parent?: string }
 /** 0 equal-power, 1 linear, 2 s-curve */
 export type FadeShape = 0 | 1 | 2
 /**
@@ -111,7 +113,9 @@ export type NoteHint = {
 }
 export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number; hint?: NoteHint }
 /** `name`, `keyLo` and `keyHi` are optional: an instrument's label and its note range (MIDI 0..127 inclusive; absent = 0 and 127). Not params. */
-export type Device = { id: string; trackId: string; type: number; order: number; bypass: boolean; params: Record<string, number>; name?: string; keyLo?: number; keyHi?: number }
+export type Device = { id: string; trackId: string; type: number; order: number; bypass: boolean; params: Record<string, number>; name?: string; keyLo?: number; keyHi?: number
+  /** The tap id this device reads (`fx recv`'s input, the compressor's key); absent = none. See `getTaps`. */
+  input?: string }
 export const KEY_MIN = 0
 export const KEY_MAX = 127
 /** Loop region in source time (samples of the track's source clips); `length` 0 means unset. */
@@ -451,8 +455,28 @@ export function addTrack(doc: Y.Doc, name: string, kind: TrackKind = 'audio', or
 }
 export const updateTrack = (doc: Y.Doc, id: string, patch: Partial<Omit<Track, 'id'>>) => patchMap(doc, tracksMap(doc).get(id), patch)
 
+/**
+ * Delete a track or bus with everything on it. A bus's children move to the bus's own effective parent, taking the bus's place
+ * in that parent's order (in their own order), so the tree below it stays put.
+ */
 export function deleteTrack(doc: Y.Doc, id: string) {
   doc.transact(() => {
+    const tracks = getTracks(doc)
+    const t = tracks.find((x) => x.id === id)
+    if (t?.kind === 'bus') {
+      const eff = effectiveParent(tracks)
+      const up = eff.get(id) ?? MASTER_TRACK
+      const kids = tracks.filter((x) => eff.get(x.id) === id) // (sorted by order: getTracks sorts)
+      const next = tracks.find((x) => x.id !== id && eff.get(x.id) === up && x.order > t.order)?.order
+      let o = t.order
+      for (const k of kids) {
+        o = orderBetween(o, next)
+        const m = tracksMap(doc).get(k.id)
+        m?.set('order', o)
+        if (up === MASTER_TRACK) m?.delete('parent')
+        else m?.set('parent', up)
+      }
+    }
     for (const c of getClips(doc)) if (c.trackId === id) deleteClip(doc, c.id)
     for (const d of getDevices(doc)) if (d.trackId === id) dropDevice(doc, d.id)
     for (const p of getPads(doc)) if (p.trackId === id) padsMap(doc).delete(p.id)
@@ -461,8 +485,105 @@ export function deleteTrack(doc: Y.Doc, id: string) {
   })
 }
 
+// --- routing (docs/routing.md)
+const assertNotBus = (doc: Y.Doc, trackId: string, what: string) => {
+  if (tracksMap(doc).get(trackId)?.get('kind') === 'bus') throw new Error(`a bus has no ${what}`)
+}
+
+/** Add a bus (a track with `kind: 'bus'`: a chain with a mix device, no clips, loopers or pads). Appended last unless `order` is given. Returns its id. */
+export const addBus = (doc: Y.Doc, name: string, order?: number): string => addTrack(doc, name, 'bus', order)
+
+/**
+ * Every track's effective parent: track id -> the id of a bus, or `MASTER_TRACK`. A raw `parent` counts only if it names an existing
+ * bus other than the track itself. Parent cycles (two peers each dragging one bus into the other) are broken deterministically: in
+ * each cycle the track with the smallest id is detached to the master, and the rest then resolve through it. Pure: the client, the
+ * bridge, the agent view and the engine all derive the tree from this, so UI and audio agree.
+ */
+export function effectiveParent(tracks: Pick<Track, 'id' | 'kind' | 'parent'>[]): Map<string, string> {
+  const buses = new Set(tracks.filter((t) => t.kind === 'bus').map((t) => t.id))
+  const eff = new Map<string, string>()
+  for (const t of tracks) eff.set(t.id, t.parent != null && t.parent !== t.id && buses.has(t.parent) ? t.parent : MASTER_TRACK)
+  // every track has one outgoing edge, so cycles are disjoint: walk each chain once, and cut the smallest id of each new cycle
+  const state = new Map<string, number>() // 1 = on the current walk, 2 = done
+  for (const start of eff.keys()) {
+    if (state.has(start)) continue
+    const walk: string[] = []
+    let cur: string | undefined = start
+    while (cur != null && cur !== MASTER_TRACK && !state.has(cur)) {
+      state.set(cur, 1)
+      walk.push(cur)
+      cur = eff.get(cur)
+    }
+    if (cur != null && state.get(cur) === 1) {
+      const cycle = walk.slice(walk.indexOf(cur))
+      eff.set(cycle.reduce((a, b) => (b < a ? b : a)), MASTER_TRACK)
+    }
+    for (const id of walk) state.set(id, 2)
+  }
+  return eff
+}
+
+/** Tracks and buses grouped by effective parent, each group sorted by `order`. The key `MASTER_TRACK` holds the roots; leaves have no entry. */
+export function trackTree(tracks: Track[]): Map<string, Track[]> {
+  const eff = effectiveParent(tracks)
+  const tree = new Map<string, Track[]>()
+  for (const t of [...tracks].sort((a, b) => a.order - b.order)) {
+    const p = eff.get(t.id)!
+    const list = tree.get(p)
+    if (list) list.push(t)
+    else tree.set(p, [t])
+  }
+  return tree
+}
+/** The children of `scope` (a bus id or `MASTER_TRACK`) by effective parent, in order. */
+export const childrenOf = (doc: Y.Doc, scope: string): Track[] => trackTree(getTracks(doc)).get(scope) ?? []
+
+/**
+ * Put a track or bus into a bus (`parent` = its id) or the master (`null` or `MASTER_TRACK`: the field is deleted). `order`, when
+ * given, places it among its new siblings. Returns false and writes nothing if the track or bus does not exist, the parent is not a
+ * bus, or the move would make a loop here (peers can still merge into one: see `effectiveParent`).
+ */
+export function setParent(doc: Y.Doc, trackId: string, parent: string | null, order?: number): boolean {
+  const m = tracksMap(doc).get(trackId)
+  if (!m) return false
+  const to = parent === MASTER_TRACK ? null : parent
+  if (to != null) {
+    const tracks = getTracks(doc)
+    if (to === trackId || tracks.find((t) => t.id === to)?.kind !== 'bus') return false
+    const eff = effectiveParent(tracks)
+    for (let p: string | undefined = to; p && p !== MASTER_TRACK; p = eff.get(p)) if (p === trackId) return false
+  }
+  doc.transact(() => {
+    if (to == null) m.delete('parent')
+    else m.set('parent', to)
+    if (order != null) m.set('order', order)
+  })
+  return true
+}
+
+/** What a picker lists for a tap. `owner` is the track, bus or `MASTER_TRACK` whose chain the tap belongs to. */
+export type Tap = { id: string; label: string; kind: 'track' | 'bus' | 'send' | 'master'; owner: string }
+/**
+ * Every tap a device could read, in picker order: tracks and buses (their implicit taps, id = the track id, in track order), then every
+ * `fx send` (id = the device id, label = its name or "send N", N counting sends in track then chain order), then the master.
+ */
+export function getTaps(doc: Y.Doc): Tap[] {
+  const tracks = getTracks(doc)
+  const out: Tap[] = tracks.map((t) => ({ id: t.id, label: t.name, kind: t.kind === 'bus' ? 'bus' : 'track', owner: t.id }))
+  const rank = new Map(tracks.map((t, i) => [t.id, i]))
+  const sends = getDevices(doc).filter((d) => d.type === FX_SEND && (d.trackId === MASTER_TRACK || rank.has(d.trackId)))
+  sends.sort((a, b) => (a.trackId === b.trackId ? 0 : a.trackId === MASTER_TRACK ? 1 : b.trackId === MASTER_TRACK ? -1 : rank.get(a.trackId)! - rank.get(b.trackId)!))
+  sends.forEach((d, i) => out.push({ id: d.id, label: d.name || `send ${i + 1}`, kind: 'send', owner: d.trackId }))
+  out.push({ id: MASTER_TRACK, label: 'master', kind: 'master', owner: MASTER_TRACK })
+  return out
+}
+/** Whether `id` names a tap right now (a track, bus, send device or the master). */
+export const tapExists = (doc: Y.Doc, id: string): boolean =>
+  id === MASTER_TRACK || tracksMap(doc).has(id) || devicesMap(doc).get(id)?.get('type') === FX_SEND
+
 // --- loopers
 export function addLooper(doc: Y.Doc, trackId: string, slot: number): string {
+  assertNotBus(doc, trackId, 'loopers')
   const id = newId()
   doc.transact(() => loopersMap(doc).set(id, toMap({ id, trackId, slot, speed: 1, start: 0, length: 0, gain: 1, muted: false } satisfies Looper)))
   return id
@@ -485,6 +606,7 @@ export const updateLooper = (doc: Y.Doc, id: string, patch: Partial<Pick<Looper,
 
 // --- pads
 export function addPad(doc: Y.Doc, trackId: string, start: number, length: number): string {
+  assertNotBus(doc, trackId, 'pads')
   const id = newId()
   doc.transact(() => padsMap(doc).set(id, toMap({ id, trackId, start, length } satisfies Pad)))
   return id
@@ -498,6 +620,7 @@ export function addAudioClip(
   doc: Y.Doc,
   c: Pick<AudioClip, 'trackId' | 'sourceHash' | 'start' | 'length'> & Partial<Omit<AudioClip, 'id' | 'kind'>>,
 ): string {
+  assertNotBus(doc, c.trackId, 'clips')
   const id = newId()
   const clip: AudioClip = { sourceOffset: 0, gain: 1, fadeIn: 0, fadeOut: 0, fadeShape: 0, ...c, id, kind: 'audio' }
   doc.transact(() => clipsMap(doc).set(id, toMap(clip)))
@@ -505,6 +628,7 @@ export function addAudioClip(
 }
 
 export function addMidiClip(doc: Y.Doc, c: Pick<MidiClip, 'trackId' | 'startTick'> & Partial<Omit<MidiClip, 'id' | 'kind'>>): string {
+  assertNotBus(doc, c.trackId, 'clips')
   const id = newId()
   const clip: MidiClip = { lengthTicks: 16 * getPpq(doc), ...c, id, kind: 'midi' }
   doc.transact(() => clipsMap(doc).set(id, toMap(clip)))
@@ -556,7 +680,7 @@ export const deleteNote = (doc: Y.Doc, id: string) => doc.transact(() => notesMa
  * Append a device to a track's chain with default params (just before the pinned mix device, which stays last). A mix device
  * is made through `ensureMixDevice`, so there is only ever one.
  */
-export function addDevice(doc: Y.Doc, trackId: string, type: number, extra: Partial<Pick<Device, 'name' | 'keyLo' | 'keyHi'>> = {}, initial: Record<string, number> = {}): string {
+export function addDevice(doc: Y.Doc, trackId: string, type: number, extra: Partial<Pick<Device, 'name' | 'keyLo' | 'keyHi' | 'input'>> = {}, initial: Record<string, number> = {}): string {
   if (type === MIX) return ensureMixDevice(doc, trackId)
   const id = newId()
   const order = orderInChain(doc, trackId)
@@ -582,7 +706,7 @@ const orderInChain = (doc: Y.Doc, trackId: string) => {
   return orderBetween(chain.filter((d) => d !== mix).at(-1)?.order, mix?.order)
 }
 /** The mix device is pinned last and always on: its `order` and `bypass` are ignored here. */
-export function updateDevice(doc: Y.Doc, id: string, patch: Partial<Pick<Device, 'order' | 'bypass' | 'name' | 'keyLo' | 'keyHi'>>) {
+export function updateDevice(doc: Y.Doc, id: string, patch: Partial<Pick<Device, 'order' | 'bypass' | 'name' | 'keyLo' | 'keyHi' | 'input'>>) {
   const m = devicesMap(doc).get(id)
   if (!m) return
   if (m.get('type') === MIX) {
@@ -990,4 +1114,16 @@ export function migrateToV4(doc: Y.Doc) {
     }
     meta.set('schemaVersion', 4)
   }, 'migrate')
+}
+
+/**
+ * v4 -> v5: buses, `parent` on tracks and `input` on devices (docs/routing.md). No data changes (absent `parent` = master, absent
+ * `input` = none); this only stamps the version so older clients stay out of a doc that may now hold a bus. Idempotent, origin
+ * 'migrate'. Run after `migrateToV4`. Does nothing for a doc from the future or one not yet at v2.
+ */
+export function migrateToV5(doc: Y.Doc) {
+  if (isFutureDoc(doc)) return
+  const meta = metaMap(doc)
+  const sv = meta.get('schemaVersion')
+  if (typeof sv === 'number' && sv < 5) doc.transact(() => meta.set('schemaVersion', 5), 'migrate')
 }

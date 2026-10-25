@@ -27,6 +27,10 @@ export const MIX = 9
 export const BORE = 10
 /** Body resonator: the EQ's engine device with eight bells (docs/engine-api.md kind 11). */
 export const BODY = 11
+/** Writes the signal at its position into a tap (id = the device id, label = its name); audio passes through unchanged (docs/routing.md). */
+export const FX_SEND = 12
+/** Adds a tap (the device's `input`) into the chain at its position (docs/routing.md). */
+export const FX_RECV = 13
 export const MIX_GAIN = 0
 export const MIX_PAN = 1
 
@@ -63,6 +67,8 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: MIX_PAN, name: 'pan', min: -1, max: 1, def: 0, scale: 'lin' },
     ],
   },
+  [FX_SEND]: { type: FX_SEND, name: 'fx send', instrument: false, params: [{ id: 0, name: 'gain', min: -60, max: 12, def: 0, scale: 'lin', unit: 'db' }] },
+  [FX_RECV]: { type: FX_RECV, name: 'fx recv', instrument: false, params: [{ id: 0, name: 'gain', min: -60, max: 12, def: 0, scale: 'lin', unit: 'db' }] },
   [EQ]: { type: EQ, name: 'EQ', instrument: false, params: eqParams() },
   [BODY]: { type: BODY, name: 'body', instrument: false, params: eqParams(BODY_BANDS, 0.1) },
   [REVERB]: {

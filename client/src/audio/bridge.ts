@@ -547,7 +547,7 @@ export class Bridge {
   }
 
   private upsertTrack(t: Track): boolean {
-    const code = { audio: 0, midi: 1, soundscape: 2 }[t.kind]
+    const code = ({ audio: 0, midi: 1, soundscape: 2 } as Partial<Record<Track['kind'], number>>)[t.kind] // (buses: the engine side of docs/routing.md)
     if (code == null) return false
     this.sink.call('engine_track_upsert', this.handle('track', t.id), code, +t.muted, +t.soloed, +(t.role === 'click'))
     const click = t.role === 'click' && t.kind === 'midi'

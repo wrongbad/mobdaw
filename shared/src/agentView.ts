@@ -6,7 +6,7 @@ import type * as Y from 'yjs'
 import { DEVICES, MIX, paramToValue, type DeviceDef, type ParamDef } from './devices.ts'
 import { noteName } from './noteName.ts'
 import {
-  MASTER_TRACK, getClips, getDevices, getLanes, getPoints, getKey, getMarkers, getNotes, getPpq, getRegions, getSampleRate, getSamples, getTimeMap, getTracks,
+  MASTER_TRACK, effectiveParent, getTaps, getClips, getDevices, getLanes, getPoints, getKey, getMarkers, getNotes, getPpq, getRegions, getSampleRate, getSamples, getTimeMap, getTracks,
   type Device, type NoteHint, type Region, type SampleStatus, type ScoreClef,
 } from './schema.ts'
 import type { TimeMap } from './timemap.ts'
@@ -98,7 +98,7 @@ export function formatDuration(map: TimeMap, fromTick: number, ticks: number): s
 // --- the view
 
 export type AgentParams = Record<string, number>
-export type AgentDevice = { id: string; type: string; typeId: number; name?: string; bypass?: boolean; key?: number; keyLo?: number; keyHi?: number; params: AgentParams }
+export type AgentDevice = { id: string; type: string; typeId: number; name?: string; bypass?: boolean; input?: string; inputName?: string; key?: number; keyLo?: number; keyHi?: number; params: AgentParams }
 /** `hint` is the stored `NoteHint` as it is, `at` included (a reader compares `at` with `[t, d, pitch]` to tell whether it is fresh; `t` and `d` here are rounded to 3 decimals). */
 export type AgentNote = { id: string; p: string; pitch: number; t: number; d: number; v: number; hint?: NoteHint }
 export type AgentMidiClip = {
@@ -121,6 +121,8 @@ export type AgentLane = {
 }
 export type AgentTrack = {
   id: string; name: string; kind: string; muted: boolean; soloed: boolean; color?: number
+  /** The bus this track sums into (its effective parent); absent = the master. */
+  parent?: string
   /** `'click'` on the metronome's track (the project has a timing reference); absent on every other track. */
   role?: 'click'
   /** One clef per staff of the score view, top first (absent: the score view picks). */
@@ -161,7 +163,7 @@ export function paramOf(def: DeviceDef, v: unknown): ParamDef | undefined {
   return def.params.find((p) => p.name.toLowerCase() === k) ?? (/^\d+$/.test(k) ? def.params.find((p) => p.id === Number(k)) : undefined)
 }
 
-const deviceView = (d: Device): AgentDevice => {
+const deviceView = (taps: Map<string, string>) => (d: Device): AgentDevice => {
   const def = DEVICES[d.type]
   const params: AgentParams = {}
   for (const p of def?.params ?? []) params[p.name] = r3(d.params?.[String(p.id)] ?? p.def)
@@ -169,6 +171,7 @@ const deviceView = (d: Device): AgentDevice => {
   return {
     id: d.id, type: def?.name ?? `type ${d.type}`, typeId: d.type,
     ...(d.name ? { name: d.name } : {}), ...(d.bypass ? { bypass: true } : {}),
+    ...(d.input ? { input: d.input, inputName: taps.get(d.input) ?? 'missing' } : {}),
     ...(drum ? { key: d.keyLo } : { ...(d.keyLo != null ? { keyLo: d.keyLo } : {}), ...(d.keyHi != null ? { keyHi: d.keyHi } : {}) }),
     params,
   }
@@ -227,10 +230,13 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
     })
     return [{ id: l.id, deviceId: dev.id, device: def.name, param: pd.name, enabled: l.enabled, ...(l.mode === 'lfo' ? { mode: 'lfo' as const } : {}), points: pts }]
   })
+  const taps = new Map(getTaps(doc).map((x) => [x.id, x.label]))
+  const eff = effectiveParent(getTracks(doc))
   const tracks = getTracks(doc).filter((t) => !wanted || wanted.includes(t.id.toLowerCase()) || wanted.includes(t.name.toLowerCase())).map((t) => ({
     id: t.id, name: t.name, kind: t.kind, muted: t.muted, soloed: t.soloed, ...(t.color != null ? { color: t.color } : {}), ...(t.role === 'click' ? { role: 'click' as const } : {}),
+    ...(eff.get(t.id) !== MASTER_TRACK ? { parent: eff.get(t.id) } : {}),
     ...(t.clefs?.length ? { clefs: t.clefs } : {}),
-    devices: devices.filter((d) => d.trackId === t.id).map(deviceView),
+    devices: devices.filter((d) => d.trackId === t.id).map(deviceView(taps)),
     clips: clips.filter((c) => c.trackId === t.id && inWindow(c)).map(clipView),
     ...(lanesOf(t.id).length ? { lanes: lanesOf(t.id) } : {}),
   }))
@@ -254,7 +260,7 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
     markers: getMarkers(doc).map((m) => ({ id: m.id, bar: m.bar, label: m.label, ...(m.text ? { text: m.text } : {}) })),
     samples: used,
     tracks,
-    master: { devices: devices.filter((d) => d.trackId === MASTER_TRACK).map(deviceView), ...(lanesOf(MASTER_TRACK).length ? { lanes: lanesOf(MASTER_TRACK) } : {}) },
+    master: { devices: devices.filter((d) => d.trackId === MASTER_TRACK).map(deviceView(taps)), ...(lanesOf(MASTER_TRACK).length ? { lanes: lanesOf(MASTER_TRACK) } : {}) },
   }
 }
 
@@ -262,7 +268,7 @@ export function agentView(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): Ag
 
 const fmtParams = (p: AgentParams) => Object.entries(p).map(([k, v]) => `${k}=${v}`).join(' ')
 const devLine = (d: AgentDevice) =>
-  `${d.type}${d.name ? ` "${d.name}"` : ''} [${d.id}]${d.bypass ? ' (bypassed)' : ''}${d.key != null ? ` key ${d.key}` : ''}${d.keyLo != null ? ` keys ${d.keyLo}-${d.keyHi ?? 127}` : ''}: ${fmtParams(d.params)}`
+  `${d.type}${d.name ? ` "${d.name}"` : ''} [${d.id}]${d.bypass ? ' (bypassed)' : ''}${d.key != null ? ` key ${d.key}` : ''}${d.keyLo != null ? ` keys ${d.keyLo}-${d.keyHi ?? 127}` : ''}${d.input ? ` reads ${d.inputName === 'missing' ? 'missing tap' : `"${d.inputName}"`} [${d.input}]` : ''}: ${fmtParams(d.params)}`
 
 const laneLine = (l: AgentLane) =>
   `  automation ${l.device} [${l.deviceId}] ${l.param} [${l.id}]${l.enabled ? '' : ' (off)'}${l.mode ? ` ${l.mode}` : ''}: ${l.points.map((p) => `${p.t}=${p.v}${p.curve === 'hold' ? ' hold' : ''} [${p.id}]`).join('  ')}`
@@ -286,7 +292,7 @@ export function agentText(doc: Y.Doc, rev?: number, filter: ViewFilter = {}): st
   }
   if (v.markers.length) out.push(`markers: ${v.markers.map((m) => `bar ${m.bar} "${m.label}" [${m.id}]`).join(', ')}`)
   for (const t of v.tracks) {
-    out.push(`track "${t.name}" [${t.id}] ${t.kind}${t.role ? ` ${t.role}` : ''}${t.muted ? ' muted' : ''}${t.soloed ? ' soloed' : ''}${t.clefs ? ` clefs ${t.clefs.join('+')}` : ''}`)
+    out.push(`track "${t.name}" [${t.id}] ${t.kind}${t.parent ? ` in bus [${t.parent}]` : ''}${t.role ? ` ${t.role}` : ''}${t.muted ? ' muted' : ''}${t.soloed ? ' soloed' : ''}${t.clefs ? ` clefs ${t.clefs.join('+')}` : ''}`)
     for (const d of t.devices) out.push(`  device ${devLine(d)}`)
     for (const l of t.lanes ?? []) out.push(laneLine(l))
     for (const c of t.clips) {

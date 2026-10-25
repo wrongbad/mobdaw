@@ -413,6 +413,9 @@ on the louder channel, 6 dB soft knee, one shared gain for both channels.
 | makeup | 4 | 0..24 dB | 0 | Smoothed. |
 
 - Under the threshold with no makeup the gain is exactly 1. Bypass resets the envelope.
+- **Optional key input** (docs/routing.md). The device's `input` (a tap id, document field, not a param) names a signal the detector
+  reads instead of the compressor's own input; the gain it computes still applies to the compressor's own input. Absent, or a tap that
+  no longer exists: keys off its own input, as before. The tap is the implicit tap of a track or bus (post-fx, pre-fader, pre-mute) or a send.
 
 **kind 5: Tremolo** (effect). Amplitude modulation by an LFO, `dsp::tremolo`: `gain = 1 - depth·(0.5 - 0.5·lfo)`,
 so the gain swings between `1 - depth` and 1 and the effect only takes level away.
@@ -510,6 +513,23 @@ Used by the matched string presets (docs/matching.md).
 | gain | band·3+1 | -24..24 dB | 0 | |
 | damping | band·3+2 | 0.05..2 | 0.1 | Q = 1/(2·damping), so 5 by default: narrow. |
 | output | 24 | -24..24 dB | 0 | |
+
+**kind 12: FX send** (effect; docs/routing.md). Audio passes through unchanged. It also writes the signal at its position, scaled
+by `gain`, into a tap whose id is the device's id (the label shown in pickers is the device's `name`). The write replaces the tap's
+buffer for the block (one writer per tap). Bypassed: the tap reads silence.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| gain | 0 | -60..+12 dB | 0 | Applies to the tap only, not to the pass-through. Linear scale in the UI, smoothed. |
+
+**kind 13: FX recv** (effect; docs/routing.md). Adds the audio of the tap named by the device's `input` (a tap id, document field) into
+the chain at its position, scaled by `gain`: `out = in + gain · tap`. No `input`, or a tap that no longer exists: adds silence. A
+tap whose writer has not run yet this block yields the writer's previous block (one block of delay; cycles are legal). A track or
+bus whose chain holds only a recv is a return.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| gain | 0 | -60..+12 dB | 0 | Smoothed. -60 dB and below may be treated as silence. |
 
 **kind 7: Lofi drum** (instrument). `dsp::lofidrum`: white noise → SVF low-pass (`dsp::svf`) → exponential
 decay envelope → gain. A one-shot.

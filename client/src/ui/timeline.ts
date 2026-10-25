@@ -2,7 +2,7 @@
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import { createZoom } from './zoom'
 import {
-  DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, MIX_GAIN, MIX_PAN, migrateToV3, migrateToV4, addClickTrack, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipEnd, clipsMap, deleteClip,
+  DEFAULT_SAMPLE_RATE, DEVICES, MASTER_TRACK, MIX_GAIN, MIX_PAN, migrateToV3, migrateToV4, migrateToV5, addClickTrack, isLooping, addMidiClip, addPad, addTrack, deleteLane, deletePad, clipEnd, clipsMap, deleteClip,
   evalPoints, getPoints, laneOf, laneState, paramToValue, resolveTarget, setLaneEnabled, 
   deleteDevice, deleteLooper, isDrum, isForever, deleteNote, getDevices, getSampleRate, getSamples, metaMap,
   getLoopers, getTracks, padsMap, getTimeMap, getMarkers, getKey, setKey, isFutureDoc, markersMap, regionsMap, migrateToV2, notesMap, splitClip, stashLaneRanges, sweepOrphans, tracksMap, 
@@ -1136,6 +1136,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       migrateToV2(doc)
       migrateToV3(doc)
       migrateToV4(doc)
+      migrateToV5(doc)
       sweepOrphans(doc)
       stashLaneRanges(doc)
     }

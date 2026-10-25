@@ -4,7 +4,7 @@
 // transaction attributed to "<user> (api)": all-or-nothing, and one history entry.
 import * as Y from 'yjs'
 import {
-  DEVICES, FINNWAVE, MASTER_TRACK, addLane, addPoint, deleteLane, deletePoint, lanesMap, paramToPos, pointsMap, setLaneEnabled, updatePoint, MIX, PositionError, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, apiName,
+  DEVICES, FINNWAVE, MASTER_TRACK, addBus, setParent, tapExists, getTaps, addLane, addPoint, deleteLane, deletePoint, lanesMap, paramToPos, pointsMap, setLaneEnabled, updatePoint, MIX, PositionError, addDevice, addMarker, addMidiClip, addNote, addRegion, addTrack, apiName,
   clipsMap, deleteClip, deleteDevice, deleteMarker, deleteNote, deleteRegion, deleteTrack, deviceType, devicesMap, getRegions, getTimeMap,
   ensureMixDevice, getDevices, isFutureDoc, markersMap, notesMap, paramOf, parseDuration, parseNote, parsePosition, regionAtBar, regionsMap, setKey, setParam, setRegion,
   getTracks, noteName, tracksMap, updateClip, updateDevice, updateMarker, updateNote, updateTrack, type DeviceDef, type Frac, type NoteHint, type Region, type RegionPatch, type ScoreClef,
@@ -28,7 +28,7 @@ type Spec = Record<string, string>
 /** Field types: str, num, bool, any, list (an array); a trailing ? makes it optional. Unknown fields are an error (a typo should not pass silently). */
 const SPECS: Record<string, Spec> = {
   addTrack: { name: 'str', kind: 'str?', preset: 'any?', like: 'str?', clefs: 'list?' },
-  updateTrack: { id: 'str', name: 'str?', muted: 'bool?', soloed: 'bool?', color: 'num?', clefs: 'list?' },
+  updateTrack: { id: 'str', name: 'str?', muted: 'bool?', soloed: 'bool?', color: 'num?', clefs: 'list?', parent: 'any?' },
   removeTrack: { id: 'str' },
   addMidiClip: { trackId: 'str', start: 'any', length: 'any', loop: 'any?', view: 'str?' },
   updateClip: { id: 'str', start: 'any?', length: 'any?', trackId: 'str?', loop: 'any?', view: 'str?' },
@@ -36,7 +36,8 @@ const SPECS: Record<string, Spec> = {
   addNotes: { clipId: 'str', notes: 'list' },
   updateNotes: { notes: 'list' },
   removeNotes: { ids: 'list' },
-  addDevice: { trackId: 'str', type: 'any', name: 'str?', key: 'any?', params: 'obj?' },
+  addDevice: { trackId: 'str', type: 'any', name: 'str?', key: 'any?', params: 'obj?', input: 'str?' },
+  setInput: { deviceId: 'str', input: 'str?' },
   removeDevice: { id: 'str' },
   setParam: { deviceId: 'str', param: 'any', value: 'any' },
   addRegion: { bar: 'num', bpm: 'num?', meter: 'str?', rampTo: 'num?', free: 'num?' },
@@ -307,9 +308,13 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
   switch (op.op) {
     case 'addTrack': {
       const kind = opt<string>('kind') ?? 'midi'
-      if (kind !== 'midi' && kind !== 'audio') return bad(i, `bad kind "${kind}": use "midi" or "audio"`)
+      if (kind !== 'midi' && kind !== 'audio' && kind !== 'bus') return bad(i, `bad kind "${kind}": use "midi", "audio" or "bus"`)
       const name = str('name').trim().slice(0, 80)
       if (!name) return bad(i, 'name is empty')
+      if (kind === 'bus') {
+        if (opt<unknown>('preset') != null || opt<unknown>('like') != null || opt<unknown>('clefs') != null) return bad(i, 'a bus takes only a name')
+        return addBus(doc, name)
+      }
       const clefs = opt<unknown>('clefs') == null ? undefined : clefsOf(i, op.clefs)
       if (clefs && kind !== 'midi') return bad(i, 'only midi tracks take clefs')
       let inst = kind === 'midi' ? DEVICES[FINNWAVE] : undefined
@@ -354,6 +359,12 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
           if (t.kind !== 'midi') return bad(i, 'only midi tracks take clefs')
           patch.clefs = clefsOf(i, op.clefs)
         }
+      }
+      if (op.parent !== undefined) {
+        if (op.parent !== null && typeof op.parent !== 'string') return bad(i, '"parent" must be a bus id, "master" or null')
+        const to = op.parent === null ? null : r(op.parent)
+        if (to != null && to !== MASTER_TRACK && track(to).kind !== 'bus') return bad(i, `parent "${to}" is not a bus`)
+        if (!setParent(doc, t.id, to)) return bad(i, `cannot put "${t.id}" into "${to}" (that would make a loop)`)
       }
       doc.transact(() => {
         if (op.clefs === null) tracksMap(doc).get(t.id)?.delete('clefs')
@@ -486,8 +497,13 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
         const t = track(tid)
         if (def.instrument && t.kind !== 'midi') return bad(i, `${def.name} is an instrument: it goes on a midi track`)
       }
-      const extra: { name?: string; keyLo?: number; keyHi?: number } = {}
+      const extra: { name?: string; keyLo?: number; keyHi?: number; input?: string } = {}
       if (op.name) extra.name = String(op.name).slice(0, 60)
+      if (op.input != null) {
+        const tap = r(op.input)
+        if (!tapExists(doc, tap)) return bad(i, `input: no tap "${tap}" (taps: ${getTaps(doc).map((x) => x.id).join(', ')})`)
+        extra.input = tap
+      }
       if (op.key != null) {
         if (!def.instrument) return bad(i, '"key" is for instruments (a drum plays one key)')
         extra.keyLo = extra.keyHi = pitchOf(i, op.key)
@@ -498,6 +514,18 @@ function run(doc: Y.Doc, i: number, op: Op, results: OpResult[]): OpResult {
         initial[String(pv.id)] = pv.value
       }
       return addDevice(doc, tid, def.type, extra, initial)
+    }
+    case 'setInput': {
+      const id = r(op.deviceId)
+      const d = devicesMap(doc).get(id)
+      if (!d) return bad(i, `no device "${id}"`)
+      if (op.input == null) d.delete('input')
+      else {
+        const tap = r(op.input)
+        if (!tapExists(doc, tap)) return bad(i, `input: no tap "${tap}" (taps: ${getTaps(doc).map((x) => x.id).join(', ')})`)
+        d.set('input', tap)
+      }
+      return id
     }
     case 'removeDevice': {
       const id = r(op.id)
@@ -689,7 +717,8 @@ Conventions
 
 Ops
 - addTrack {name, kind?: "midi"|"audio" (default midi), preset?: instrument name or "none", like?: a track's id or name, clefs?: ["treble","bass",...] one per staff of the score view}: a midi track gets the "finnwave" synth unless preset says otherwise. like copies another track's whole chain (instrument, effects, every param, fader and pan, colour): the way to make a second violin sound like the first. Presets are device TYPES (the instruments in the device list below), not the display names on devices.
-- updateTrack {id, name?, muted?, soloed?, color?, clefs? (null clears)}; removeTrack {id} (its clips, notes and devices go too).
+- addTrack with kind "bus" makes a bus: a group with its own fader, pan and effect chain, no clips; give only a name. updateTrack's parent (a bus id; null or "master" = the master) puts a track or bus into a bus, whose chain then processes the sum of its children. A device's input is the id of a tap it reads: any track or bus id (its signal before fader and mute), an fx send device's id, or "master". fx send writes a named tap and passes audio on; fx recv adds a tap's audio into its chain (a return); the compressor's input is its sidechain key. Set it with addDevice's input or setInput {deviceId, input (null clears)}.
+- updateTrack {id, name?, muted?, soloed?, color?, clefs? (null clears), parent?}; removeTrack {id} (its clips, notes and devices go too).
 - addMidiClip {trackId, start, length, loop?, view?: "drums"|"piano"}: loop is the pattern length that repeats until length ends.
 - updateClip {id, start?, length?, trackId?, loop? (0 or null clears), view?}; removeClip {id}.
 - addNotes {clipId, notes: [{p|pitch, t, d, v?, hint?}]}; updateNotes {notes: [{id, p?, t?, d?, v?, hint?}]}; removeNotes {ids: []}.
