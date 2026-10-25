@@ -668,7 +668,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
         const all = rows()
         const n = id === MASTER_TRACK ? all.length : all.find((r) => r.id === id)?.below ?? 0
         const what = `${n} ${n === 1 ? 'track' : 'tracks'}`
-        note.textContent = n === 0 ? 'empty: drag a track here, or use the menu on its header' : collapsed.isCollapsed(id) ? `${what} folded` : id === MASTER_TRACK ? `${what} in total` : what
+        note.textContent = n === 0 ? (id === MASTER_TRACK ? 'no tracks yet' : 'empty: move tracks in from their menu') : collapsed.isCollapsed(id) ? `${what} folded` : id === MASTER_TRACK ? `${what} in total` : what
       })
       return dispose
     })

@@ -55,12 +55,20 @@ absent `input` means none.
 
 ## UI
 
-- **Bus rows** look like a Firefox tab group: a header with a colour band spanning its children, collapsible (local view state).
-  The header has what a track header has (name, fader, pan, mute, solo, fx / auto / presets tabs) and no clip lane of its own.
-- **Moving tracks**: drag a track header into or out of a bus, and a "move to bus" menu on the header (needed on phones) with
-  "new bus from this track".
-- **The master is the root bus** and uses the bus header and drawers. It closes the track list, can't be dragged, and has no
-  mute or solo. (This replaces the earlier master-in-the-ruler-corner experiment.)
+- **Bus rows** look like a tab group: a header (name, fold button, fader and pan, mute, solo, fx / auto / presets tabs) tinted with the
+  bus's colour, and a body that is only a note ("3 tracks"; click it to fold). The bus's tracks are listed directly under it in `order`
+  (`treeRows` in `client/src/project/buses.ts`, from `trackTree`; every place the timeline lists tracks uses it). A track in a bus has one
+  4px stripe per bus above it on the left of its header and drawer cells, outermost bus first, then its own colour bar; its header is
+  indented by the stripes and the tiles sit 2px apart inside a bus. Buses nest. Folding is local view state (`createCollapsed`, like the
+  drawers): a folded bus's lanes stay mounted, hidden.
+- **Moving tracks**: drag a track header (`ui/trackDrag.ts`; a finger long-presses first, as with device cards). The lane follows the
+  pointer and a line shows where it lands: the top edge of a lane is in front of it, a bus header is into the bus (first among its
+  listed tracks, else last), the rest of a track is behind it, below everything is the end of the master. Dragging a bus moves its
+  subtree. Dropping into a folded bus opens it. The header menu (click, right-click, tap) has "move to bus ▸" (master, then every bus
+  except the track itself and the buses inside it; the current one is ticked) and "new bus from this track" (a bus at the track's place,
+  holding it). "+ bus" is in the add-track menu. All of it works by tap; drag is the shortcut.
+- **The master is the root bus**: the same header and drawers as a bus (`TrackHead` / `mountLaneDrawers` with `MASTER_TRACK`), closing the
+  track list. No fold button, mute, solo, drag or menu; its body note counts every track.
 - **Cards**: `fx send` shows its editable label; `fx recv` shows a tap picker; the compressor shows a "key" tap picker. The tap
   picker lists "none", then tracks and buses (their implicit taps), then sends by label, then the master.
 
