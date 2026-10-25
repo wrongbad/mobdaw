@@ -133,7 +133,7 @@ struct Track {
     /// Children, as node numbers (ascending) and as the buffer indices of their outputs (same order).
     child_nodes: Vec<u32>,
     child_outs: Vec<u32>,
-    /// Nodes that read this node's taps (deduplicated): for solo's "downstream through taps".
+    /// Nodes that mix this node's taps in with a recv (deduplicated): for solo's "downstream through taps".
     downstream: Vec<u32>,
     /// Buffer of this node's output (after the mix device and the mute/solo gain): what its parent sums.
     out: u32,
@@ -176,8 +176,8 @@ struct Route {
 }
 
 /// Solo: which nodes are audible while some track is soloed. The soloed nodes (and solo-safe ones), every
-/// descendant of a soloed bus, then closed over ancestors and over "downstream through a tap" (the readers of an
-/// audible node's taps), so a soloed vocal's reverb return stays audible and so does the bus carrying it. Mute is
+/// descendant of a soloed bus, then closed over ancestors and over "downstream through a tap" (the nodes whose recv mixes an
+/// audible node's tap; a compressor key only listens and carries nothing), so a soloed vocal's reverb return stays audible and so does the bus carrying it. Mute is
 /// separate and always wins.
 fn compute_audible(tracks: &HandleMap<Track>, aud: &mut [bool], work: &mut Vec<u32>) {
     let n = tracks.len();
@@ -1403,6 +1403,8 @@ impl Engine {
         let mut want: Vec<BufKey> = handles.iter().map(|&h| BufKey::Out(h)).collect();
         // Per device (dense index): the buffer key it reads.
         let mut reads: Vec<Option<BufKey>> = vec![None; devices.len()];
+        // recvs mix a tap into their chain; a key (side input) only listens, so it never carries solo along
+        let mut mixing: Vec<u32> = Vec::new();
         for (di, (h, d)) in devices.iter().enumerate() {
             if d.input == Input::None || !matches!(d.kind_id, KIND_RECV | KIND_COMPRESSOR) {
                 continue;
@@ -1416,6 +1418,9 @@ impl Engine {
             };
             if let Some((writer, key)) = src {
                 edges.push(Edge::tap(writer, key, reader, h));
+                if d.kind_id == KIND_RECV {
+                    mixing.push(h);
+                }
                 want.push(key);
                 reads[di] = Some(key);
             } else {
@@ -1441,7 +1446,8 @@ impl Engine {
             }
         }
         for e in edges.iter() {
-            if let (routing::PortRole::Tap(_), true) = (e.from.role, (e.from.node as usize) < nt && e.from.node != e.to.node) {
+            let mixes = matches!(e.to.role, routing::PortRole::Side(dh) if mixing.contains(&dh));
+            if let (routing::PortRole::Tap(_), true) = (e.from.role, mixes && (e.from.node as usize) < nt && e.from.node != e.to.node) {
                 let w = tracks.get_index_mut(e.from.node as usize);
                 if !w.downstream.contains(&e.to.node) {
                     w.downstream.push(e.to.node);

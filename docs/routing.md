@@ -48,7 +48,7 @@ absent `input` means none.
 - **Side inputs.** A device's process call can take an optional second stereo input; phase 1 only the compressor uses it (its
   detector reads the key, its gain applies to its own input).
 - **Mute and solo.** A muted bus silences its subtree. Solo: the audible set is the soloed nodes, their ancestors, every descendant
-  of a soloed bus, and every node downstream of an audible node through a tap (so a soloed vocal's reverb return stays audible),
+  of a soloed bus, and every node downstream of an audible node through a tap that mixes audio, i.e. a `recv` reading it (so a soloed vocal's reverb return stays audible; a compressor key only listens, so soloing the kick does not unmute the keyed bass),
   plus the ancestors of those. The click track stays solo-safe.
 - **No allocation on the audio thread**: tap and output buffers are preallocated (the `no_alloc` test stays green).
 - **Meters**: buses meter like tracks.

@@ -141,8 +141,8 @@ engine_track_remove(e, h)       // also stops rendering its clips/devices (bridg
 - **No fader or pan on the track:** those are the track's **mix device** (kind 9, below), pinned last in its chain
   by the document schema. The engine only applies mute/solo, as a 10 ms linear ramp of a 0/1 gain.
 - **Solo:** if any track is soloed, the rest are silent, except what the soloed ones reach: the audible set is the soloed
-  nodes, every descendant of a soloed bus, and every node downstream of an audible node through a tap (a recv's or a
-  compressor key's reader), closed over parents (a bus carrying an audible child is audible). Mute always wins.
+  nodes, every descendant of a soloed bus, and every node downstream of an audible node through a recv (a compressor key
+  does not count: it only listens), closed over parents (a bus carrying an audible child is audible). Mute always wins.
   A `solo_safe` track (the metronome's click track) ignores other tracks' solo, so it stays audible;
   its own mute still applies.
 - **Signal flow:** clips (audio) or instrument outputs (midi, summed) plus the outputs of the track's children (a bus) →

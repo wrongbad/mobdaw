@@ -435,6 +435,40 @@ fn silent_buses_sleep_and_a_live_tap_keeps_a_return_awake() {
 }
 
 #[test]
+fn soloing_a_key_does_not_unmute_the_track_it_keys() {
+    let mut e = engine();
+    dc(&mut e, 1, 0.01); // kick
+    dc(&mut e, 2, 0.02); // bass, compressor keyed by the kick
+    e.device_upsert(21, 2, COMP, 1.0, false);
+    e.device_input(21, Input::Track(1));
+    e.track_upsert(1, 0, false, true, false);
+    assert_lr(settle(&mut e), (0.01, 0.01), "only the kick");
+}
+
+#[test]
+fn a_plus_12_db_loop_stays_finite_and_bounded_and_recovers() {
+    let mut e = engine();
+    dc(&mut e, 1, 0.25);
+    dc(&mut e, 2, 0.0);
+    for (d, t, from) in [(11, 1, 2), (21, 2, 1)] {
+        e.device_upsert(d, t, RECV, 1.0, false);
+        e.param_set(d, 0, 12.0);
+        e.device_input(d, Input::Track(from));
+    }
+    let mut peak = 0.0f32;
+    for _ in 0..8 {
+        let (l, r) = render(&mut e, 48_000);
+        assert!(l.iter().chain(&r).all(|v| v.is_finite()));
+        peak = l.iter().chain(&r).fold(peak, |m, v| m.max(v.abs()));
+    }
+    assert!(peak <= 100.0, "bounded: {peak}");
+    e.device_input(11, Input::None); // break the loop
+    e.device_input(21, Input::None);
+    let (l, _) = settle(&mut e);
+    assert!(near(l, 0.25), "back to normal: {l}");
+}
+
+#[test]
 fn the_documents_track_order_not_the_handle_decides_ties_and_where_a_cycle_is_cut() {
     let build = |order1: f64, order2: f64| {
         let mut e = engine();

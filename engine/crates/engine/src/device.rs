@@ -729,6 +729,21 @@ pub struct TapGain {
     unset: bool,
 }
 
+/// Taps carry at most this much (about +24 dBFS): a feedback loop through taps with a loop gain over unity would otherwise
+/// grow to inf and NaN, which the persistent tap buffers would then keep re-reading.
+pub const TAP_LIMIT: f32 = 16.0;
+
+/// Clamp to `+-TAP_LIMIT` and flush NaN to 0.
+#[inline(always)]
+fn sane(x: f32) -> f32 {
+    let y = x.clamp(-TAP_LIMIT, TAP_LIMIT);
+    if y == y {
+        y
+    } else {
+        0.0
+    }
+}
+
 pub const TAP_GAIN_MIN_DB: f32 = -60.0;
 pub const TAP_GAIN_MAX_DB: f32 = 12.0;
 
@@ -767,16 +782,16 @@ impl TapGain {
         self.span(n);
     }
 
-    /// Send: `tap = gain * signal`. `tap_*` are as long as `l`/`r`.
+    /// Send: `tap = gain * signal` (kept sane, see [`sane`]). `tap_*` are as long as `l`/`r`.
     pub fn write(&mut self, l: &[f32], r: &[f32], tap_l: &mut [f32], tap_r: &mut [f32]) {
         let n = l.len();
         let (g0, g1) = self.span(n);
         let d = (g1 - g0) / n as f32;
         for (j, (t, x)) in tap_l.iter_mut().zip(l).enumerate() {
-            *t = *x * (g0 + d * (j as u32 + 1) as f32);
+            *t = sane(*x * (g0 + d * (j as u32 + 1) as f32));
         }
         for (j, (t, x)) in tap_r.iter_mut().zip(r).enumerate() {
-            *t = *x * (g0 + d * (j as u32 + 1) as f32);
+            *t = sane(*x * (g0 + d * (j as u32 + 1) as f32));
         }
     }
 
@@ -786,10 +801,10 @@ impl TapGain {
         let (g0, g1) = self.span(n);
         let d = (g1 - g0) / n as f32;
         for (j, (x, t)) in l.iter_mut().zip(tap_l).enumerate() {
-            *x += *t * (g0 + d * (j as u32 + 1) as f32);
+            *x += sane(*t * (g0 + d * (j as u32 + 1) as f32));
         }
         for (j, (x, t)) in r.iter_mut().zip(tap_r).enumerate() {
-            *x += *t * (g0 + d * (j as u32 + 1) as f32);
+            *x += sane(*t * (g0 + d * (j as u32 + 1) as f32));
         }
     }
 }
