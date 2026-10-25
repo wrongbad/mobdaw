@@ -249,8 +249,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const where = h('span', { className: 'dim where', onpointerdown: (e) => e.stopPropagation(), title: s.local ? 'saved in this browser, on this device' : s.snapshot ? 'a snapshot of a cloud project: your changes are not saved' : 'saved in the cloud' })
   where.append(s.local ? icon('phone', 16) : icon('cloud', 18))
   const bar = h('header', { className: 'bar' }) // (filled by `Bar` once the recorder exists)
-  const corner = h('div', { className: 'corner' }) // the master bus's header (filled by `MasterHead`): the project's name, then its fader, pan and tabs
-  const ruler = h('div', { className: 'ruler' }, corner)
+  const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }, where, projectTitle()))
   const rulerBody = h('div', { className: 'ruler-body' })
   ruler.append(rulerBody)
   const laneBox = h('div', { className: 'lanes' })
@@ -291,8 +290,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
   overlay.append(playhead, snapLine)
   const hint = h('div', { className: 'hint dim' }, 'drop audio or midi files here, or use + track.')
-  const master = h('div', { className: 'lane master' }) // the master bus's drawers (fx, then automation), hanging off the ruler above the tracks (filled below)
-  const content = h('div', { className: 'content' }, ruler, master, laneBox, hint, addLink, bgPicker, midiPicker, overlay)
+  const master = h('div', { className: 'lane master' }) // like a track's lane: the fx row, then its automation, as one block (filled below)
+  const content = h('div', { className: 'content' }, ruler, laneBox, master, hint, addLink, bgPicker, midiPicker, overlay)
   const scroll = h('div', { className: 'scroll' }, content)
   // Drops outside any lane start a new track.
   scroll.ondragover = (e) => e.preventDefault()
@@ -300,7 +299,10 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     e.preventDefault()
     void dropFiles(importableFiles(e.dataTransfer?.files), null, fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   }
-  let masterGain: HTMLInputElement | null = null // the master fader, which doubles as its level meter
+  // The global fx lane: the master bus chain. It closes the track list, directly above the global automation (one unit, after every track).
+  const masterHead = h('div', { className: 'head' }) // (filled by `MasterHead`)
+  let masterGain: HTMLInputElement | null = null // its fader, which doubles as its level meter
+  master.append(h('div', { className: 'lane-row master-row' }, masterHead)) // (the drawers follow: `MasterDrawers`)
   const scorePane = h('div', { className: 'score-pane' })
   const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, scorePane, chat.el, ...(hist ? [hist.el] : [])))
   // The score mode swaps the tracks for sheet music; the score mounts on first use and stays while hidden (it only draws while shown).
@@ -366,7 +368,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
       } } }),
     mountRemoteHeads(overlay, { store, offset: HEADER, scale }),
     mountRemoteHeads(rulerHeads, { store, offset: 0, scale }),
-    mountMasterHead(corner, headCtx, [where, projectTitle()], (r) => (masterGain = r.gain)),
+    mountMasterHead(masterHead, headCtx, (r) => (masterGain = r.gain)),
     createRoot((dispose) => (createEffect(() => (store.overrides(), applyOverrides())), dispose)),
   )
   const ne = noteEditor({
@@ -917,8 +919,8 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   }
 
   // --- layout: explicit effects, each following what it reads (no pass over the whole project)
-  /** The playhead lines run through the ruler, the master drawers and the lanes, not the empty space below them. */
-  const layout = () => (overlay.style.height = `${laneBox.offsetTop + laneBox.offsetHeight}px`)
+  /** The playhead lines run through the ruler, the lanes and the master automation, not the empty space below them. */
+  const layout = () => (overlay.style.height = `${master.offsetTop + master.offsetHeight}px`)
   /** The scroller's visible size (resize, the chat panel opening). */
   function measure() {
     setViewW(scroll.clientWidth)
@@ -1047,7 +1049,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
   const rulerBar = (clientX: number) => barAtPx(tmap(), clientX - rulerBody.getBoundingClientRect().left, pps())
   let rulerHold = 0 // a long press on the ruler (touch) opens the menu at that bar, like a right click
   ruler.onpointerdown = (e) => {
-    if (e.button !== 0 || (e.target instanceof Element && e.target.closest('.corner'))) return // (the corner is the master header: its controls are not the ruler)
+    if (e.button !== 0) return
     seek(fromX(e.clientX - rulerBody.getBoundingClientRect().left))
     if (e.pointerType !== 'touch') return
     const { clientX, clientY } = e

@@ -71,7 +71,7 @@ main.center { margin: auto; text-align: center; }
 /* timeline: top bar with a centred transport */
 .timeline { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 /* the sides never shrink below their content: on a narrow screen the bar scrolls sideways instead of overlapping */
-header.bar { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .bar-l, .bar-r, .transport { display: flex; gap: 16px; align-items: center; padding: 0 16px; }
 .bar-r { justify-content: flex-end; padding-right: 0; }
 /* a long message is cut off (tap it to read it all) rather than stretching the bar */
@@ -119,7 +119,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .api-tokens .token-cmd { display: block; overflow-wrap: anywhere; user-select: all; padding: 6px 8px; background: var(--panel); }
 .body { display: flex; flex: 1; min-height: 0; }
 .scroll { flex: 1; min-width: 0; overflow: auto; min-height: 0; }
-/* score mode (ui/timeline.ts swaps .scroll for .score-pane; score/view.ts fills it). abcjs draws in currentColor: black ink on a soft, warm paper (the app's --fg tint, dimmed) like printed music */
+/* score mode (ui/timeline.ts swaps .scroll for .score-pane; score/view.ts fills it). abcjs draws in currentColor, so ink follows --fg */
 .scroll[hidden], .score-pane[hidden], .score-playbar[hidden], .score-hint[hidden] { display: none; }
 .score-pane { flex: 1; min-width: 0; min-height: 0; }
 .score { display: flex; flex-direction: column; color: var(--fg); background: var(--bg); }
@@ -127,12 +127,12 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .score-chip { height: 24px; padding: 0 10px; border: 1px solid var(--line); border-radius: 12px; background: none; color: var(--dim); font-size: 12px; }
 .score-chip.on { color: var(--fg); background: var(--raise); border-color: var(--line-strong); }
 .score-chip-hint { margin-left: 6px; font-size: 10px; opacity: .7; }
-.score-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; background: #d9d5cc; color: #111; }
+.score-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; }
 .score-sheet svg { display: block; }
 .score-hint { padding: 48px 12px; text-align: center; font-size: 13px; }
 .score-playbar { position: absolute; z-index: 1; pointer-events: none; background: var(--accent-soft); border-radius: var(--r-sm); }
 .content { position: relative; min-width: 100%; }
-.ruler { --rx: 24px; /* the main ruler keeps its 40px layout, floated to the bottom of the taller bar (the corner needs the room) */ display: flex; height: 64px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
+.ruler { display: flex; height: 40px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
 /* the ruler's bottom line is a pseudo-element under the playhead copies (a real border would draw over them) */
 .ruler::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); z-index: 0; pointer-events: none; }
 /* tracks are tiles with a gutter around them: the ruler's corner is the track header plus the gutter, so its line meets the headers' */
@@ -145,19 +145,18 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .ruler-body { position: relative; height: 100%; overflow: hidden; }
 .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
 /* the main ruler (ui/ruler.tsx): markers on top, then the tempo / meter badges, then bar numbers; beats grow shorter, groups a little taller */
-.rl { position: absolute; top: calc(var(--rx, 0px) + 12px); bottom: 0; border-left: 1px solid var(--line); padding: 12px 0 0 4px; font-size: 10px; line-height: 14px; color: var(--dim); pointer-events: none; white-space: nowrap; }
-/* (`header.bar` below is the top bar: a bar line must not match it) */
+.rl { position: absolute; top: 12px; bottom: 0; border-left: 1px solid var(--line); padding: 12px 0 0 4px; font-size: 10px; line-height: 14px; color: var(--dim); pointer-events: none; white-space: nowrap; }
 .rl.bar { border-left-color: var(--line-strong, var(--dim)); }
-.rl.group { top: calc(var(--rx, 0px) + 30px); padding: 0; }
-.rl.beat { top: calc(var(--rx, 0px) + 34px); padding: 0; }
+.rl.group { top: 30px; padding: 0; }
+.rl.beat { top: 34px; padding: 0; }
 .rl.free { border-left-style: dashed; }
-.rl-free { position: absolute; top: calc(var(--rx, 0px) + 12px); bottom: 0; pointer-events: none; background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--dim) 16%, transparent) 5px 6px); }
-.rl-s { position: absolute; top: var(--rx, 0px); bottom: 0; padding: 12px 0 0 3px; border-left: 1px solid var(--line); font-size: 9px; line-height: 14px; color: var(--dim); }
+.rl-free { position: absolute; top: 12px; bottom: 0; pointer-events: none; background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--dim) 16%, transparent) 5px 6px); }
+.rl-s { position: absolute; top: 0; bottom: 0; padding: 12px 0 0 3px; border-left: 1px solid var(--line); font-size: 9px; line-height: 14px; color: var(--dim); }
 .rl-badge, .rl-marker { position: absolute; z-index: 1; height: 12px; max-width: 220px; padding: 0 4px; border: 0; border-left: 2px solid var(--accent); font-size: 9px; line-height: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); cursor: pointer; }
-.rl-badge { top: calc(var(--rx, 0px) + 12px); background: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
-.rl-marker { top: var(--rx, 0px); max-width: 140px; border-left-color: var(--fg); background: var(--raise); }
+.rl-badge { top: 12px; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
+.rl-marker { top: 0; max-width: 140px; border-left-color: var(--fg); background: var(--raise); }
 .rl-badge:hover, .rl-marker:hover { background: var(--line); }
-.rl-ramp { position: absolute; top: calc(var(--rx, 0px) + 13px); z-index: 0; fill: none; stroke: var(--accent); stroke-width: 1.5; pointer-events: none; overflow: visible; }
+.rl-ramp { position: absolute; top: 13px; z-index: 0; fill: none; stroke: var(--accent); stroke-width: 1.5; pointer-events: none; overflow: visible; }
 /* audio clips that were on a bar or beat line before a tempo edit and no longer are: dimmed for a moment (MIDI moved with the bars, audio did not) */
 .clip.ghost { opacity: .4; outline: 1px dashed var(--dim); outline-offset: -2px; }
 .clip { transition: opacity .3s; }
@@ -233,6 +232,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 .tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 .tab.on { color: var(--tc, var(--accent)); box-shadow: inset 0 -1px 0 var(--tc, var(--accent)); }
 .tab[hidden] { display: none; }
+.lane.master .lane-row { height: 72px; }
 .lane-body { position: relative; flex: none; height: 100%; }
 
 .clip {
@@ -292,11 +292,7 @@ input[type=range].gain::-moz-range-thumb { height: 18px; width: 3px; border-radi
 }
 .fx-row::before, .auto-row::before { margin-top: -1px; }
 /* the global section is a lane like any other (fx, then its automation, in one block), with a neutral bar */
-/* the master drawers hang flush off the ruler: no tile margin or top corners */
-/* (their left cells run from the screen edge, as the ruler's corner does, so the lane's rounded lower-left corner shows) */
-.lane.master .fx-toggle { left: 0; width: calc(var(--head) + var(--gutter)); padding-left: calc(var(--gutter) + 12px); box-shadow: none; }
-.lane.master .fx-row::before { left: 0; }
-.lane.master { --tc: var(--line-strong); margin: 0; border-radius: 0 0 var(--r-md) var(--r-md); }
+.lane.master { --tc: var(--line-strong); }
 .lane-body.arming { cursor: crosshair; }
 /* looper regions: coloured outline boxes over the track's audio */
 .loop-box { position: absolute; top: 0; bottom: 0; cursor: grab; z-index: 1; background: color-mix(in srgb, var(--c) 14%, transparent); }
@@ -521,13 +517,9 @@ button.danger:hover { color: var(--danger); }
 .lane.locked .fx { opacity: 0.6; }
 /* a muted track is dimmed through its children (dimming the lane itself would fade its background tile too) */
 .lane.muted > * { opacity: .45; }
-.project-name { display: block; width: 100%; height: 100%; min-width: 0; text-align: left; font-weight: bold; font-size: 12px; border: 0; background: none; padding: 0 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* the ruler's corner is the master bus's header: the project's name, then the master fader and pan, then the fx / auto tabs */
-.corner { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 4px 8px 0 calc(var(--gutter) + 6px); }
-.corner > * { flex: none; }
-.corner .tabs { margin: auto -8px 0 calc(-1 * (var(--gutter) + 6px)); }
-.corner .head-top { gap: 0; }
-.where { flex: none; display: inline-flex; align-items: center; padding-left: 0; }
+.project-name { display: block; width: 100%; height: 100%; text-align: left; font-weight: bold; font-size: 12px; border: 0; background: none; padding: 0 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.corner { display: flex; align-items: center; min-width: 0; }
+.where { flex: none; display: inline-flex; align-items: center; padding-left: 8px; }
 .where + .project-name { flex: 1; min-width: 0; width: auto; padding-left: 5px; }
 .project-name:hover { background: var(--raise); }
 
