@@ -7,6 +7,7 @@ import { BAR_PX, BEAT_PX, HALF_PX, divisionAt, gridSnap, gridSnapTick, pxPerBeat
 import { labelStep, meterLabel, nearestBar, regionLabel, rulerBadges, rulerGrid, rulerMarkers, fmtFree } from '../src/ui/rulerModel'
 import { offGrid } from '../src/ui/ghost'
 import { commitMoving } from '../src/project/draft'
+import { flattenTrack, isFresh } from '../src/score/flatten'
 import { loopMidi, moveMidi, moveTick, passMidi, trimLeft, trimMidi } from '../src/ui/midiClipOps'
 import { parseBpm, parseFreeSeconds, parseGroups, parseMeter, parseTempoForm, rampOption, setFreeHere, setTempoHere, toggleRamp } from '../src/ui/rulerEdit'
 
@@ -78,6 +79,27 @@ describe('moving MIDI clips on the grid', () => {
     expect(t).toEqual({ startTick: 3 * PPQ, lengthTicks: 3 * PPQ, d: PPQ })
     expect(trimLeft(map, midi(), 1e9, 20).lengthTicks).toBe(PPQ / 4) // keeps a 1/16 note
     expect(trimLeft(map, midi(), -1e6, 20).startTick).toBe(0)
+  })
+  it('a left trim keeps notation hints fresh and the notes where they were on the score', () => {
+    const doc = new Y.Doc()
+    ensureTimeline(doc)
+    const trackId = addTrack(doc, 't', 'midi')
+    const id = addMidiClip(doc, { trackId, startTick: 2 * PPQ, lengthTicks: 4 * PPQ })
+    const hint = { at: [PPQ * 2, 100, 60] as [number, number, number], on: [2, 1] as [number, number], len: [1, 4] as [number, number], tup: { n: 3, of: 2, start: [5, 3] as [number, number], span: [1, 1] as [number, number] } }
+    const nid = addNote(doc, { clipId: id, pitch: 60, tick: PPQ * 2, durTicks: 100, velocity: 100, hint })
+    const flat = () => flattenTrack({ id: trackId, name: 't', clefs: undefined }, false, { clips: [clipsMap(doc).get(id)!.toJSON() as MidiClip], notes: getNotes(doc), devices: [] })
+    const before = flat().notes[0]
+    const map = timeMap([], RATE, PPQ)
+    commitMoving(doc, new Y.UndoManager(undoScope(doc)), trimMidi(map, clipsMap(doc).get(id)!.toJSON() as MidiClip, 'l', 24000 * 3, 20, true, getNotes(doc)))
+    const n = getNotes(doc)[0]
+    expect(n.id).toBe(nid)
+    expect(n.tick).toBe(PPQ)
+    expect(isFresh(n, n.hint!)).toBe(true)
+    expect(n.hint!.on).toEqual([1, 1])
+    expect(n.hint!.tup!.start).toEqual([2, 3])
+    const after = flat().notes[0]
+    expect(after.tick).toBe(before.tick)
+    expect(after.fresh!.clipStart + after.fresh!.hint.on[0] * PPQ / after.fresh!.hint.on[1]).toBe(before.fresh!.clipStart + before.fresh!.hint.on[0] * PPQ / before.fresh!.hint.on[1])
   })
   it('writes ticks: move, trim (notes follow), loop and pass', () => {
     const doc = new Y.Doc()

@@ -1,7 +1,7 @@
 // MIDI clips on the shared timeline: their position and extent are ticks, so a drag turns the pointer's sample into a tick
 // (snapped to the bar grid of the zoom in a metered region, to 1/16 notes in a free one) and writes ticks. Pure given the map
 // The edits return a draft (`Moving`) for the store to show while the pointer is down; the drop writes it (commitMoving).
-import { isLooping, type MidiClip, type Moving, type Note, type TimeMap } from '@mobdaw/shared'
+import { isLooping, shiftNoteTicks, type MidiClip, type Moving, type Note, type TimeMap } from '@mobdaw/shared'
 import { rotateTick, clamp } from './blocks'
 import { gridSnapTick } from './gridSnap'
 
@@ -44,15 +44,17 @@ export function moveMidi(map: TimeMap, c: MidiClip, sample: number, pps: number,
 /**
  * Resize from either edge, non-destructively (the notes stay whole). `sample` is where the dragged edge now is. The left edge moves
  * every note back by the ticks it moved so the music stays put (notes before the new start go silent but are kept); a looping
- * clip's pattern turns instead, so every repeat stays where it was. The right edge clears a stale pass.
+ * clip's pattern turns instead, so every repeat stays where it was (a turned note loses its notation hint). The right edge clears a stale pass.
  */
-export function trimMidi(map: TimeMap, c: MidiClip, mode: 'l' | 'r', sample: number, pps: number, snap: boolean, notes0: Pick<Note, 'id' | 'tick'>[]): Moving {
+export function trimMidi(map: TimeMap, c: MidiClip, mode: 'l' | 'r', sample: number, pps: number, snap: boolean, notes0: Pick<Note, 'id' | 'tick' | 'hint'>[]): Moving {
   if (mode === 'r') return ofClip(c, { lengthTicks: lengthForEnd(map, c.startTick, sample, pps, snap), loopTicks: 0 })
   const t = trimLeft(map, c, sample, pps, snap)
   const loop = isLooping(c) ? c.loopTicks! : 0
   return {
     ...ofClip(c, { startTick: t.startTick, lengthTicks: t.lengthTicks }),
-    notes: Object.fromEntries(notes0.map((n) => [n.id, { tick: loop && n.tick < loop ? rotateTick(n.tick, t.d, loop) : n.tick - t.d }])),
+    notes: Object.fromEntries(
+      notes0.map((n) => [n.id, loop && n.tick < loop ? { tick: rotateTick(n.tick, t.d, loop), hint: undefined } : shiftNoteTicks(n, -t.d, map.ppq)]),
+    ),
   }
 }
 

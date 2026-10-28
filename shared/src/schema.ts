@@ -112,6 +112,21 @@ export type NoteHint = {
   art?: string
 }
 export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number; hint?: NoteHint }
+/**
+ * The patch that moves a note `d` ticks later (negative: earlier) within its clip and keeps its notation hint true: `at[0]`, `on` and
+ * `tup.start` are clip-relative like `tick`, so they shift with it (`on`/`tup.start` in quarters, hence `d / ppq`). Every edit that shifts
+ * note ticks inside a clip (left trim, a MIDI split, score edits) must go through this, or the hint goes stale (`isFresh`).
+ */
+export function shiftNoteTicks(n: Pick<Note, 'tick' | 'hint'>, d: number, ppq: number): Pick<Partial<Note>, 'tick' | 'hint'> {
+  const h = n.hint
+  if (!h) return { tick: n.tick + d }
+  const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : Math.abs(a) || 1)
+  const shift = ([a, b]: Frac): Frac => {
+    const num = a * ppq + d * b, den = b * ppq, g = gcd(num, den)
+    return [num / g, den / g]
+  }
+  return { tick: n.tick + d, hint: { ...h, at: [h.at[0] + d, h.at[1], h.at[2]], on: shift(h.on), ...(h.tup ? { tup: { ...h.tup, start: shift(h.tup.start) } } : {}) } }
+}
 /** `name`, `keyLo` and `keyHi` are optional: an instrument's label and its note range (MIDI 0..127 inclusive; absent = 0 and 127). Not params. */
 export type Device = { id: string; trackId: string; type: number; order: number; bypass: boolean; params: Record<string, number>; name?: string; keyLo?: number; keyHi?: number
   /** The tap id this device reads (`fx recv`'s input, the compressor's key); absent = none. See `getTaps`. */
