@@ -34,16 +34,29 @@ function formDialog(title: string, fields: HTMLElement[], ok: string, submit: ()
   return m
 }
 
+/** What the dialogs show for `bar`, as read from the doc; compared on "set" to notice a collaborator's edit since the dialog opened. */
+const regionKey = (doc: Y.Doc, bar: number) => JSON.stringify(regionAt(getRegions(doc), bar))
+const STALE = 'that region changed while this was open; the fields now show its current values, press again to apply'
+
 /** "tempo / meter from here": bpm, meter (num/den) and optional beat groups. */
 export function tempoDialog(doc: Y.Doc, map: TimeMap, bar: number) {
-  const cur = regionAt(getRegions(doc), bar)
-  const m0 = cur.kind === 'metered' ? cur : map.meterAt(bar).region
-  const at = m0.kind === 'metered' ? m0 : { bpm: 120, num: 4, den: 4, groups: undefined as number[] | undefined }
-  const bpm = h('input', { value: String(+at.bpm.toFixed(2)), inputMode: 'decimal', spellcheck: false })
-  const meter = h('input', { value: `${at.num}/${at.den}`, spellcheck: false, title: 'beats per bar over the note value, like 4/4, 6/8 or 7/8' })
-  const groups = h('input', { value: at.groups?.join('+') ?? '', placeholder: 'default', spellcheck: false, title: 'how the beats are counted, like 2+2+3 for 7/8 (the first beat of each group is accented)' })
+  const bpm = h('input', { inputMode: 'decimal', spellcheck: false })
+  const meter = h('input', { spellcheck: false, title: 'beats per bar over the note value, like 4/4, 6/8 or 7/8' })
+  const groups = h('input', { placeholder: 'default', spellcheck: false, title: 'how the beats are counted, like 2+2+3 for 7/8 (the first beat of each group is accented)' })
+  let seen = ''
+  const fill = () => {
+    seen = regionKey(doc, bar)
+    const cur = regionAt(getRegions(doc), bar)
+    const m0 = cur.kind === 'metered' ? cur : map.meterAt(bar).region
+    const at = m0.kind === 'metered' ? m0 : { bpm: 120, num: 4, den: 4, groups: undefined as number[] | undefined }
+    bpm.value = String(+at.bpm.toFixed(2))
+    meter.value = `${at.num}/${at.den}`
+    groups.value = at.groups?.join('+') ?? ''
+  }
+  fill()
   formDialog(`tempo / meter from bar ${bar}`, [field('tempo (quarter notes per minute)', bpm), field('meter', meter), field('beat groups (optional, like 2+2+3)', groups)], 'set',
-    () => {
+    (): Parsed<unknown> => {
+      if (regionKey(doc, bar) !== seen) return (fill(), { ok: false, error: STALE })
       const f = parseTempoForm(bpm.value, meter.value, groups.value)
       if (f.ok) setTempoHere(doc, bar, f.value)
       return f
@@ -53,9 +66,16 @@ export function tempoDialog(doc: Y.Doc, map: TimeMap, bar: number) {
 /** "free region here": one unmetered bar of a given length in seconds. */
 export function freeDialog(doc: Y.Doc, bar: number) {
   const rate = getSampleRate(doc)
-  const cur = regionAt(getRegions(doc), bar)
-  const len = h('input', { value: cur.kind === 'free' && cur.bar === bar ? String(+(cur.length / rate).toFixed(2)) : '4', inputMode: 'decimal', spellcheck: false })
-  formDialog(`free region at bar ${bar}`, [field('length (seconds), with no bars or beats inside', len)], 'set', () => {
+  const len = h('input', { inputMode: 'decimal', spellcheck: false })
+  let seen = ''
+  const fill = () => {
+    seen = regionKey(doc, bar)
+    const cur = regionAt(getRegions(doc), bar)
+    len.value = cur.kind === 'free' && cur.bar === bar ? String(+(cur.length / rate).toFixed(2)) : '4'
+  }
+  fill()
+  formDialog(`free region at bar ${bar}`, [field('length (seconds), with no bars or beats inside', len)], 'set', (): Parsed<unknown> => {
+    if (regionKey(doc, bar) !== seen) return (fill(), { ok: false, error: STALE })
     const r = parseFreeSeconds(len.value, rate)
     if (r.ok) setFreeHere(doc, bar, r.value)
     return r

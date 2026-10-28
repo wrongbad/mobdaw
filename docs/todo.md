@@ -10,8 +10,6 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### Client and shared
 
-- **The ruler menu and dialogs read the map when opened, not live.** `ui/rulerMenu.ts` builds its entries from `getRegions(doc)` at click time and the tempo dialog fills its fields once; a collaborator editing the same region while the dialog is open is overwritten on "set" (last write wins, still one consistent partition). Acceptable; fix only if it bites by re-reading the region on submit and warning when it changed.
-
 ### DSP and engine
 
 - **Resampler states are never flushed for denormals.** `dsp::resampler::Resampler::step` (used by the tape delay head and the looper heads) lets the modal state decay through the subnormal range when its input is silent; wasm has no FTZ. It is a bounded transient (thousands of samples) so it has not been seen to matter. If a long-session CPU spike shows up on a silent looper region, flush `s` every N steps (as `Svf` does).
