@@ -267,5 +267,32 @@ class Small(unittest.TestCase):
             fake.apply([bad])
 
 
+class ProposedMap(unittest.TestCase):
+    """A map proposed from audio re-times markers and empty clips; the push moves them to keep their time."""
+
+    def test_markers_and_empty_clips_keep_their_time(self):
+        from badmidi.audio.propose import MapProposal
+        from badmidi.bridge import Timeline
+        fake = FakeMobdaw([{"id": "r", "bar": 1, "kind": "metered", "bpm": 120, "meter": "4/4"}], "C major")
+        fake.apply([{"op": "addTrack", "name": "Keys"}, {"op": "addMidiClip", "trackId": "$0", "start": 4 * 4 * PPQ, "length": 4 * PPQ}])
+        fake.markers = [{"id": "m1", "bar": 3, "label": "Verse"}, {"id": "m2", "bar": 1, "label": "Intro"}]
+        old = Timeline(fake.state())
+        regs = [{"id": "map1", "bar": 1, "kind": "free", "seconds": 1.0}, {"id": "map2", "bar": 2, "kind": "metered", "bpm": 60, "meter": "4/4"}]
+        prop = MapProposal(regs, "steady", 60, "4/4", 1.0, 1.0, first_bar=2)
+        pulled = pull(fake.state(), "P", None, None, prop)
+        pl = plan(pulled.score, pulled.snapshot)
+        self.assertEqual([o["op"] for o in pl.ops], ["addRegion", "addRegion", "updateMarker", "updateClip"])
+        fake.apply(pl.ops)
+        new = Timeline(fake.state())
+        st = fake.state()
+        self.assertEqual({m["id"]: m["bar"] for m in st["markers"]}, {"m1": 2, "m2": 1})     # 4 s: inside bar 2 of the new map
+        clip = st["tracks"][0]["clips"][0]
+        self.assertAlmostEqual(new.seconds_at(clip["startTick"]), old.seconds_at(4 * 4 * PPQ), delta=0.01)
+        text = "\n".join(pl.summary)
+        self.assertIn("moved with the map: marker 'Verse': bar 3 -> bar 2", text)
+        self.assertIn("moved with the map: empty clip", text)
+        self.assertNotIn("Intro", text)
+
+
 if __name__ == "__main__":
     unittest.main()

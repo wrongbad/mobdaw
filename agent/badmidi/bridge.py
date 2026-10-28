@@ -558,10 +558,12 @@ def _baseline(score: Score, parts_by_track: dict[str, list[str]], tracks: list[_
 
 
 def _snapshot(state: dict, project: str, filter_info: dict | None, tracks: list[_Track], parts_by_track: dict, baseline: list[dict], bars: int,
-              heard: list[dict] | None = None, map_ops: list[dict] | None = None, map_text: str = "") -> dict:
+              heard: list[dict] | None = None, map_ops: list[dict] | None = None, map_text: str = "",
+              moved: tuple[list[dict], list[str]] = ([], [])) -> dict:
     return {
         "project": project, "rev": state.get("rev"), "ppq": state["meta"]["ppq"], "regions": state["regions"], "filter": filter_info or {},
         "bars": bars, "notes": baseline, "heard": heard or [], "map_ops": map_ops or [], "map_text": map_text,
+        "move_ops": moved[0], "moved": moved[1],
         "tracks": [{"id": tr.info["id"], "name": tr.info["name"], "drums": tr.drums, "parts": parts_by_track.get(tr.info["id"], []), "clips": tr.clips,
                     "clefs": tr.info.get("clefs")}
                    for tr in tracks],
@@ -589,6 +591,27 @@ def _staff_mains(score: Score, name: str, inst: str, rng, clefs: list[str] | Non
     return out
 
 
+def _moved_by_map(old_regions: list[dict], new_regions: list[dict], state: dict) -> tuple[list[dict], list[str]]:
+    """Ops (after the region ops) and summary lines that keep the markers (by bar) and the empty MIDI clips (by tick) at their old
+    time under a new map: each goes to the bar / tick that holds its old project second."""
+    old, new = Timeline({"meta": state["meta"], "regions": old_regions}), Timeline({"meta": state["meta"], "regions": new_regions})
+    ops, lines = [], []
+    for m in state.get("markers", []):
+        bar = new.bar_of(_frac(new.tick_at(old.seconds_at(old.bar_start(m["bar"])))))
+        if bar != m["bar"]:
+            ops.append({"op": "updateMarker", "id": m["id"], "bar": bar})
+            lines.append(f"marker {m['label']!r}: bar {m['bar']} -> bar {bar} (keeps its time)")
+    for t in state["tracks"]:
+        for c in t["clips"]:
+            if c["kind"] != "midi" or c["notes"]:
+                continue
+            tick = round(new.tick_at(old.seconds_at(c["startTick"])))
+            if tick != round(c["startTick"]):
+                ops.append({"op": "updateClip", "id": c["id"], "start": max(0, tick)})
+                lines.append(f"empty clip {c['id']} on {t['name']!r}: tick {c['startTick']:g} -> {max(0, tick)} (keeps its time)")
+    return ops, lines
+
+
 def pull(state: dict, project: str = "", filter_info: dict | None = None, heard: list[HeardPart] | None = None, proposal=None) -> Pulled:
     """A Score and a snapshot from a project state (see the module docstring). `heard`: audio tracks as heard
     (badmidi.audio.listen): each becomes a read-only part "<track> (heard)" and an entry of the piece's HEARD. `proposal`: the time
@@ -597,10 +620,14 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None, heard:
     which `plan` puts first in the batch."""
     ppq = state["meta"]["ppq"]
     report: list[str] = []
-    map_ops, map_text = [], ""
+    map_ops, map_text, moved = [], "", ([], [])
     if proposal is not None:
         map_ops = proposal.ops(state["regions"])
         map_text = proposal.describe()
+        if map_ops:
+            moved = _moved_by_map(state["regions"], proposal.regions, state)
+            at = {o["id"]: o["bar"] for o in moved[0] if o["op"] == "updateMarker"}
+            state = {**state, "markers": [{**m, "bar": at.get(m["id"], m["bar"])} for m in state.get("markers", [])]}
         state = {**state, "regions": proposal.regions}
         report.append(f"time map: the project had no click or MIDI notes, so the audio defines it: {map_text} "
                       + (f"({len(map_ops)} region ops, sent first in the same push as the bass: one history entry, a revert undoes both)" if map_ops else "(the project already has it)"))
@@ -733,7 +760,7 @@ def pull(state: dict, project: str = "", filter_info: dict | None = None, heard:
         if h.timing:
             report.append(f"timing of {h.track!r} (case {h.timing.case.upper()}): {h.timing.summary}")
             report += [f"warning ({h.track!r}): {w}" for w in h.timing.warnings]
-    return Pulled(score, _snapshot(state, project, filter_info, tracks, parts_by_track, baseline, score.bars if score.parts else 0, marks, map_ops, map_text),
+    return Pulled(score, _snapshot(state, project, filter_info, tracks, parts_by_track, baseline, score.bars if score.parts else 0, marks, map_ops, map_text, moved),
                   report, hp, hinted, guessed)
 
 
@@ -870,6 +897,8 @@ def plan(score: Score, snap: dict, like: dict[str, str] | str | None = None, pre
     pl = PushPlan(ops=list(snap.get("map_ops") or []))
     if pl.ops:
         pl.summary.append(f"time map: {snap.get('map_text') or 'from the audio'} ({len(pl.ops)} region ops, first in the batch)")
+        pl.ops += snap.get("move_ops") or []
+        pl.summary += [f"moved with the map: {line}" for line in snap.get("moved") or []]
     known = {n for t in snap["tracks"] for n in t["parts"]}
     # a voice line added to a known part's staff (part.voice(...)) belongs to that part's track
     extra: dict[str, list[str]] = defaultdict(list)

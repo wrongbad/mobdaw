@@ -14,8 +14,6 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### Agent
 
-- **A map proposed from audio re-times everything that is placed in ticks.** For an audio-only project, `push` replaces the time map (`Listened.proposal`, `agent/badmidi/audio/propose.py`; the ops go first in the bass's batch). Audio clips are placed in seconds and stay where they are, but markers (by bar number), empty MIDI clips and loops (by tick) are not touched by the ops and so move in time or end up on other bars; `timing_reference` counts only MIDI *notes* and a click track, so a "case B" project can still hold them. Fix: have the proposal list what it moves in the push summary (markers and empty clips), or move markers to the bar that holds their old time.
-
 - **The pickup bar of a proposed map has no rhythm row, and its chords sit in a free bar.** `listen._part` drops the first grid bar's rhythm when the audio has a pickup (its beats are positions in a free bar of nominal length, not a regular pattern), so `bass.line(.., style="pulse")` plays plain 8ths there, and a chord that starts mid-way in the free bar is a fractional tick. Fix: spread the pickup's slots over the free bar's quarters.
 
 - **Heard parts assume one beat unit and 16th slots.** `listen` sizes rhythm slots from the first bar's beat, so a take across a meter change with a different denominator gets mislabelled rhythm slots (compound 6/8, 9/8 and 12/8 are grouped by three, but only when the region has no other `groups`). Fix: store the slot per bar in `Rhythm`; group irregular `groups` (2+2+3) beats too.

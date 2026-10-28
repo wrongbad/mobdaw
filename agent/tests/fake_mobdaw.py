@@ -129,6 +129,7 @@ class FakeMobdaw:
     def __init__(self, regions: list[dict], key: str = "C major", name: str = "Fake"):
         self.regions, self.key, self.name = regions, key, name
         self.tracks: list[dict] = []
+        self.markers: list[dict] = []
         self.rev = 0
         self._ids = 0
 
@@ -160,13 +161,13 @@ class FakeMobdaw:
                            "devices": [{"id": f"d{t['id']}", "type": "finnwave", "typeId": 2, "params": {}}, {"id": f"m{t['id']}", "type": "mix", "typeId": 9, "params": {}}],
                            "clips": clips, **({"clefs": list(t["clefs"])} if t.get("clefs") else {})})
         return json.loads(json.dumps({"rev": self.rev, "meta": {"ppq": PPQ, "sampleRate": 48000, "key": self.key}, "regions": self.regions,
-                                      "markers": [], "tracks": tracks, "master": {"devices": []}, "samples": {}, "name": self.name}))
+                                      "markers": copy.deepcopy(self.markers), "tracks": tracks, "master": {"devices": []}, "samples": {}, "name": self.name}))
 
     # --- writes
 
     def apply(self, ops: list[dict]) -> dict:
         """All or nothing, one revision, like the server: a bad op leaves the project as it was."""
-        before = (copy.deepcopy(self.tracks), self._ids)
+        before = (copy.deepcopy(self.tracks), copy.deepcopy(self.markers), copy.deepcopy(self.regions), self._ids)
         results: list = []
         try:
             for i, op in enumerate(ops):
@@ -175,7 +176,7 @@ class FakeMobdaw:
                 except OpError as e:
                     raise OpError(f"op {i}: {e}") from None
         except Exception:
-            self.tracks, self._ids = before
+            self.tracks, self.markers, self.regions, self._ids = before
             raise
         self.rev += 1
         return {"seq": self.rev, "results": results, "ids": results}
@@ -231,6 +232,8 @@ class FakeMobdaw:
 
     def _updateClip(self, op, results):
         c = self._clip(op["id"], results)
+        if op.get("start") is not None:
+            c["start"] = op["start"]
         if "length" in op:
             c["length"] = op["length"]
         if "loop" in op:
@@ -239,6 +242,25 @@ class FakeMobdaw:
             else:
                 c.pop("loop", None)
         return c["id"]
+
+    def _addRegion(self, op, results):
+        """A region at a bar replaces the one there (the agent view's fields only: no beatTicks / barTicks)."""
+        r = {"id": f"r{op['bar']}", "bar": op["bar"], **({"kind": "free", "seconds": op["free"]} if op.get("free") else
+             {"kind": "metered", "bpm": op["bpm"], "meter": op["meter"], **({"rampTo": op["rampTo"]} if op.get("rampTo") else {})})}
+        self.regions = sorted([x for x in self.regions if x["bar"] != op["bar"]] + [r], key=lambda x: x["bar"])
+        return r["id"]
+
+    def _removeRegion(self, op, results):
+        if op["bar"] == 1 or not any(x["bar"] == op["bar"] for x in self.regions):
+            raise OpError(f"no removable region at bar {op['bar']}")
+        self.regions = [x for x in self.regions if x["bar"] != op["bar"]]
+        return op["bar"]
+
+    def _updateMarker(self, op, results):
+        m = next((m for m in self.markers if m["id"] == op["id"]), None) or self._fail(f"no marker {op['id']!r}")
+        if op.get("bar") is not None:
+            m["bar"] = op["bar"]
+        return m["id"]
 
     def _addNotes(self, op, results):
         c = self._clip(op["clipId"], results)
