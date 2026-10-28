@@ -1106,13 +1106,15 @@ export function migrateToV4(doc: Y.Doc) {
       const m = clipsMap(doc).get(c.id)!
       m.set('startTick', startTick)
       const toTick = (t: number) => map.sampleToTick(c.start + (t * 60 * rate) / (c.bpm * c.ppq)) // old clip-relative tick -> absolute v4 tick
-      m.set('lengthTicks', toTick(c.lengthTicks) - startTick)
+      // one factor keeps a plain clip's ticks exact; only a clip that runs past the end of its span needs per-note times
+      const straddles = !c.loopTicks && c.start + (c.lengthTicks * 60 * rate) / (c.bpm * c.ppq) > sp.endSample + 1
+      m.set('lengthTicks', straddles ? toTick(c.lengthTicks) - startTick : c.lengthTicks * f)
       if (c.loopTicks) m.set('loopTicks', c.loopTicks * f)
       for (const k of ['start', 'bpm', 'ppq']) m.delete(k)
       for (const n of notes) {
         if (n.clipId !== c.id) continue
         const nm = notesMap(doc).get(n.id)!
-        if (c.loopTicks) {
+        if (!straddles) {
           nm.set('tick', n.tick * f)
           nm.set('durTicks', n.durTicks * f)
         } else {

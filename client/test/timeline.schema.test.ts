@@ -248,6 +248,14 @@ describe('migrateToV4', () => {
     })
   })
 
+  it('keeps a plain clip\'s ticks exact integers', () => {
+    const { d } = v3Fixture()
+    run(d)
+    const keys = getNotes(d).filter((n) => n.clipId === 'keys')
+    expect(keys.length).toBeGreaterThan(0)
+    for (const n of keys) expect([n.tick, n.durTicks].every(Number.isInteger)).toBe(true)
+  })
+
   it('leaves audio, pads and automation points untouched', () => {
     const { d } = v3Fixture()
     const audioBefore = clipsMap(d).get('au')!.toJSON()
