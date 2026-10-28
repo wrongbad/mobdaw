@@ -10,7 +10,7 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### DSP and engine
 
-- **The engine's parent-loop break and the bridge's can disagree.** `effectiveParent` (`shared/src/schema.ts`) cuts a loop at the smallest track *id*; the engine's `break_parent_cycles` (`engine/crates/engine/src/engine.rs`) cuts at the smallest *handle*. They never differ today because the bridge sends only effective parents (no loop ever reaches the engine), but if the bridge is ever changed to send raw `parent` fields, peers would hear different trees than the UI shows. Fix: keep sending effective parents; or give the engine the ids' order (`engine_track_order` already carries the document's order) and cut by that.
+- **The engine's parent-loop break and the bridge's can disagree.** `effectiveParent` (`shared/src/schema.ts`) cuts a loop at the smallest track *id*; the engine's `break_parent_cycles` (`engine/crates/engine/src/engine.rs`) cuts at the smallest *handle*. They never differ today because the bridge sends only effective parents (no loop ever reaches the engine), but if the bridge is ever changed to send raw `parent` fields, peers would hear different trees than the UI shows. Fix: keep sending effective parents; or add a per-handle id rank to the protocol (a new export like `engine_track_rank`, sent by the bridge from the sorted track ids) and cut by it. `engine_track_order` cannot serve: it is the display `order` (user-reorderable, ties allowed), not the id order `effectiveParent` uses.
 
 ### Agent
 
