@@ -6,6 +6,8 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### Server
 
+- **A registration flood can still evict a client before its first token exchange.** `POST /api/oauth/register` (`server/src/oauth.ts`) is unauthenticated and unthrottled; `evictClients` keeps the table at 2000 rows by dropping never-exchanged clients oldest first, so clients that have exchanged are safe, but one mid-login (registered, not yet exchanged) is the oldest of the flood's class and goes first (the user sees "Unknown client" and has to reconnect). Fix if it happens: rate-limit registration per client IP (needs the proxy's `X-Forwarded-For` trusted), or refuse registration (429) while the never-exchanged rows younger than the code lifetime fill the cap.
+
 - **A chat mention of an agent only counts while the agent is present.** `@k(api)` is parsed against the handles of the members plus whoever is in the awareness (`client/src/ui/chat.tsx`, `AgentHub.handles`), so a message typed while the agent is idle stores no `mentions` for it. `events` and `GET chat` re-parse the text for `mentionsMe`, so an agent that polls sees it, but any other consumer of `ChatMessage.mentions` (an unread badge for the api identity) does not.
 
 ### Client and shared
