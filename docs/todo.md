@@ -4,7 +4,7 @@
 
 The fix is known and fits in a file or two; no design decisions left.
 
-
+### Server
 
 - **A chat mention of an agent only counts while the agent is present.** `@k(api)` is parsed against the handles of the members plus whoever is in the awareness (`client/src/ui/chat.tsx`, `AgentHub.handles`), so a message typed while the agent is idle stores no `mentions` for it. `events` and `GET chat` re-parse the text for `mentionsMe`, so an agent that polls sees it, but any other consumer of `ChatMessage.mentions` (an unread badge for the api identity) does not.
 
