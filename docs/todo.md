@@ -14,8 +14,6 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### Agent
 
-- **The pickup bar of a proposed map has no rhythm row, and its chords sit in a free bar.** `listen._part` drops the first grid bar's rhythm when the audio has a pickup (its beats are positions in a free bar of nominal length, not a regular pattern), so `bass.line(.., style="pulse")` plays plain 8ths there, and a chord that starts mid-way in the free bar is a fractional tick. Fix: spread the pickup's slots over the free bar's quarters.
-
 - **Heard parts assume one beat unit and 16th slots.** `listen` sizes rhythm slots from the first bar's beat, so a take across a meter change with a different denominator gets mislabelled rhythm slots (compound 6/8, 9/8 and 12/8 are grouped by three, but only when the region has no other `groups`). Fix: store the slot per bar in `Rhythm`; group irregular `groups` (2+2+3) beats too.
 
 - **The meter has no 6-beat or 5-beat reading and trusts the tracker's beat level.** `timing.meter` scores 2, 3, 4 beats per bar; 6/8 is read only when the beat tracker locks to the dotted quarter (the triplet feel then makes the unit '8'). If it locks to the eighths, 6/8 comes out as 2/4 or 3/4 with low confidence; 5/4, 7/8 and free bars are read as the nearest of 2-4. Fix when it bites: add period 5/6/7 candidates and score each against the beat level the tracker did not choose.

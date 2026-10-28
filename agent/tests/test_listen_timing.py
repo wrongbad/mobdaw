@@ -259,6 +259,22 @@ class TestCaseB(unittest.TestCase):
         self.assertEqual(pl.new_parts, {2: ["bass guitar"]})
         self.assertIn("time map: bar 1: free", "\n".join(pl.summary))
 
+    def test_the_pickup_bar_has_a_rhythm_row_and_whole_tick_chords(self):
+        clock = synth.Clock(87)
+        res, st = Rig.listen(clock, click=False, pickup=2)
+        r = res.part.rhythm
+        free = res.proposal.regions[0]["seconds"] * 2                                  # quarters: a free bar borrows 120 bpm
+        self.assertEqual(len(r.bars[F(0)]), round(free / float(r.slot)), "the pickup is on the slot grid, like the other bars")
+        self.assertTrue(any(r.bars[F(0)]))
+        bar2 = sorted(r.bars)[1]
+        self.assertTrue(all((c.start * PPQ).denominator == 1 for c in res.part.chords if c.start < bar2))
+        a, b, slot = F(0), F(1379, 500), F(1, 4)                                       # a chord that changes mid-way snaps to a slot
+        chords = [bass.HeardChord(a, F(1, 3), "G", 7, 7, "M"), bass.HeardChord(F(1, 3), b, "C", 0, 0, "M")]
+        rows, got = L._free_bar([[1.0, 0, 0.5, 0, 0, 0, 0.7, 0]], chords, a, b, slot)
+        self.assertEqual([(c.start, c.end) for c in got], [(a, F(1, 4)), (F(1, 4), b)])
+        self.assertEqual(len(rows[0]), 11)
+        self.assertEqual(rows[0][0], 1.0)
+
     def test_the_piece_must_match_exactly_the_proposed_map(self):
         clock = synth.Clock(87)
         res, st = Rig.listen(clock, click=False, pickup=2)

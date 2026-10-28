@@ -522,11 +522,32 @@ def _part(h: hear.Heard, grid: hear.Grid, q: list[Fraction], beat: Fraction, tra
     bars = grid.bars()
     starts = [q[a] for a, _ in bars]
     rows = h.rhythm.bars
-    if skip_pickup and len(rows) == len(bars):
-        starts, rows = starts[1:], rows[1:]
+    if skip_pickup and len(rows) == len(bars) > 1:
+        starts[0] = bar_q if bar_q is not None else starts[0]
+        rows, chords = _free_bar(rows, chords, starts[0], starts[1], beat / spb)
     rhythm = Rhythm(beat / spb, beat, dict(zip(starts, rows))) if rows and len(starts) == len(rows) else None
     return HeardPart(track, f"{_clean_name(track) or 'track'} (heard)", h.key.name, round(h.tuning_cents), _where(tm),
                      first, chords, rhythm, h.mode, notes, tm)
+
+
+def _free_bar(rows: list[list[float]], chords: list[HeardChord], a: Fraction, b: Fraction, slot: Fraction):
+    """The pickup's free bar [a, b) (quarters; its length is nominal, so not a whole number of slots) on a regular slot grid: its row
+    of onset strengths is spread over `round((b - a) / slot)` slots, and a chord that changes inside it snaps to a slot, so the bass
+    draft gets a rhythm row there and no fractional tick."""
+    n = max(1, round((b - a) / slot))
+    row = [0.0] * n
+    for i, x in enumerate(rows[0]):
+        j = min(n - 1, round(i * n / len(rows[0])))
+        row[j] = max(row[j], x)
+
+    def snap(t: Fraction) -> Fraction:
+        return a + round((t - a) / slot) * slot if a < t < b else t
+    out: list[HeardChord] = []
+    for c in chords:
+        c = c._replace(start=snap(c.start), end=snap(c.end))
+        if c.start < c.end:
+            out.append(c)
+    return [row] + rows[1:], out
 
 
 def _where(tm: HeardTiming) -> str:
