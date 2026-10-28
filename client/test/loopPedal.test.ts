@@ -164,6 +164,8 @@ describe('loop record', () => {
       r.p.press('record', 5000 - 10) // stopped before it began
       expect(r.clips()).toHaveLength(1)
       expect(r.clips()[0]).toMatchObject({ start: before.start, length: before.length, loopLength: before.loopLength, forever: true })
+      expect(r.clips()[0].id).toBe(before.id) // undone, not re-added
+      expect(r.undo.redoStack.length).toBe(0)
     })
   })
 

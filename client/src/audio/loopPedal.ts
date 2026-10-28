@@ -303,9 +303,11 @@ export class LoopPedal {
     const { io, undo } = this.d
     this.rec = null
     io.cancelTake()
-    if (r.was.length) { // give the earlier loop back: restore it directly, whatever else has been edited since
-      restoreLoops(this.d.doc, r.was)
-      if (undo && r.undoDepth != null && undo.undoStack.length === r.undoDepth) undo.undoStack.pop() // (its cut is the top step: nothing left to undo)
+    if (r.was.length) { // give the earlier loop back
+      if (undo && r.undoDepth != null && undo.undoStack.length === r.undoDepth) {
+        undo.undo() // its cut is the top step: undo it (same clip ids), then drop the redo the manager made of it
+        undo.clear(false, true)
+      } else restoreLoops(this.d.doc, r.was) // otherwise directly, whatever else has been edited since
     }
     if (tooShort) io.say('loop: too short')
   }
