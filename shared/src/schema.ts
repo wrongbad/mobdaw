@@ -1053,8 +1053,9 @@ const legacyMidiClips = (doc: Y.Doc): LegacyMidi[] =>
  *  1. Picks the tempo map: the click track's clip gives bpm, `loopTicks/ppq` quarters per bar as n/4, and its start (a start other than 0
  *     becomes a leading free region of that length, then the metered region from bar 2); else the bpm carrying the most MIDI time (120 if none), 4/4.
  *  2. Converts every legacy MIDI clip (`start`/`bpm`/`ppq`): `startTick = sampleToTick(start)`, and the notes' `tick`/`durTicks` and the clip's
- *     `lengthTicks`/`loopTicks` scale by (mapBpm/clipBpm)*(meta.ppq/clip.ppq), so every note starts and ends on the same sample (+-1). A clip that
- *     straddles the end of a leading free region cannot be (the tempo changes under it); it is rare and uses the tempo where it starts.
+ *     `lengthTicks` are each mapped from their own absolute sample (+-1), so a clip that straddles the end of a leading free region (the
+ *     tempo changes under it) keeps its late notes on their samples. `loopTicks` repeats in ticks, so a looping clip's pattern (`loopTicks`
+ *     and its notes) scales by one factor, (mapBpm/clipBpm)*(meta.ppq/clip.ppq) at its start; only its `lengthTicks` is mapped by time.
  *  3. Audio, pads, loopers and automation are untouched.
  *  4. Appends one system chat message (`addSystemMessage`, id 'migrate-v4') summarising the map and the clips now off the grid. Not written
  *     when the doc has no MIDI clips.
@@ -1104,14 +1105,21 @@ export function migrateToV4(doc: Y.Doc) {
       const f = (sp.bpm0 / c.bpm) * (ppq / c.ppq)
       const m = clipsMap(doc).get(c.id)!
       m.set('startTick', startTick)
-      m.set('lengthTicks', c.lengthTicks * f)
+      const toTick = (t: number) => map.sampleToTick(c.start + (t * 60 * rate) / (c.bpm * c.ppq)) // old clip-relative tick -> absolute v4 tick
+      m.set('lengthTicks', toTick(c.lengthTicks) - startTick)
       if (c.loopTicks) m.set('loopTicks', c.loopTicks * f)
       for (const k of ['start', 'bpm', 'ppq']) m.delete(k)
       for (const n of notes) {
         if (n.clipId !== c.id) continue
         const nm = notesMap(doc).get(n.id)!
-        nm.set('tick', n.tick * f)
-        nm.set('durTicks', n.durTicks * f)
+        if (c.loopTicks) {
+          nm.set('tick', n.tick * f)
+          nm.set('durTicks', n.durTicks * f)
+        } else {
+          const a = toTick(n.tick)
+          nm.set('tick', a - startTick)
+          nm.set('durTicks', toTick(n.tick + n.durTicks) - a)
+        }
       }
       if (Math.abs(c.bpm - sp.bpm0) > 1e-9 && sp.region.kind === 'metered') off.push(`'${trackName.get(c.trackId) ?? 'midi'}' at bar ${map.position(startTick).bar}`)
     }

@@ -228,6 +228,26 @@ describe('migrateToV4', () => {
     }
   })
 
+  it('keeps the late notes of a clip that straddles the end of the leading free region on their samples', () => {
+    const { d } = v3Fixture()
+    const c: Old = { id: 'straddle', trackId: 'tk', start: 12000, bpm: 100, ppq: 480, lengthTicks: 4 * 480 }
+    clipsMap(d).set(c.id, ym({ ...c, kind: 'midi' }))
+    const raw = [[0, 120], [480, 240], [960, 480], [1440, 480]]
+    raw.forEach(([tick, dur], i) => oldNote(d, `s${i}`, c.id, tick, dur))
+    run(d)
+    const map = getTimeMap(d)
+    const clip = getClips(d).find((x) => x.id === c.id)!
+    if (clip.kind !== 'midi') throw new Error()
+    expect(midiClipStartSample(map, clip)).toBe(c.start)
+    expect(Math.abs(midiClipEndSample(map, clip) - oldSample(c, c.lengthTicks))).toBeLessThanOrEqual(1)
+    const mine = getNotes(d).filter((n) => n.clipId === c.id).sort((a, b) => a.tick - b.tick)
+    expect(mine).toHaveLength(raw.length)
+    raw.forEach(([tick, dur], i) => {
+      expect(Math.abs(map.tickToSample(clip.startTick + mine[i].tick) - oldSample(c, tick))).toBeLessThanOrEqual(1)
+      expect(Math.abs(map.tickToSample(clip.startTick + mine[i].tick + mine[i].durTicks) - oldSample(c, tick + dur))).toBeLessThanOrEqual(1)
+    })
+  })
+
   it('leaves audio, pads and automation points untouched', () => {
     const { d } = v3Fixture()
     const audioBefore = clipsMap(d).get('au')!.toJSON()

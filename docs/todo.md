@@ -10,8 +10,6 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### Client and shared
 
-- **A v3 MIDI clip that straddles the end of a leading free region migrates slightly off.** `migrateToV4` scales a clip's ticks by one factor (the tempo where it starts), so a clip that starts before the click track's start and plays past it (the tempo changes under it) lands its late notes at the wrong samples. Rare (needs MIDI before a click that starts late); fix by splitting such a clip at the boundary during migration.
-
 - **The ruler menu and dialogs read the map when opened, not live.** `ui/rulerMenu.ts` builds its entries from `getRegions(doc)` at click time and the tempo dialog fills its fields once; a collaborator editing the same region while the dialog is open is overwritten on "set" (last write wins, still one consistent partition). Acceptable; fix only if it bites by re-reading the region on submit and warning when it changed.
 
 ### DSP and engine
