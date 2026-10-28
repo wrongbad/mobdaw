@@ -8,8 +8,6 @@ The fix is known and fits in a file or two; no design decisions left.
 
 - **A registration flood can still evict a client before its first token exchange.** `POST /api/oauth/register` (`server/src/oauth.ts`) is unauthenticated and unthrottled; `evictClients` keeps the table at 2000 rows by dropping never-exchanged clients oldest first, so clients that have exchanged are safe, but one mid-login (registered, not yet exchanged) is the oldest of the flood's class and goes first (the user sees "Unknown client" and has to reconnect). Fix if it happens: rate-limit registration per client IP (needs the proxy's `X-Forwarded-For` trusted), or refuse registration (429) while the never-exchanged rows younger than the code lifetime fill the cap.
 
-### Client and shared
-
 ### DSP and engine
 
 - **Resampler states are never flushed for denormals.** `dsp::resampler::Resampler::step` (used by the tape delay head and the looper heads) lets the modal state decay through the subnormal range when its input is silent; wasm has no FTZ. It is a bounded transient (thousands of samples) so it has not been seen to matter. If a long-session CPU spike shows up on a silent looper region, flush `s` every N steps (as `Svf` does).
