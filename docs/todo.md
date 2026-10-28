@@ -10,7 +10,7 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### Client and shared
 
-- **"save a copy" appears on any write to a snapshot's document, not only the user's edits.** `mountTimeline` (`client/src/ui/timeline.ts`) sets `edited` on every `doc` update after the first sync, so an automatic write (a take or sample status, a future migration) would show the button and the "changes stay on this page" hint for a visitor who changed nothing. Nothing writes today that the user didn't cause; if one does, track edits by origin (the user's edits carry `null` or the undo manager) or compare against the snapshot's state vector.
+- **A snapshot's "save a copy" button counts only writes with origin `null` or the undo manager.** `mountTimeline` (`client/src/ui/timeline.ts`) ignores other origins, so a user-initiated write made with a custom origin (like `'takes'`, `'migrate'`) never shows the button. Give user edits origin `null`; use a named origin only for automatic writes.
 
 - **A cancelled loop take drops its undo step with `undoStack.pop()`.** The loop cancel in `client/src/audio/loopPedal.ts` (`restoreLoops`) restores the doc directly (untracked origin) and then pops the gesture's own step off `Y.UndoManager.undoStack` when it is still on top. The popped item is not released the way `UndoManager.clear` does, so the deleted Yjs items it referenced are kept until the doc goes (a small leak per cancel), and a loop that was replaced outright comes back with a new clip id. Fix if it shows: restore through a paused/untracked write from the start (never create the step), or clear the item with the manager's own API. (Pointer drags no longer have this: they write nothing until the drop.)
 
