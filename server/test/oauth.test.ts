@@ -4,7 +4,8 @@ import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { UnauthorizedError, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import { revokeAllApiTokens } from '../src/apiTokens.ts'
-import { destination, redirectAllowed, validRedirect } from '../src/oauth.ts'
+import { destination, evictClients, redirectAllowed, validRedirect } from '../src/oauth.ts'
+import { openDb } from '../src/db.ts'
 import { ADMIN, client, login, pw, startTest, userId } from './helpers.ts'
 
 // Served under a path prefix, as in production, so the URLs in the metadata carry it.
@@ -96,6 +97,39 @@ describe('registration', () => {
     expect((await register({ redirect_uris: ['http://evil.example/cb'] })).status).toBe(400)
     expect((await register({ redirect_uris: [] })).status).toBe(400)
     expect((await register({})).status).toBe(400)
+  })
+})
+
+describe('client eviction', () => {
+  it('drops never-exchanged clients first, oldest first, and falls back to the oldest overall', () => {
+    const db = openDb(':memory:')
+    const add = (id: string, at: number, exchanged: number | null) =>
+      db.prepare("INSERT INTO oauth_clients(client_id, name, redirect_uris, created_at, exchanged_at) VALUES(?, 'n', '[]', ?, ?)").run(id, at, exchanged)
+    const ids = () => (db.prepare('SELECT client_id FROM oauth_clients ORDER BY created_at').all() as { client_id: string }[]).map((x) => x.client_id)
+    add('old-exchanged', 1, 5)
+    add('a', 2, null)
+    add('b', 3, null)
+    add('c', 4, null)
+    evictClients(db, 3)
+    expect(ids()).toEqual(['old-exchanged', 'b', 'c'])
+    evictClients(db, 10)
+    expect(ids()).toEqual(['old-exchanged', 'b', 'c'])
+    add('e1', 6, 7)
+    add('e2', 8, 9)
+    evictClients(db, 2)
+    expect(ids()).toEqual(['e1', 'e2'])
+    evictClients(db, 1)
+    expect(ids()).toEqual(['e2'])
+    db.close()
+  })
+
+  it('marks a client as exchanged at its first token exchange', async () => {
+    const { client_id } = await (await register()).json()
+    const { verifier, challenge } = pkce()
+    const { location } = await decide(authParams(client_id, challenge))
+    const res = await exchange({ code: location!.searchParams.get('code')!, client_id, redirect_uri: REDIRECT, code_verifier: verifier })
+    expect(res.status).toBe(200)
+    expect((t.ctx.db.prepare('SELECT exchanged_at FROM oauth_clients WHERE client_id = ?').get(client_id) as { exchanged_at: number | null }).exchanged_at).toBeGreaterThan(0)
   })
 })
 

@@ -12,6 +12,7 @@ import { cors } from 'hono/cors'
 import { getCookie } from 'hono/cookie'
 import { SESSION_COOKIE, hashToken, safeEqual, sessionUser, type Ctx } from './auth.ts'
 import { NAME_MAX as TOKEN_NAME_MAX, createApiToken } from './apiTokens.ts'
+import type { Db } from './db.ts'
 
 const CODE_MS = 5 * 60_000
 const CLIENTS_MAX = 2000
@@ -26,6 +27,15 @@ const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/
 const OAUTH_SUFFIX = ' (OAuth)'
 
 type ClientRow = { client_id: string; name: string; redirect_uris: string }
+
+/**
+ * Anyone may register, so keep the table bounded to `max` rows. Clients that never completed an exchange go first (oldest first),
+ * so a registration flood cannot evict one that has; only when every row has exchanged does the oldest overall go.
+ */
+export function evictClients(db: Db, max = CLIENTS_MAX) {
+  db.prepare(`DELETE FROM oauth_clients WHERE rowid IN (SELECT rowid FROM oauth_clients
+    ORDER BY exchanged_at IS NOT NULL, created_at, rowid LIMIT MAX(0, (SELECT COUNT(*) FROM oauth_clients) - ?))`).run(max)
+}
 
 /** A redirect URI a client may register: https, http on loopback, or an app's own scheme; never with a fragment. */
 export function validRedirect(uri: unknown): uri is string {
@@ -124,8 +134,7 @@ export function oauthRoutes(ctx: Ctx) {
     const name = String(body.client_name ?? '').trim().slice(0, NAME_MAX) || 'MCP client'
     const client_id = 'mdwc_' + randomBytes(16).toString('base64url')
     db.prepare('INSERT INTO oauth_clients(client_id, name, redirect_uris, created_at) VALUES(?,?,?,?)').run(client_id, name, JSON.stringify(uris), Date.now())
-    // Anyone may register, so keep the table bounded: the oldest registrations go first.
-    db.prepare('DELETE FROM oauth_clients WHERE rowid IN (SELECT rowid FROM oauth_clients ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)').run(CLIENTS_MAX)
+    evictClients(db)
     return c.json({
       client_id, client_name: name, redirect_uris: uris, token_endpoint_auth_method: 'none',
       grant_types: ['authorization_code'], response_types: ['code'],
@@ -199,6 +208,7 @@ if(r.ok)location.reload();else e.textContent=r.status===429?'Too many attempts, 
     if (!row || !client || row.expires_at <= Date.now()) return oauthError(c, 'invalid_grant')
     if (form.client_id !== row.client_id || form.redirect_uri !== row.redirect_uri) return oauthError(c, 'invalid_grant')
     if (!VERIFIER_RE.test(form.code_verifier ?? '') || !safeEqual(s256(form.code_verifier), row.code_challenge)) return oauthError(c, 'invalid_grant')
+    db.prepare('UPDATE oauth_clients SET exchanged_at = COALESCE(exchanged_at, ?) WHERE client_id = ?').run(Date.now(), client.client_id)
     const made = createApiToken(ctx, row.user_id, client.name.slice(0, TOKEN_NAME_MAX - OAUTH_SUFFIX.length) + OAUTH_SUFFIX)
     return c.json({ access_token: made.token, token_type: 'Bearer' }, 200, { 'cache-control': 'no-store' })
   })

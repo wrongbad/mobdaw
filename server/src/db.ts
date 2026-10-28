@@ -168,6 +168,8 @@ const migrations: (string | ((db: Db) => void))[] = [
    CREATE TABLE oauth_codes(
      code_hash TEXT PRIMARY KEY, client_id TEXT NOT NULL, user_id INTEGER NOT NULL, redirect_uri TEXT NOT NULL,
      code_challenge TEXT NOT NULL, expires_at INTEGER NOT NULL);`,
+  // When a client first completed a token exchange; oauth.ts evicts the clients that never did before any that did.
+  'ALTER TABLE oauth_clients ADD COLUMN exchanged_at INTEGER;',
 ]
 
 export function openDb(path: string): Db {

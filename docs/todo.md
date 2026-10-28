@@ -4,10 +4,7 @@
 
 The fix is known and fits in a file or two; no design decisions left.
 
-### Server
 
-
-- **Anyone can flood OAuth client registration.** `POST /api/oauth/register` (`server/src/oauth.ts`) is unauthenticated and unthrottled; the table is capped at 2000 rows by evicting the oldest, so a flood can evict a real client between its registration and its token exchange (the user sees "Unknown client" and has to reconnect). Issued tokens are unaffected. Fix if it happens: rate-limit registration per client IP (needs the proxy's `X-Forwarded-For` trusted), or evict only clients that never completed an exchange.
 
 - **A chat mention of an agent only counts while the agent is present.** `@k(api)` is parsed against the handles of the members plus whoever is in the awareness (`client/src/ui/chat.tsx`, `AgentHub.handles`), so a message typed while the agent is idle stores no `mentions` for it. `events` and `GET chat` re-parse the text for `mentionsMe`, so an agent that polls sees it, but any other consumer of `ChatMessage.mentions` (an unread badge for the api identity) does not.
 
