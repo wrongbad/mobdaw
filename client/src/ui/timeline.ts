@@ -169,6 +169,7 @@ export function mountTimeline(s: Session, projectName: string, renameProject?: (
     onUnread: setUnread,
     onMentions: setUnreadMentions,
     names: () => [...memberNames(), ...store.remote().map((r) => r.user.username)],
+    members: memberNames,
   })
   // the shared change log: only for a live cloud session (snapshots and local projects have no server to log or revert)
   const hist = s.provider ? historyPanel({

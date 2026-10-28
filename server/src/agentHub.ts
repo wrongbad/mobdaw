@@ -201,10 +201,10 @@ export function createAgentHub(db: Db, collab: Collab & object, idleMs = 60_000)
     return [...new Set([...doc.awareness.getStates().values()].map((s) => (s as AwarenessState).user?.username).filter((n): n is string => !!n))]
   }
 
-  /** The mention handles that count in a chat message: the project's members plus whoever is present. */
+  /** The mention handles that count in a chat message: the project's members plus their "(api)" identities (present or not) and whoever else is present. */
   function handles(projectId: string): string[] {
     const members = (db.prepare('SELECT u.username FROM project_members m JOIN users u ON u.id = m.user_id WHERE m.project_id = ?').all(projectId) as { username: string }[]).map((r) => r.username)
-    return [...members, ...present(projectId).map(mentionHandle)]
+    return [...members, ...members.map((u) => mentionHandle(apiName(u))), ...present(projectId).map(mentionHandle)]
   }
 
   const view = (raw: Raw, me: string): AgentEvent | null => {

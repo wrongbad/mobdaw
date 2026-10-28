@@ -26,6 +26,8 @@ export type ChatDeps = {
   onMentions?(n: number): void
   /** Display names that can be mentioned right now: project members and who is present (API participants as "name (api)"). */
   names?(): string[]
+  /** Project members: their "(api)" identities are always parsed as mentions (not suggested), present or not. */
+  members?(): string[]
 }
 
 /** The `@query` being typed right before the caret, if any. */
@@ -34,13 +36,13 @@ export const mentionQuery = (value: string, caret: number) => {
   return m ? { query: m[1], start: caret - m[1].length - 1 } : null
 }
 
-export function chatPanel({ doc, user, onUnread, onMentions, names }: ChatDeps) {
+export function chatPanel({ doc, user, onUnread, onMentions, names, members }: ChatDeps) {
   const log = chatLog(doc)
   let open = false
   let seen = 0
   const myApi = apiName(user.username)
   const candidates = () => [...new Set(names?.() ?? [])].filter((n) => n !== user.username)
-  const handles = () => candidates().map(mentionHandle)
+  const handles = () => [...new Set([...candidates(), ...(members?.() ?? []).map(apiName)])].map(mentionHandle)
   /** Who a message mentions: as stored, or parsed from the text for older messages. */
   const mentionsOf = (m: ChatMessage) => m.mentions ?? parseMentions(m.text, handles())
   const mentionsMe = (m: ChatMessage) => !isSystem(m) && m.username !== user.username && m.username !== myApi && mentionsOf(m).includes(user.username)

@@ -181,6 +181,11 @@ describe('chat, history and events', () => {
     expect((await agent.post(`${base()}/chat`, { text: '  ' })).status).toBe(400)
   })
 
+  it('stores a mention of a member\'s api identity even when that agent is not present', async () => {
+    const r = await agent.post(`${base()}/chat`, { text: 'ping @alice(api)' })
+    expect(r.body.mentions).toEqual(['alice (api)'])
+  })
+
   it('lists, reverts and restores history as the api identity', async () => {
     const list = (await agent.get(`${base()}/history`)).body
     const drum = list.find((e: any) => e.text === 'drum loop')
