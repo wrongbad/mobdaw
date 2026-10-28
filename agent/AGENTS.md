@@ -724,7 +724,10 @@ whose click you don't want to follow, `a` to keep a default map you do want.
   bass**: one history entry, one revert undoes both. `push` still refuses any change to the piece's meter or tempo beyond that map.
   **`--keep-map`** (on `listen` / `pull`) opts out: the map is left alone, heard positions are whole ticks of where the audio was played on the
   old map, and a warning says the bass will not sit on its bar lines. Pull and push only change a project's map this way; edit it yourself
-  with `setRegion` / `addRegion` if the guess is wrong, then pull again.
+  with `setRegion` / `addRegion` if the guess is wrong, then pull again. **`--meter 3/4`** (2/4, 3/4, 4/4, 6/8, 9/8, 12/8) and
+  **`--downbeat-beat N`** (the first bar line is N tracked beats later than the reading has it, as the warning words it; negative: earlier)
+  replace the tracker's reading on `listen` / `pull --listen`, with the map and the heard part built on it; the warning then says it was given.
+  The tracked beat stays the meter's beat (a quarter in N/4, a dotted quarter in N/8), so `--meter` cannot fix a beat level that is off.
 - **Warnings name the other reading** when a guess has confidence under 0.5: `tempo 92 bpm, or 184: tell me if it's double`, `meter 3/4,
   could be 6/8`, a first bar line that could be N beats later, `rubato: the tempo moves about ±6%; the proposed map follows it`, `the
   swing feel is a guess: it could be straight 16ths`. If the audio has no steady beat at all (silence, one sound) it is read on the

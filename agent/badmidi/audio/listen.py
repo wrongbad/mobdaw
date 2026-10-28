@@ -102,8 +102,9 @@ def _code_version() -> str:
     return h.hexdigest()[:16]
 
 
-def _key(clips: list[dict], mode: str, grid: hear.Grid | None, origin: float, snap: int = 16, case: str = "a", end: float = 0.0) -> str:
-    desc = {"v": _code_version(), "mode": mode, "snap": snap, "origin": round(origin, 4), "case": case, "end": round(end, 4),
+def _key(clips: list[dict], mode: str, grid: hear.Grid | None, origin: float, snap: int = 16, case: str = "a", end: float = 0.0,
+         meter: tuple[str | None, int] = (None, 0)) -> str:
+    desc = {"meter": list(meter), "v": _code_version(), "mode": mode, "snap": snap, "origin": round(origin, 4), "case": case, "end": round(end, 4),
             "clips": [[c["sourceHash"], c.get("sourceOffsetSeconds", 0), c["lengthSeconds"], c.get("loopSeconds"), c.get("loopPhaseSeconds", 0),
                        c.get("gain", 1), c["startSeconds"]] for c in clips],
             "grid": [[round(b, 4) for b in grid.beats], grid.bar_starts, round(grid.end or 0, 4)] if grid else None}
@@ -168,11 +169,13 @@ def audio_bars(tl: Timeline, clips: list[dict]) -> tuple[int, int]:
 
 
 def listen(client: Client, pid: str, state: dict, track: str, bars: tuple[int, int] | None = None, mode: str = "auto",
-           wait: float = 0, cache_dir: str | None = None, snap: int = 16, case: str = "auto", keep_map: bool = False) -> Listened:
+           wait: float = 0, cache_dir: str | None = None, snap: int = 16, case: str = "auto", keep_map: bool = False,
+           meter: str | None = None, downbeat_beat: int = 0) -> Listened:
     """The track's audio as heard chords or notes, with its timing read (see the module docstring). `state` is the whole project
     (the case is decided from its click track and MIDI notes); `bars` default to where the audio is; `mode` auto decides by
     voicing; `snap`: notes are quantized to 1/snap notes; `case` 'a' or 'b' overrides the decision; `keep_map` (case B) leaves
-    the time map alone. Raises BridgeError (SampleIncoming while a take is still uploading) only when it cannot read the audio."""
+    the time map alone; `meter` ('3/4') and `downbeat_beat` (the first bar line that many beats later than the tracker has it) are a
+    person's answers for case B and replace the tracker's reading. Raises BridgeError (SampleIncoming while a take is still uploading) only when it cannot read the audio."""
     if mode not in MODES:
         raise BridgeError(f"unknown mode {mode!r}; use one of: {', '.join(MODES)}")
     if case not in CASES:
@@ -185,7 +188,7 @@ def listen(client: Client, pid: str, state: dict, track: str, bars: tuple[int, i
     use = case if case != "auto" else "a" if ref else "b"
     why = (ref or "no click track and no MIDI notes") if case == "auto" else f"--case {case}" + (f" ({ref})" if ref else "")
     args = (client, pid, state, t, clips, bars, mode, wait, cache_dir, snap, why)
-    return _listen_a(*args) if use == "a" else _listen_b(*args, keep_map)
+    return _listen_a(*args) if use == "a" else _listen_b(*args, keep_map, meter, downbeat_beat)
 
 
 def _window(client, pid, state, t, origin, end_abs, wait, cache_dir) -> np.ndarray:
@@ -366,16 +369,21 @@ def _tempo_warning(bt: timing.BeatTrack) -> str:
     return f"tempo {bt.bpm:.0f} bpm, or {alt.bpm:.0f}" + (f": tell me if it's {word}" if word else "") + f" (confidence {bt.confidence:.2f})"
 
 
-def _meter_warnings(mt: timing.Meter) -> list[str]:
-    if mt.confidence >= timing.UNSURE:
-        return []
+def _meter_warnings(mt: timing.Meter, meter_text: str | None = None, downbeat_beat: int = 0) -> list[str]:
+    """What is unsure about the meter; a part a person gave (`--meter`, `--downbeat-beat`) is said to be theirs instead."""
+    said = ([f"meter {_meter_text(mt)} as given (--meter)"] if meter_text else []) + \
+           ([f"first bar line {abs(downbeat_beat)} beat{'s' * (abs(downbeat_beat) != 1)} {'later' if downbeat_beat > 0 else 'earlier'} than tracked, as given (--downbeat-beat)"] if downbeat_beat else [])
+    if meter_text or mt.confidence >= timing.UNSURE:
+        return said
     ru = mt.runner_up
     me = _meter_text(mt)
     if ru is None:
         return [f"meter {me} is a guess (confidence {mt.confidence:.2f})"]
     other = _meter_text(ru)
     if other != me:
-        return [f"meter {me}, could be {other} (confidence {mt.confidence:.2f}): tell me if it's {other}"]
+        return said + [f"meter {me}, could be {other} (confidence {mt.confidence:.2f}): tell me if it's {other}"]
+    if downbeat_beat:
+        return said
     late = ru.downbeat_index - mt.downbeat_index
     return [f"meter {me}, but where the bars start is a guess (confidence {mt.confidence:.2f}): the first bar line could be {abs(late)} "
             f"beat{'s' * (abs(late) != 1)} {'later' if late > 0 else 'earlier'}"]
@@ -385,7 +393,7 @@ class _NoBeats(Exception):
     pass
 
 
-def _listen_b(client, pid, state, t, clips, bars, mode, wait, cache_dir, snap, why, keep_map) -> Listened:
+def _listen_b(client, pid, state, t, clips, bars, mode, wait, cache_dir, snap, why, keep_map, meter_text=None, downbeat_beat=0) -> Listened:
     """Case B: audio only, so the audio defines the time map."""
     tl = Timeline(state)
     if bars:
@@ -396,14 +404,15 @@ def _listen_b(client, pid, state, t, clips, bars, mode, wait, cache_dir, snap, w
     if not hit:
         raise BridgeError(f"track {t['name']!r} has no audio in the bars asked for")
     ppq = tl.ppq
-    cache = os.path.join(cache_dir or default_cache_dir(), "analysis", _key(hit, mode, None, origin, snap, "b", end_abs) + ".json")
+    cache = os.path.join(cache_dir or default_cache_dir(), "analysis", _key(hit, mode, None, origin, snap, "b", end_abs, (meter_text, downbeat_beat)) + ".json")
 
     def analyse() -> tuple[hear.Heard, dict]:
         x = _window(client, pid, state, t, origin, end_abs, wait, cache_dir)
         tm = timing.analyze(x)
-        bt, mt, fl = tm.beats, tm.meter, tm.feel
+        bt, fl = tm.beats, tm.feel
         if len(bt.times) < 4:
             raise _NoBeats
+        mt = timing.override_meter(tm.meter, bt.times, meter_text, downbeat_beat)
         if mt.unit == "8":
             fl = _compound_feel(fl)
         grid = timing.audio_grid(bt, mt)
@@ -423,6 +432,8 @@ def _listen_b(client, pid, state, t, clips, bars, mode, wait, cache_dir, snap, w
 
     try:
         h, info = _cached(cache, analyse)
+    except ValueError as e:
+        raise BridgeError(str(e)) from None
     except _NoBeats:
         return read_on_the_old_map("no steady beat found in the audio (silence, or a single sound)")
     fl = timing.Feel(**info["feel"])
@@ -466,7 +477,7 @@ def _listen_b(client, pid, state, t, clips, bars, mode, wait, cache_dir, snap, w
     bpm, msig, pickup, down = prop.bpm, _meter_text(mt), prop.pickup_s, prop.downbeat_s
     if bt.confidence < timing.UNSURE:
         warn.append(_tempo_warning(bt))
-    warn += _meter_warnings(mt)
+    warn += _meter_warnings(mt, meter_text, downbeat_beat)
     if prop.kind != "steady":
         warn.append(f"rubato: the tempo moves about ±{bt.variation * 100:.0f}%; the proposed map follows it ({prop.kind}, {len(prop.metered())} tempo regions)")
     if bt.support < 0.5 and bt.confidence >= timing.UNSURE:
@@ -529,6 +540,12 @@ def _where(tm: HeardTiming) -> str:
 # --- command ----------------------------------------------------------------------------
 
 
+def add_meter_args(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--meter", metavar="N/D", help="case b: the meter, when the audio's reading is wrong (2/4, 3/4, 4/4, 6/8, 9/8, 12/8); the tracked beat is its beat")
+    ap.add_argument("--downbeat-beat", type=int, default=0, metavar="N",
+                    help="case b: the first bar line is N tracked beats later than the audio's reading has it (negative: earlier)")
+
+
 def main(argv: list[str]) -> int:
     from ..cli import _bars
     ap = argparse.ArgumentParser(prog="badmidi listen", description="Print the chords or notes heard in a track of a mobdaw project.")
@@ -542,12 +559,14 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--case", default="auto", choices=CASES,
                     help="a: follow the project's time map (it has a click track or MIDI notes); b: the audio defines the map; auto (default): a when the project has a click track or MIDI notes")
     ap.add_argument("--keep-map", action="store_true", help="case b: do not propose a time map; positions are the project's old map's")
+    add_meter_args(ap)
     args = ap.parse_args(argv)
     try:
         c = Client()
         pid = c.project_id(args.project)
         state = c.state(pid)
-        res = listen(c, pid, state, args.track, _bars(args.bars), args.mode, args.wait, snap=args.snap, case=args.case, keep_map=args.keep_map)
+        res = listen(c, pid, state, args.track, _bars(args.bars), args.mode, args.wait, snap=args.snap, case=args.case, keep_map=args.keep_map,
+                     meter=args.meter, downbeat_beat=args.downbeat_beat)
     except SampleIncoming:
         sys.exit(f"badmidi listen: the take on {args.track!r} is still uploading from the recorder's device; "
                  "try again in a minute, or pass --wait 120 to wait for it")

@@ -751,6 +751,33 @@ def audio_grid(bt: BeatTrack, mt: Meter | None = None, per_bar: int = 4) -> Grid
     return Grid(B, starts, B[-1] + iv if B else None)
 
 
+def override_meter(mt: Meter, beat_times, meter_text: str | None = None, downbeat_beat: int = 0) -> Meter:
+    """The reading with a person's answer in it. `meter_text` ('3/4', '6/8') replaces the beats per bar and unit (the tracked beat is
+    the meter's beat: a quarter in N/4, a dotted quarter in N/8) and is sure of itself; `downbeat_beat` moves the first bar line that
+    many tracked beats later than the reading has it (the words of 'the first bar line could be N beats later'; negative: earlier).
+    ValueError when it asks for something that is not a meter or leaves fewer than 2 beats for the bars."""
+    n_beats = len(beat_times)
+    if meter_text is None and not downbeat_beat:
+        return mt
+    bpb, unit, d, conf, ru = mt.beats_per_bar, mt.unit, mt.downbeat_index, mt.confidence, mt.runner_up
+    if meter_text is not None:
+        try:
+            num, den = (int(v) for v in meter_text.split("/"))
+        except ValueError:
+            raise ValueError(f"meter {meter_text!r}: write it as 3/4 or 6/8") from None
+        if den == 4 and num in (2, 3, 4):
+            bpb, unit = num, "4"
+        elif den == 8 and num in (6, 9, 12):
+            bpb, unit = num // 3, "8"
+        else:
+            raise ValueError(f"meter {meter_text!r}: use 2/4, 3/4, 4/4, 6/8, 9/8 or 12/8")
+        d, conf, ru = d % bpb, 1.0, None
+    d += downbeat_beat
+    if d < 0 or n_beats - d < 2:
+        raise ValueError(f"--downbeat-beat {downbeat_beat}: the first bar line would be at beat {d} of {n_beats} tracked beats")
+    return Meter(bpb, unit, d, float(beat_times[d]), conf, ru, mt.scores)
+
+
 def analyze(x) -> Timing:
     """Features, beats, feel (on the beats found) and meter of a take in one call, for an audio-only project."""
     x = np.asarray(x, np.float32)

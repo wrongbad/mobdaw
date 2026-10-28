@@ -355,5 +355,45 @@ class TestSweep(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
+@unittest.skipIf(np is None, "needs numpy/scipy")
+class TestOverrideMeter(unittest.TestCase):
+    """A person's `--meter` / `--downbeat-beat` replace the tracker's reading, and the proposed map follows them."""
+    BEATS = 0.5 * np.arange(24)                                  # 120 bpm
+    READ = timing.Meter(4, "4", 0, 0.0, 0.3, timing.Reading(4, "4", 2, 0.2))
+
+    def propose(self, **kw):
+        from badmidi.audio.propose import propose
+        return propose(self.BEATS, timing.override_meter(self.READ, self.BEATS, **kw))
+
+    def test_no_override_is_the_reading(self):
+        self.assertIs(timing.override_meter(self.READ, self.BEATS), self.READ)
+
+    def test_meter_changes_the_bars_of_the_map(self):
+        p = self.propose(meter_text="3/4")
+        self.assertEqual((p.meter, p.bars, p.regions[0]["meter"]), ("3/4", 8, "3/4"))
+        self.assertEqual(self.propose().meter, "4/4")
+        self.assertEqual(self.propose().bars, 6)
+        m = timing.override_meter(self.READ, self.BEATS, "6/8")
+        self.assertEqual((m.signature, m.confidence, m.runner_up), ((6, 8), 1.0, None))
+        self.assertEqual(self.propose(meter_text="6/8").meter, "6/8")
+
+    def test_downbeat_beat_is_that_many_beats_later(self):
+        late = self.READ.runner_up.downbeat_index - self.READ.downbeat_index
+        p, q = self.propose(), self.propose(downbeat_beat=late)
+        self.assertEqual((p.pickup_s, q.pickup_s), (0.0, 1.0))               # the free bar before the first bar line: 2 beats of 0.5 s
+        self.assertEqual((q.first_bar, q.downbeat_s), (2, 1.0))
+        m = timing.override_meter(self.READ, self.BEATS, downbeat_beat=1)
+        self.assertEqual((m.downbeat_index, m.first_downbeat_s, m.confidence), (1, 0.5, 0.3))
+
+    def test_meter_keeps_the_pickup_within_the_new_bar(self):
+        m = timing.override_meter(timing.Meter(4, "4", 3, 1.5, 0.9), self.BEATS, "3/4")
+        self.assertEqual(m.downbeat_index, 0)
+
+    def test_nonsense_is_refused(self):
+        for kw in ({"meter_text": "5/4"}, {"meter_text": "waltz"}, {"downbeat_beat": -1}, {"downbeat_beat": 23}):
+            with self.subTest(kw), self.assertRaises(ValueError):
+                timing.override_meter(self.READ, self.BEATS, **kw)
+
+
 if __name__ == "__main__":
     unittest.main()

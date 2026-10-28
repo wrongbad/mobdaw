@@ -57,7 +57,7 @@ class Rig:
 
     @classmethod
     def listen(cls, clock, bars=BARS, click=True, bpm=100, tracks=(), name="t", **kw):
-        keep = {k: kw.pop(k) for k in ("case", "keep_map", "mode") if k in kw}
+        keep = {k: kw.pop(k) for k in ("case", "keep_map", "mode", "meter", "downbeat_beat") if k in kw}
         x, _ = take(bars, clock=clock, **kw)
         wav = os.path.join(cls.tmp, f"{abs(hash(repr((bars, clock, sorted(kw.items()))))):x}.wav")
         sf.write(wav, x, synth.SR, subtype="PCM_16")
@@ -313,6 +313,20 @@ class TestCaseB(unittest.TestCase):
         self.assertTrue(any(w.startswith("tempo ") and " or " in w for w in res.timing.warnings), res.timing.warnings)
         self.assertRegex(res.chart(), r"(?m)^warning: tempo \d+ bpm, or \d+")
         self.check_bass(res, st, clock, None, 0, tol=0.025, share=0.6)         # one strum a bar: honest about it, not exact
+
+    def test_meter_and_downbeat_given_override_the_reading_and_the_warning(self):
+        clock = synth.Clock(87)
+        base, _ = Rig.listen(clock, click=False)
+        self.assertEqual((base.proposal.meter, base.proposal.pickup_s), ("4/4", 0.0))
+        res, _ = Rig.listen(clock, click=False, meter="3/4", downbeat_beat=1)
+        p = res.proposal
+        self.assertEqual(p.meter, "3/4")
+        self.assertGreater(p.pickup_s, 0.5 * 60 / 87, "one tracked beat before the first bar line is a free bar")
+        self.assertTrue(any("as given (--meter)" in w for w in res.timing.warnings), res.timing.warnings)
+        self.assertTrue(any("1 beat later than tracked" in w for w in res.timing.warnings), res.timing.warnings)
+        self.assertFalse(any("could be" in w or "is a guess" in w for w in res.timing.warnings), res.timing.warnings)
+        with self.assertRaises(BridgeError):
+            Rig.listen(clock, click=False, meter="7/4")
 
     def test_keep_map_places_the_bass_on_the_old_map_and_says_so(self):
         clock = synth.Clock(87)

@@ -1138,6 +1138,9 @@ def pull_main(argv: list[str]) -> int:
     ap.add_argument("--case", default="auto", choices=("auto", "a", "b"),
                     help="--listen: a = follow the project's time map (it has a click track or MIDI notes), b = the audio defines the map; default auto")
     ap.add_argument("--keep-map", action="store_true", help="--listen, audio-only project: do not change the project's time map (the bass is placed on the old map's ticks)")
+    ap.add_argument("--meter", metavar="N/D", help="--listen, audio-only project: the meter, when the audio's reading is wrong (3/4, 6/8, ...); the tracked beat is its beat")
+    ap.add_argument("--downbeat-beat", type=int, default=0, metavar="N",
+                    help="--listen, audio-only project: the first bar line is N tracked beats later than the audio's reading has it (negative: earlier)")
     args = ap.parse_args(argv)
     from .views import has_errors
     c = Client()
@@ -1157,7 +1160,8 @@ def pull_main(argv: list[str]) -> int:
         for tr in args.listen:
             try:
                 if proposal is None:
-                    got = listen(c, pid, whole, tr, bars, args.mode, args.wait, case=args.case, keep_map=args.keep_map)
+                    got = listen(c, pid, whole, tr, bars, args.mode, args.wait, case=args.case, keep_map=args.keep_map,
+                                 meter=args.meter, downbeat_beat=args.downbeat_beat)
                 else:                         # a second track is heard against the map the first one proposed
                     got = listen(c, pid, {**whole, "regions": proposal.regions}, tr, bars, args.mode, args.wait, case="a")
             except SampleIncoming:
