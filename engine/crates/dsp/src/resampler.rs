@@ -30,6 +30,7 @@
 //! shared. Construct resamplers off the audio thread (they are, as part of device creation).
 
 use crate::analog::{cheby1, phi1, phi2, Mode, C};
+use crate::util::flush_denormal;
 use std::sync::OnceLock;
 
 const K: usize = 4;
@@ -226,6 +227,8 @@ pub struct Resampler {
     t: &'static Table,
     /// Modal state at the integer input position `i`.
     s: State,
+    /// Step counter: the denormal flush of `s` runs every 16th step.
+    n: u32,
     i: i64,
     pos: f64,
     /// Whether `x`/`e` hold the input around `i` (cleared by restart / clear_cache).
@@ -261,6 +264,7 @@ impl Resampler {
         Self {
             t,
             s: [V([0.0; K]); 4],
+            n: 0,
             i: 0,
             pos: 0.0,
             primed: false,
@@ -317,6 +321,16 @@ impl Resampler {
     fn step(&mut self, input: &mut impl FnMut(i64) -> P) {
         let du = (self.e1.0 - self.e0.0, self.e1.1 - self.e0.1);
         self.s = apply(&self.full, &self.s, self.e0, du);
+        // A decaying mode needs thousands of steps to cross the denormal range (wasm has no FTZ), so
+        // flushing it a few steps late is harmless and keeps the check off the recurrence's chain.
+        self.n = self.n.wrapping_add(1);
+        if self.n & 15 == 0 {
+            for v in &mut self.s {
+                for x in &mut v.0 {
+                    *x = flush_denormal(*x);
+                }
+            }
+        }
         self.i += 1;
         let t = self.t;
         if t.foh {

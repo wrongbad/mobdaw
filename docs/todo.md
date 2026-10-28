@@ -10,8 +10,6 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### DSP and engine
 
-- **Resampler states are never flushed for denormals.** `dsp::resampler::Resampler::step` (used by the tape delay head and the looper heads) lets the modal state decay through the subnormal range when its input is silent; wasm has no FTZ. It is a bounded transient (thousands of samples) so it has not been seen to matter. If a long-session CPU spike shows up on a silent looper region, flush `s` every N steps (as `Svf` does).
-
 - **Presets don't record the calibration they were tuned against.** The bore knobs (`breath`, `aperture`) are mapped through `bore_cal.rs`, so refitting the calibration silently changes how every tuned preset sounds (`client/src/content/presets.ts`, `engine/crates/dsp/src/bore_cal.rs`). Fix: stamp a calibration revision in `bore_cal.rs`, record it in each bore preset (`basedOn`/`rev` comment or field), and add a check that flags presets whose revision differs. See `docs/matching.md`, "Matched vs hand-tuned presets".
 
 - **The engine's parent-loop break and the bridge's can disagree.** `effectiveParent` (`shared/src/schema.ts`) cuts a loop at the smallest track *id*; the engine's `break_parent_cycles` (`engine/crates/engine/src/engine.rs`) cuts at the smallest *handle*. They never differ today because the bridge sends only effective parents (no loop ever reaches the engine), but if the bridge is ever changed to send raw `parent` fields, peers would hear different trees than the UI shows. Fix: keep sending effective parents; or give the engine the ids' order (`engine_track_order` already carries the document's order) and cut by that.

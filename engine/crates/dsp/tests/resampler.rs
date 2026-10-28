@@ -186,3 +186,50 @@ fn fractional_reads_do_not_disturb_the_state() {
         assert!((ya - yb).abs() < 1e-4, "{ya} {yb}");
     }
 }
+
+fn sine_hash(design: fn() -> Resampler) -> u64 {
+    let mut inp = |i: i64| {
+        let v = (TAU * 1500.0 * i as f64 / SR).sin() as f32;
+        (v, v * 0.5)
+    };
+    let mut r = design();
+    r.restart(-500);
+    let (mut pos, mut h) = (0.0, 0xcbf29ce484222325u64);
+    for _ in 0..5000 {
+        pos += 0.73;
+        let (l, rr) = r.advance(&mut inp, pos, 1.0);
+        for b in [l.to_bits(), rr.to_bits()] {
+            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+        }
+    }
+    h
+}
+
+/// Output for a normal signal is bit-identical to the pre-flush implementation (recorded before the change).
+#[test]
+fn flush_leaves_normal_signals_bit_identical() {
+    assert_eq!(sine_hash(Resampler::new), 764512334101299919);
+    assert_eq!(sine_hash(Resampler::clean), 3326996116094877099);
+}
+
+#[test]
+fn silent_input_decays_to_exact_zero_without_subnormals() {
+    for design in [Resampler::new, Resampler::clean] {
+        let mut r = design();
+        let mut inp = |i: i64| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) };
+        r.restart(-4);
+        let mut pos = -4.0;
+        let mut zero_at = None;
+        for n in 0..2_000_000 {
+            pos += 1.0;
+            let (l, rr) = r.advance(&mut inp, pos, 1.0);
+            assert!(!l.is_subnormal() && !rr.is_subnormal(), "subnormal output at step {n}");
+            if n > 100 && l == 0.0 && rr == 0.0 {
+                zero_at = Some(n);
+                break;
+            }
+        }
+        let n = zero_at.expect("output never reached exactly 0");
+        println!("resampler impulse response reached exactly 0.0 after {n} steps");
+    }
+}
