@@ -6,7 +6,6 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### Server
 
-- **The admin `passwd` command ends sessions but not open collab connections.** `scripts/admin.ts` runs in its own process and deletes the user's `sessions` rows (`revokeSessions`), but it has no handle on the server's Hocuspocus connections, which were authenticated at connect time and stay open until they drop or are closed by an access change (`kickUser` in `server/src/collab.ts`). The user can keep editing over an old socket after a password reset. (API tokens are handled: `passwd` deletes them and the 60-second `enforceReadOnly` pass closes connections whose `tokenHash` is gone, and `hub.sweepRevoked` ends agent presence; only session-token sockets are left.) Fix: have the 60-second `enforceReadOnly` pass (`server/src/main.ts`) also close connections whose user has no live session, which needs the session or token hash stored on the connection context at connect.
 
 - **Anyone can flood OAuth client registration.** `POST /api/oauth/register` (`server/src/oauth.ts`) is unauthenticated and unthrottled; the table is capped at 2000 rows by evicting the oldest, so a flood can evict a real client between its registration and its token exchange (the user sees "Unknown client" and has to reconnect). Issued tokens are unaffected. Fix if it happens: rate-limit registration per client IP (needs the proxy's `X-Forwarded-For` trusted), or evict only clients that never completed an exchange.
 

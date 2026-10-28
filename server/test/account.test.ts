@@ -124,6 +124,23 @@ describe('read-only accounts (subscription ended)', () => {
   })
 })
 
+describe('enforceReadOnly and sessions', () => {
+  it('drops connections whose session was ended behind the server\'s back (admin CLI passwd)', async () => {
+    const owner = await admit(t.base, admin, 'quin')
+    const A = await mk(owner, 'Solo')
+    const o = connect(t.port, A, owner.token!)
+    await until(() => o.provider.synced)
+    let closed = false
+    o.provider.on('close', ({ event }: { event: { reason?: string } }) => { if (event.reason === 'access_changed') closed = true })
+    enforceReadOnly(t.ctx, t.collab)
+    expect(closed).toBe(false) // session still live
+    t.ctx.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(uid('quin')) // as revokeSessions does
+    enforceReadOnly(t.ctx, t.collab)
+    await until(() => closed)
+    o.provider.destroy()
+  })
+})
+
 describe('retention window and purge', () => {
   it("30 days after the subscription ends the account's cloud data is deleted, but the account never is", async () => {
     const vic = await admit(t.base, admin, 'vic'), wes = await admit(t.base, admin, 'wes')

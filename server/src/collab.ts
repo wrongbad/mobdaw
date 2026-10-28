@@ -2,7 +2,7 @@ import { Database } from '@hocuspocus/extension-database'
 import { Server } from '@hocuspocus/server'
 import { docName, samplesMap } from '@mobdaw/shared'
 import { apiTokenUser } from './apiTokens.ts'
-import { memberRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
+import { hashToken, memberRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
 import { apiName } from '@mobdaw/shared'
 import { attachHistory } from './history.ts'
 import type { Link } from './uploads.ts'
@@ -38,6 +38,8 @@ export function enforceReadOnly(ctx: Ctx, collab: Collab) {
       if (writeBlock(ctx, name.slice('project:'.length), c.context.userId)) c.close({ code: 1000, reason: KICK_REASON })
       // an API token revoked by another process (the admin CLI)
       else if (c.context.tokenHash && !ctx.db.prepare('SELECT 1 FROM api_tokens WHERE token_hash = ?').get(c.context.tokenHash)) c.close({ code: 1000, reason: KICK_REASON })
+      // a session ended by another process (the admin CLI's `passwd`)
+      else if (c.context.sessionHash && !ctx.db.prepare('SELECT 1 FROM sessions WHERE token_hash = ? AND expires_at > ?').get(c.context.sessionHash, Date.now())) c.close({ code: 1000, reason: KICK_REASON })
     }
 }
 
@@ -115,7 +117,7 @@ export function createCollab(ctx: Ctx) {
       const role = projectId && memberRole(ctx, projectId, user.id)
       if (role !== 'owner' && role !== 'editor') throw new Error('forbidden')
       if (writeBlock(ctx, projectId!, user.id)) throw new Error('forbidden')
-      return api ? { userId: user.id, username: apiName(user.username), role, via: 'api', tokenHash: api.tokenHash } : { userId: user.id, username: user.username, role }
+      return api ? { userId: user.id, username: apiName(user.username), role, via: 'api', tokenHash: api.tokenHash } : { userId: user.id, username: user.username, role, sessionHash: token ? hashToken(token) : undefined }
     },
   })
 }
