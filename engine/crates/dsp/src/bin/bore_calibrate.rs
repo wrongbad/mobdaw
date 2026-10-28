@@ -947,6 +947,7 @@ fn fit(args: &[String]) {
         let b = src.find("// END GENERATED").unwrap() + "// END GENERATED\n".len();
         std::fs::write(p, format!("{}{}{}", &src[..a], t, &src[b..])).unwrap();
         println!("wrote {p}");
+        println!("REMINDER: bump BORE_CAL_REV in {p}, then re-check the bore presets (client/src/content/presets.ts, calRev).");
     }
 }
 

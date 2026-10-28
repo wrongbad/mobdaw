@@ -110,6 +110,8 @@ Two kinds of preset, kept in separate files so a re-run can never overwrite ear 
 | Written by | the batch driver, from `best.json` of a run | a person (or an agent on request) |
 | Re-run | regenerated freely | never touched by the tooling |
 
+Hand-tuned bore presets carry `calRev` (the `BORE_CAL_REV` in `bore_cal.rs` they were last heard against); bump `BORE_CAL_REV` on every refit and `client/test/content.test.ts` lists the presets to re-check and re-stamp.
+
 Each matched preset records its key: GM program, engine, calibration revision, loss/probe-suite version, final loss, and the run label. Matching runs for the engine start from the previous matched params (incremental build; see `docs/bore.md`, "Priors and incremental recalibration").
 
 A hand-tuned preset that started from a matched one says so in a structured comment above it:

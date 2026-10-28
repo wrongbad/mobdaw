@@ -17,7 +17,9 @@ import {
 import { MATCHED_PRESETS } from './presets.matched'
 
 export type InstrumentCategory = 'keys' | 'bass' | 'lead' | 'pad' | 'pluck' | 'winds' | 'strings' | 'fx'
-export type InstrumentPreset = { id: string; name: string; type: number; params: Record<string, number>; category: InstrumentCategory; gm?: number[] }
+export type InstrumentPreset = { id: string; name: string; type: number; params: Record<string, number>; category: InstrumentCategory; gm?: number[]
+  /** Bore presets: the `BORE_CAL_REV` (bore_cal.rs) the knobs were tuned against; test/content.test.ts flags a mismatch. */
+  calRev?: number }
 export type Drum = { name: string; key: number; params: Record<string, number> }
 export type DrumKit = { id: string; name: string; drums: Drum[] }
 export type EffectPreset = { id: string; name: string; devices: { type: number; params: Record<string, number> }[] }
@@ -57,27 +59,29 @@ export const INSTRUMENT_PRESETS: InstrumentPreset[] = [
 type Bw = {
   character: number; stiffness?: number; aperture?: number; position: number; bore: 0 | 1; damping?: number; decay?: number; breath?: number; noise?: number
   vibRate?: number; vibDepth?: number; vibPitch?: number; attack: number; release: number; gain?: number
+  calRev: number
 }
 const bw = (p: Bw): Record<string, number> => ({
   0: p.character, 1: p.stiffness ?? 0.5, 2: p.aperture ?? 0.5, 3: p.position, 4: p.bore, 5: p.damping ?? 0.3, 6: p.decay ?? 0.7, 7: p.breath ?? 0.5,
   8: p.noise ?? 0, 9: p.vibRate ?? 5, 10: p.vibDepth ?? 0, 11: p.attack, 12: p.release, 13: p.gain ?? 1, 14: p.vibPitch ?? 0, 15: 0, 16: 0, 17: 0, 18: 0, 19: 0,
 })
-const bore = (id: string, name: string, category: InstrumentCategory, p: Bw): InstrumentPreset => ({ id, name, type: BORE, category, params: bw(p) })
+const bore = (id: string, name: string, category: InstrumentCategory, p: Bw): InstrumentPreset => ({ id, name, type: BORE, category, params: bw(p), calRev: p.calRev })
 
 // The waveguide instruments (docs/bore.md). `aperture` and `breath` are calibrated, so 0.5 is a safe middle for both.
+// `calRev` is the bore_cal.rs `BORE_CAL_REV` the preset was last heard against; bump it only after re-listening.
 INSTRUMENT_PRESETS.push(
   // winds
-  bore('clarinet', 'Clarinet', 'winds', { character: 0, stiffness: 0.8, aperture: 0.5, position: 0.5, bore: 0, breath: 0.55, noise: 0.05, vibRate: 5, vibDepth: 0.1, attack: 40, release: 120 }),
-  bore('alto-sax', 'Alto sax', 'winds', { character: 0, stiffness: 0.35, aperture: 0.6, position: 0.2, bore: 1, breath: 0.6, noise: 0.2, vibRate: 5.7, vibDepth: 0.2, attack: 30, release: 140 }),
-  bore('breathy-flute', 'Breathy flute', 'winds', { character: 0.5, stiffness: 0.4, aperture: 0.5, position: 0.1, bore: 1, breath: 0.5, noise: 0.6, vibRate: 4.5, vibDepth: 0.12, attack: 140, release: 200 }),
-  bore('shakuhachi', 'Shakuhachi', 'winds', { character: 0.5, stiffness: 0.5, aperture: 0.5, position: 0.25, bore: 1, breath: 0.6, noise: 0.85, vibRate: 5.2, vibDepth: 0.55, attack: 90, release: 220 }),
-  bore('bottle', 'Bottle', 'winds', { character: 0.5, stiffness: 0.4, aperture: 0.5, position: 0.5, bore: 0, damping: 0.8, decay: 0.2, breath: 0.5, noise: 0.3, attack: 50, release: 100 }),
-  bore('reed-organ', 'Reed organ', 'winds', { character: 0.25, stiffness: 0.5, aperture: 0.5, position: 0.4, bore: 0, breath: 0.5, attack: 40, release: 90 }),
-  bore('growl-lead', 'Growl lead', 'winds', { character: 0, stiffness: 1, aperture: 0.7, position: 0.15, bore: 1, breath: 1, noise: 0.3, vibRate: 5.5, vibDepth: 0.15, attack: 20, release: 120 }),
+  bore('clarinet', 'Clarinet', 'winds', { character: 0, stiffness: 0.8, aperture: 0.5, position: 0.5, bore: 0, breath: 0.55, noise: 0.05, vibRate: 5, vibDepth: 0.1, attack: 40, release: 120, calRev: 1 }),
+  bore('alto-sax', 'Alto sax', 'winds', { character: 0, stiffness: 0.35, aperture: 0.6, position: 0.2, bore: 1, breath: 0.6, noise: 0.2, vibRate: 5.7, vibDepth: 0.2, attack: 30, release: 140, calRev: 1 }),
+  bore('breathy-flute', 'Breathy flute', 'winds', { character: 0.5, stiffness: 0.4, aperture: 0.5, position: 0.1, bore: 1, breath: 0.5, noise: 0.6, vibRate: 4.5, vibDepth: 0.12, attack: 140, release: 200, calRev: 1 }),
+  bore('shakuhachi', 'Shakuhachi', 'winds', { character: 0.5, stiffness: 0.5, aperture: 0.5, position: 0.25, bore: 1, breath: 0.6, noise: 0.85, vibRate: 5.2, vibDepth: 0.55, attack: 90, release: 220, calRev: 1 }),
+  bore('bottle', 'Bottle', 'winds', { character: 0.5, stiffness: 0.4, aperture: 0.5, position: 0.5, bore: 0, damping: 0.8, decay: 0.2, breath: 0.5, noise: 0.3, attack: 50, release: 100, calRev: 1 }),
+  bore('reed-organ', 'Reed organ', 'winds', { character: 0.25, stiffness: 0.5, aperture: 0.5, position: 0.4, bore: 0, breath: 0.5, attack: 40, release: 90, calRev: 1 }),
+  bore('growl-lead', 'Growl lead', 'winds', { character: 0, stiffness: 1, aperture: 0.7, position: 0.15, bore: 1, breath: 1, noise: 0.3, vibRate: 5.5, vibDepth: 0.15, attack: 20, release: 120, calRev: 1 }),
   // strings
-  bore('cello', 'Cello', 'strings', { character: 1, stiffness: 0.5, aperture: 0.5, position: 0.12, bore: 1, breath: 0.5, vibRate: 5, vibDepth: 0.25, attack: 250, release: 300 }),
-  bore('fiddle', 'Fiddle', 'strings', { character: 1, stiffness: 0.7, aperture: 0.75, position: 0.08, bore: 1, damping: 0.15, breath: 0.55, vibRate: 5.5, vibDepth: 0.12, attack: 15, release: 90 }),
-  bore('glass-harmonica', 'Glass harmonica', 'strings', { character: 0.75, stiffness: 0.5, aperture: 0.25, position: 0.3, bore: 1, decay: 1, breath: 0.45, attack: 300, release: 900 }),
+  bore('cello', 'Cello', 'strings', { character: 1, stiffness: 0.5, aperture: 0.5, position: 0.12, bore: 1, breath: 0.5, vibRate: 5, vibDepth: 0.25, attack: 250, release: 300, calRev: 1 }),
+  bore('fiddle', 'Fiddle', 'strings', { character: 1, stiffness: 0.7, aperture: 0.75, position: 0.08, bore: 1, damping: 0.15, breath: 0.55, vibRate: 5.5, vibDepth: 0.12, attack: 15, release: 90, calRev: 1 }),
+  bore('glass-harmonica', 'Glass harmonica', 'strings', { character: 0.75, stiffness: 0.5, aperture: 0.25, position: 0.3, bore: 1, decay: 1, breath: 0.45, attack: 300, release: 900, calRev: 1 }),
 )
 
 /** General MIDI programs (0-based) each instrument stands in for; a MIDI import picks the first preset listing the program. */

@@ -28,6 +28,11 @@
 //! two `ln(drive)` edges (pulled in by [`EDGE_MARGIN`] so the extremes are not on the threshold
 //! or the squeal).
 
+/// Revision of the calibration. Bump it on every refit (`bore_calibrate fit --emit`, or any change to the
+/// mapping or constants here): presets record the revision they were tuned against (`calRev` in
+/// client/src/content/presets.ts) and a client test fails until each is re-checked by ear and re-stamped.
+pub const BORE_CAL_REV: u32 = 1;
+
 /// Number of character anchors: reed, reed/jet, jet, jet/bow, bow.
 pub const N_ANCHORS: usize = 5;
 /// Length of the feature vector.
