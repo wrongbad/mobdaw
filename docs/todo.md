@@ -16,7 +16,7 @@ The fix is known and fits in a file or two; no design decisions left.
 
 - **Heard takes across beats of different lengths skip the feel's slots.** `Rhythm` now has a slot and beat per bar and `beat_grid` groups 2+2+3 and 6/8, but `_listen_a` (`audio/listen.py`) only remaps rhythm/notes to a swing or triplet feel's slots when every beat is the same length (otherwise it keeps 16th slots), and the notes chart (`format_chart` in `audio/hear.py`) prints durations with one `beat_q`. Fix: make `_slot_rhythm` and the chart take the beat length per beat.
 
-- **MIDI file import snaps tempo changes to bar lines and turns tempo ramps into steps.** `smfRegions` (`client/src/content/midifile.ts`) puts each tempo event on the nearest bar line (a change mid-bar moves up to half a bar) and a file that encodes a ritardando as dense tempo events becomes one region per bar, not a `rampTo`. Fix: detect runs of monotonic tempo events and write them as a ramp region; split a bar only if free/odd bars are ever supported.
+- **MIDI file import snaps tempo changes to bar lines.** `smfRegions` (`client/src/content/midifile.ts`) puts each tempo event on the nearest bar line, so a change mid-bar moves up to half a bar (a ritardando of dense events is already one `rampTo` region, but it too starts and ends on bar lines). Fix: split a bar only if free/odd bars are ever supported.
 
 ## Needs design
 

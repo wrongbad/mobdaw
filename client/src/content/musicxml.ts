@@ -578,8 +578,8 @@ export function importMusicXml(doc: Y.Doc, score: XmlScore, o: { at: number; tra
       const regions = smfRegions(asSmf(score))
       const first = getRegions(doc)[0]
       regions.forEach((r, i) => {
-        if (i === 0) setRegion(doc, first.id, { bpm: r.bpm, num: r.num, den: r.den, groups: undefined, rampTo: undefined })
-        else addRegion(doc, { bar: r.bar, bpm: r.bpm, num: r.num, den: r.den })
+        if (i === 0) setRegion(doc, first.id, { bpm: r.bpm, num: r.num, den: r.den, groups: undefined, rampTo: r.rampTo })
+        else addRegion(doc, { bar: r.bar, bpm: r.bpm, num: r.num, den: r.den, ...(r.rampTo ? { rampTo: r.rampTo } : {}) })
       })
       if (score.key) setKey(doc, score.key)
       for (const m of score.markers) addMarker(doc, { bar: m.bar, label: m.label, ...(m.text ? { text: m.text } : {}) })

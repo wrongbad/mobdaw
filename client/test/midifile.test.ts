@@ -1,5 +1,5 @@
 import {
-  FINNWAVE, LOFI_DRUM, MIX, addMidiClip, addNote, addRegion, addTrack, ensureTimeline, getClips, getDevices, getNotes, getRegions, getTimeMap, getTracks, metaMap, setRegion, type MidiClip,
+  FINNWAVE, LOFI_DRUM, MIX, addMidiClip, addNote, addRegion, addTrack, ensureTimeline, getClips, getDevices, getNotes, getPpq, getRegions, getTimeMap, getTracks, metaMap, setRegion, type MidiClip,
 } from '@mobdaw/shared'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
@@ -213,6 +213,32 @@ describe('importing tempo and meter changes', () => {
   it('puts a tempo change in the middle of a bar on the nearest bar line, and merges equal neighbours', () => {
     const f = { ...parseSmf(tempoMeterFile()), meters: [], tempos: [{ tick: 0, bpm: 100 }, { tick: 1900, bpm: 100 }, { tick: 1920 * 2 + 100, bpm: 80 }] }
     expect(smfRegions(f)).toEqual([{ bar: 1, bpm: 100, num: 4, den: 4 }, { bar: 3, bpm: 80, num: 4, den: 4 }])
+  })
+  it('turns a ritardando of dense tempo events into one ramp region that takes as long as the file', () => {
+    const tempos = Array.from({ length: 33 }, (_, k) => ({ tick: 1920 + k * 240, bpm: 120 - k * 1.5 })) // bars 2.. : 120 -> 72 over 4 bars
+    tempos.unshift({ tick: 0, bpm: 120 })
+    const f = { ...parseSmf(tempoMeterFile()), meters: [], tempos }
+    const rs = smfRegions(f)
+    expect(rs).toMatchObject([{ bar: 1, bpm: 120 }, { bar: 2, bpm: 120 }, { bar: 6, bpm: 72 }])
+    expect(rs[1].rampTo).toBeGreaterThan(60)
+    expect(rs[1].rampTo).toBeLessThan(80) // near the last event's 72 (the steps hold each tempo, so the fit ends a little above)
+    const doc = blank()
+    importSmf(doc, { ...f, parts: parseSmf(tempoMeterFile()).parts }, { at: 0, base: 'rit' })
+    const map = getTimeMap(doc)
+    const fileSec = smfSeconds(f)(5 * 1920) - smfSeconds(f)(1920) // bar 2 start to bar 6 start, in the file
+    const ppq = getPpq(doc)
+    expect((map.tickToSampleExact(5 * 4 * ppq) - map.tickToSampleExact(1 * 4 * ppq)) / RATE).toBeCloseTo(fileSec, 2)
+  })
+  it('keeps a single tempo step a step, and a ramp followed by a step gives a ramp and a step', () => {
+    const base = parseSmf(tempoMeterFile())
+    expect(smfRegions({ ...base, meters: [], tempos: [{ tick: 0, bpm: 100 }, { tick: 1920, bpm: 110 }, { tick: 3840, bpm: 90 }] })).toEqual([
+      { bar: 1, bpm: 100, num: 4, den: 4 }, { bar: 2, bpm: 110, num: 4, den: 4 }, { bar: 3, bpm: 90, num: 4, den: 4 },
+    ])
+    const tempos = [{ tick: 0, bpm: 100 }, { tick: 1920, bpm: 100 }, ...[1, 2, 3, 4].map((k) => ({ tick: 1920 + k * 480, bpm: 100 + k * 5 })), { tick: 5 * 1920, bpm: 60 }]
+    const rs = smfRegions({ ...base, meters: [], tempos })
+    expect(rs).toMatchObject([{ bar: 1, bpm: 100 }, { bar: 2, bpm: 100 }, { bar: 3, bpm: 120 }, { bar: 6, bpm: 60 }])
+    expect(rs[1].rampTo).toBeGreaterThan(100)
+    expect(rs[2].rampTo).toBeUndefined()
   })
   it('on a default project writes the tempo and 6/8 -> 4/4 changes into regions and the notes sound where they should', () => {
     const doc = blank()

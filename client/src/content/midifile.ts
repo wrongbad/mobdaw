@@ -388,13 +388,20 @@ export const kitKey = (pitch: number, keys: Set<number>) => (keys.has(pitch) ? p
 
 export type ImportPart = { name: string; drums: boolean; preset: string | null; lengthTicks: number; notes: ClipNote[] }
 
+/** A run of tempo events becomes a ramp from this many events on, when no two are further apart than this many quarter notes. */
+const RAMP_MIN_EVENTS = 3
+const RAMP_MAX_GAP = 4
+
 /** A region the file asks for: from `bar` on, at `bpm` in num/den. */
-export type FileRegion = { bar: number; bpm: number; num: number; den: number }
+export type FileRegion = { bar: number; bpm: number; num: number; den: number; rampTo?: number }
 
 /**
  * The file's tempo and time-signature events as regions (pure). Bars are counted from the meter events (a change lands on the
  * nearest whole bar); a tempo event lands on the nearest bar line, the last one winning when several land together; the tempo is 120
- * until the first event. Neighbouring regions with the same tempo and meter are merged. Always starts at bar 1.
+ * until the first event. A run of at least `RAMP_MIN_EVENTS` tempo events moving the same way, no further than `RAMP_MAX_GAP` ticks
+ * (in quarters) apart, within one meter, is one ramp region (`rampTo`) up to the bar of the run's last event, which sets that tempo;
+ * the ramp's end tempo is fitted so it takes as long as the file's steps do. Neighbouring regions with the same tempo and meter are
+ * merged. Always starts at bar 1.
  */
 export function smfRegions(smf: Smf): FileRegion[] {
   const meters = new Map<number, { num: number; den: number }>()
@@ -410,17 +417,45 @@ export function smfRegions(smf: Smf): FileRegion[] {
   })
   const segAt = (f: (s: (typeof segs)[number]) => boolean) => segs.filter(f).at(-1) ?? segs[0]
   const barOfTick = (tick: number) => { const sg = segAt((x) => x.tick <= tick); return sg.bar + Math.max(0, Math.round((tick - sg.tick) / sg.barTicks)) }
+  const events = new Map<number, number>() // tick -> bpm, the last event at a tick winning
+  for (const t of [...smf.tempos].sort((a, b) => a.tick - b.tick)) if (t.bpm > 0) events.set(t.tick, t.bpm)
+  const evs = [...events].map(([tick, bpm]) => ({ tick, bpm }))
   const tempoAt = new Map<number, number>() // bar -> bpm
-  for (const t of [...smf.tempos].sort((a, b) => a.tick - b.tick)) if (t.bpm > 0) tempoAt.set(barOfTick(t.tick), t.bpm)
-  const bars = [...new Set([...segs.map((x) => x.bar), ...tempoAt.keys(), 1])].sort((a, b) => a - b)
+  const rampAt = new Map<number, { bpm: number; rampTo: number }>() // bar -> ramp that starts there
+  const seconds = smfSeconds(smf)
+  const barTick = (b: number) => { const sg = segAt((x) => x.bar <= b); return sg.tick + (b - sg.bar) * sg.barTicks }
+  for (let i = 0; i < evs.length; i++) {
+    let j = i + 1
+    const dir = evs[j] ? Math.sign(evs[j].bpm - evs[i].bpm) : 0
+    while (dir && evs[j + 1] && evs[j + 1].tick - evs[j].tick <= RAMP_MAX_GAP * smf.ppq && Math.sign(evs[j + 1].bpm - evs[j].bpm) === dir) j++
+    if (dir && j - i + 1 >= RAMP_MIN_EVENTS && evs[i + 1].tick - evs[i].tick <= RAMP_MAX_GAP * smf.ppq) {
+      const b0 = barOfTick(evs[i].tick), b1 = barOfTick(evs[j].tick)
+      if (b1 > b0 && !segs.some((x) => x.bar > b0 && x.bar <= b1)) {
+        const from = evs[i].bpm, ticks = barTick(b1) - barTick(b0), want = seconds(barTick(b1)) - seconds(barTick(b0))
+        // a linear ramp from `from` to `to` takes 60 * ticks / ppq * ln(to / from) / (to - from) seconds; find `to` (it falls as `to` grows)
+        const took = (to: number) => ((to === from ? 1 / from : Math.log(to / from) / (to - from)) * 60 * ticks) / smf.ppq
+        let lo = 1, hi = 1000
+        for (let k = 0; k < 60; k++) { const mid = (lo + hi) / 2; if (took(mid) > want) lo = mid; else hi = mid }
+        rampAt.set(b0, { bpm: from, rampTo: (lo + hi) / 2 })
+        tempoAt.set(b1, evs[j].bpm)
+        i = j
+        continue
+      }
+    }
+    tempoAt.set(barOfTick(evs[i].tick), evs[i].bpm)
+  }
+  const bars = [...new Set([...segs.map((x) => x.bar), ...tempoAt.keys(), ...rampAt.keys(), 1])].sort((a, b) => a - b)
   const out: FileRegion[] = []
   let bpm = DEFAULT_MIDI_BPM
   for (const b of bars) {
-    if (tempoAt.has(b)) bpm = roundBpm(tempoAt.get(b)!)
+    const ramp = rampAt.get(b)
+    if (ramp) bpm = roundBpm(ramp.bpm)
+    else if (tempoAt.has(b)) bpm = roundBpm(tempoAt.get(b)!)
     const sg = segAt((x) => x.bar <= b)
     const last = out[out.length - 1]
-    if (last && last.bpm === bpm && last.num === sg.num && last.den === sg.den) continue
-    out.push({ bar: b, bpm, num: sg.num, den: sg.den })
+    const rampTo = ramp && roundBpm(ramp.rampTo) !== bpm ? roundBpm(ramp.rampTo) : undefined
+    if (last && !last.rampTo && !rampTo && last.bpm === bpm && last.num === sg.num && last.den === sg.den) continue
+    out.push({ bar: b, bpm, num: sg.num, den: sg.den, ...(rampTo ? { rampTo } : {}) })
   }
   return out
 }
@@ -505,8 +540,8 @@ export function importSmf(doc: Y.Doc, smf: Smf, o: { at: number; trackId?: strin
       const regions = smfRegions(smf)
       const first = getRegions(doc)[0]
       regions.forEach((r, i) => {
-        if (i === 0) setRegion(doc, first.id, { bpm: r.bpm, num: r.num, den: r.den, groups: undefined, rampTo: undefined })
-        else addRegion(doc, { bar: r.bar, bpm: r.bpm, num: r.num, den: r.den })
+        if (i === 0) setRegion(doc, first.id, { bpm: r.bpm, num: r.num, den: r.den, groups: undefined, rampTo: r.rampTo })
+        else addRegion(doc, { bar: r.bar, bpm: r.bpm, num: r.num, den: r.den, ...(r.rampTo ? { rampTo: r.rampTo } : {}) })
       })
       adopted = true
     } else if (!fresh) {
