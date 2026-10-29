@@ -388,9 +388,8 @@ export const kitKey = (pitch: number, keys: Set<number>) => (keys.has(pitch) ? p
 
 export type ImportPart = { name: string; drums: boolean; preset: string | null; lengthTicks: number; notes: ClipNote[] }
 
-/** A run of tempo events becomes a ramp from this many events on, when no two are further apart than this many quarter notes. */
+/** A run of tempo events becomes a ramp from this many events on, when each is closer to the last than a bar and not all sit on bar lines (else it is a staircase). */
 const RAMP_MIN_EVENTS = 3
-const RAMP_MAX_GAP = 4
 
 /** A region the file asks for: from `bar` on, at `bpm` in num/den. */
 export type FileRegion = { bar: number; bpm: number; num: number; den: number; rampTo?: number }
@@ -398,8 +397,8 @@ export type FileRegion = { bar: number; bpm: number; num: number; den: number; r
 /**
  * The file's tempo and time-signature events as regions (pure). Bars are counted from the meter events (a change lands on the
  * nearest whole bar); a tempo event lands on the nearest bar line, the last one winning when several land together; the tempo is 120
- * until the first event. A run of at least `RAMP_MIN_EVENTS` tempo events moving the same way, no further than `RAMP_MAX_GAP` ticks
- * (in quarters) apart, within one meter, is one ramp region (`rampTo`) up to the bar of the run's last event, which sets that tempo;
+ * until the first event. A run of at least `RAMP_MIN_EVENTS` tempo events moving the same way, each less than a bar after the last and not
+ * all on bar lines, within one meter, is one ramp region (`rampTo`) up to the bar of the run's last event, which sets that tempo;
  * the ramp's end tempo is fitted so it takes as long as the file's steps do. Neighbouring regions with the same tempo and meter are
  * merged. Always starts at bar 1.
  */
@@ -424,11 +423,13 @@ export function smfRegions(smf: Smf): FileRegion[] {
   const rampAt = new Map<number, { bpm: number; rampTo: number }>() // bar -> ramp that starts there
   const seconds = smfSeconds(smf)
   const barTick = (b: number) => { const sg = segAt((x) => x.bar <= b); return sg.tick + (b - sg.bar) * sg.barTicks }
+  const dense = (a: number, b: number) => evs[b].tick - evs[a].tick < segAt((x) => x.tick <= evs[a].tick).barTicks
+  const onBarLine = (tick: number) => { const sg = segAt((x) => x.tick <= tick); return Math.abs((tick - sg.tick) / sg.barTicks - Math.round((tick - sg.tick) / sg.barTicks)) < 1e-6 }
   for (let i = 0; i < evs.length; i++) {
     let j = i + 1
     const dir = evs[j] ? Math.sign(evs[j].bpm - evs[i].bpm) : 0
-    while (dir && evs[j + 1] && evs[j + 1].tick - evs[j].tick <= RAMP_MAX_GAP * smf.ppq && Math.sign(evs[j + 1].bpm - evs[j].bpm) === dir) j++
-    if (dir && j - i + 1 >= RAMP_MIN_EVENTS && evs[i + 1].tick - evs[i].tick <= RAMP_MAX_GAP * smf.ppq) {
+    while (dir && evs[j + 1] && dense(j, j + 1) && Math.sign(evs[j + 1].bpm - evs[j].bpm) === dir) j++
+    if (dir && j - i + 1 >= RAMP_MIN_EVENTS && dense(i, i + 1) && evs.slice(i, j + 1).some((e) => !onBarLine(e.tick))) {
       const b0 = barOfTick(evs[i].tick), b1 = barOfTick(evs[j].tick)
       if (b1 > b0 && !segs.some((x) => x.bar > b0 && x.bar <= b1)) {
         const from = evs[i].bpm, ticks = barTick(b1) - barTick(b0), want = seconds(barTick(b1)) - seconds(barTick(b0))

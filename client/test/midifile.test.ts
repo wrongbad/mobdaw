@@ -234,6 +234,8 @@ describe('importing tempo and meter changes', () => {
     expect(smfRegions({ ...base, meters: [], tempos: [{ tick: 0, bpm: 100 }, { tick: 1920, bpm: 110 }, { tick: 3840, bpm: 90 }] })).toEqual([
       { bar: 1, bpm: 100, num: 4, den: 4 }, { bar: 2, bpm: 110, num: 4, den: 4 }, { bar: 3, bpm: 90, num: 4, den: 4 },
     ])
+    const stairs = [120, 110, 100, 90].map((bpm, k) => ({ tick: k * 1920, bpm }))
+    expect(smfRegions({ ...base, meters: [], tempos: stairs })).toEqual(stairs.map((t, k) => ({ bar: k + 1, bpm: t.bpm, num: 4, den: 4 }))) // a per-bar staircase stays steps
     const tempos = [{ tick: 0, bpm: 100 }, { tick: 1920, bpm: 100 }, ...[1, 2, 3, 4].map((k) => ({ tick: 1920 + k * 480, bpm: 100 + k * 5 })), { tick: 5 * 1920, bpm: 60 }]
     const rs = smfRegions({ ...base, meters: [], tempos })
     expect(rs).toMatchObject([{ bar: 1, bpm: 100 }, { bar: 2, bpm: 100 }, { bar: 3, bpm: 120 }, { bar: 6, bpm: 60 }])
