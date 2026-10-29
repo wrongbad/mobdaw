@@ -101,34 +101,56 @@ class HeardNote(NamedTuple):
 @dataclass
 class Rhythm:
     """Onset strength (0..1) per slot of every bar: `bars` maps a bar's start (quarters) to its slot list; a slot is `slot`
-    quarters (a 16th = 1/4 in 4/4), a beat is `beat` quarters."""
+    quarters (a 16th = 1/4 in 4/4), a beat is `beat` quarters. `slot` and `beat` are the defaults; `slots` / `beats` map the
+    start of a bar that differs (a take across a meter change, e.g. 4/4 into 6/8) to its own slot and beat. A bar with uneven
+    beats (2+2+3 eighths) has the length of its first beat as its `beat`."""
     slot: Fraction
     beat: Fraction
     bars: dict[Fraction, list[float]] = field(default_factory=dict)
+    slots: dict[Fraction, Fraction] = field(default_factory=dict)
+    beats: dict[Fraction, Fraction] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.slot, self.beat = Fraction(self.slot), Fraction(self.beat)
         self.bars = {Fraction(k): [float(x) for x in v] for k, v in sorted(self.bars.items())}
+        self.slots = {Fraction(k): Fraction(v) for k, v in sorted(self.slots.items())}
+        self.beats = {Fraction(k): Fraction(v) for k, v in sorted(self.beats.items())}
+
+    def slot_of(self, bar: Fraction) -> Fraction:
+        """The slot length (quarters) of the bar starting at `bar`."""
+        return self.slots.get(Fraction(bar), self.slot)
+
+    def _bar_at(self, t) -> Fraction | None:
+        return next((a for a in reversed(self.bars) if a <= t), None)
+
+    def beat_at(self, t) -> Fraction:
+        """The beat length (quarters) of the bar that holds t (the default before the first bar)."""
+        return self.beats.get(self._bar_at(t), self.beat)
+
+    def slot_at(self, t) -> Fraction:
+        """The slot length (quarters) of the bar that holds t."""
+        return self.slots.get(self._bar_at(t), self.slot)
 
     def bar_spans(self) -> list[tuple[Fraction, Fraction]]:
-        return [(a, a + len(v) * self.slot) for a, v in self.bars.items()]
+        return [(a, a + len(v) * self.slot_of(a)) for a, v in self.bars.items()]
 
     def at(self, t) -> float:
         """The strength of the slot starting exactly at t (0 where there is none)."""
         for a, v in self.bars.items():
-            k = (Fraction(t) - a) / self.slot
+            k = (Fraction(t) - a) / self.slot_of(a)
             if k.denominator == 1 and 0 <= k < len(v):
                 return v[int(k)]
         return 0.0
 
     def onsets(self, start, end, min: float = 0.5) -> list[tuple[Fraction, float]]:
         """(time, strength) of every slot in [start, end) at least `min` strong."""
-        return [(a + i * self.slot, x) for a, v in self.bars.items() for i, x in enumerate(v)
-                if x >= min and start <= a + i * self.slot < end]
+        return [(a + i * self.slot_of(a), x) for a, v in self.bars.items() for i, x in enumerate(v)
+                if x >= min and start <= a + i * self.slot_of(a) < end]
 
     def source(self, ind: str = "") -> str:
         rows = "".join(f"\n{ind}    {_num(a)}: [{', '.join(f'{x:.2f}'.rstrip('0').rstrip('.') or '0' for x in v)}]," for a, v in self.bars.items())
-        return f"Rhythm({_num(self.slot)}, {_num(self.beat)}, {{{rows}\n{ind}}})"
+        extra = "".join(f", {k}={{{', '.join(f'{_num(a)}: {_num(x)}' for a, x in d.items())}}}" for k, d in (("slots", self.slots), ("beats", self.beats)) if d)
+        return f"Rhythm({_num(self.slot)}, {_num(self.beat)}, {{{rows}\n{ind}}}{extra})"
 
     __repr__ = source
 

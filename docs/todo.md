@@ -14,7 +14,7 @@ The fix is known and fits in a file or two; no design decisions left.
 
 ### Agent
 
-- **Heard parts assume one beat unit and 16th slots.** `listen` sizes rhythm slots from the first bar's beat, so a take across a meter change with a different denominator gets mislabelled rhythm slots (compound 6/8, 9/8 and 12/8 are grouped by three, but only when the region has no other `groups`). Fix: store the slot per bar in `Rhythm`; group irregular `groups` (2+2+3) beats too.
+- **Heard takes across beats of different lengths skip the feel's slots.** `Rhythm` now has a slot and beat per bar and `beat_grid` groups 2+2+3 and 6/8, but `_listen_a` (`audio/listen.py`) only remaps rhythm/notes to a swing or triplet feel's slots when every beat is the same length (otherwise it keeps 16th slots), and the notes chart (`format_chart` in `audio/hear.py`) prints durations with one `beat_q`. Fix: make `_slot_rhythm` and the chart take the beat length per beat.
 
 - **The meter has no 6-beat or 5-beat reading and trusts the tracker's beat level.** `timing.meter` scores 2, 3, 4 beats per bar; 6/8 is read only when the beat tracker locks to the dotted quarter (the triplet feel then makes the unit '8'). If it locks to the eighths, 6/8 comes out as 2/4 or 3/4 with low confidence; 5/4, 7/8 and free bars are read as the nearest of 2-4. Fix when it bites: add period 5/6/7 candidates and score each against the beat level the tracker did not choose.
 

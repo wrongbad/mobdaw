@@ -260,23 +260,30 @@ class Timeline:
 
     def beat_grid(self, from_bar: int, to_bar: int, compound: bool = False) -> list[tuple[float, Fraction, bool]]:
         """Every beat of bars [from_bar, to_bar) as (seconds, tick, is_bar_start). A beat is a 1/den note (`beatTicks`); a free
-        bar has just its bar line. `compound`: in 6/8, 9/8, 12/8 (groups of three, or none given) a beat is the dotted quarter,
-        a group of three 1/8s, which is how such a bar is felt (and how chords change)."""
+        bar has just its bar line. `compound`: a bar with `groups` (2+2+3) has a beat per group, and 6/8, 9/8, 12/8 without
+        groups have one per three 1/8s (the dotted quarter), which is how such a bar is felt (and how chords change)."""
         out = []
         for bar in range(from_bar, to_bar):
             s = self.spans[max(0, bisect_right(self._bar0, bar) - 1)]
             t0 = self.bar_start(bar)
-            step = 3 if compound and self._compound(s) else 1
-            for k in range(0, 1 if s.free else math.ceil(s.bar_ticks / s.beat_ticks - Fraction(1, 10**9)), step):
+            for k in self._beat_offsets(s, compound):
                 t = t0 + k * s.beat_ticks
                 out.append((self.seconds_at(t), t, k == 0))
         return out
 
-    def _compound(self, s: _Span) -> bool:
-        if s.free or s.num < 6 or s.num % 3 or s.beat_ticks * 2 != self.ppq:
-            return False
-        r = next((r for r in self.regions if r["bar"] == s.bar), None)
-        return all(g == 3 for g in (r or {}).get("groups") or [3])
+    def _beat_offsets(self, s: _Span, compound: bool) -> list[int]:
+        """Where each beat of a bar of span s starts, in 1/den notes from the bar line."""
+        if s.free:
+            return [0]
+        n = math.ceil(s.bar_ticks / s.beat_ticks - Fraction(1, 10**9))
+        if not compound:
+            return list(range(n))
+        groups = (next((r for r in self.regions if r["bar"] == s.bar), None) or {}).get("groups")
+        if groups and len(groups) > 1 and sum(groups) == n and s.beat_ticks * 2 <= self.ppq:
+            return [sum(groups[:i]) for i in range(len(groups))]
+        if not groups and n >= 6 and n % 3 == 0 and s.beat_ticks * 2 == self.ppq:
+            return list(range(0, n, 3))
+        return list(range(n))
 
 
 def _meter_text(r: dict) -> str:

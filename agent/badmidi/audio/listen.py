@@ -124,7 +124,7 @@ def _json_default(o):
 def _heard_from_json(d: dict) -> hear.Heard:
     return hear.Heard(d["tuning_cents"], hear.Key(**d["key"]), hear.GridCheck(**d["grid_check"]),
                       [hear.ChordSpan(**{**c, "runner_up": tuple(c["runner_up"]) if c["runner_up"] else None}) for c in d["chords"]],
-                      hear.Rhythm(d["rhythm"]["slots_per_beat"], d["rhythm"]["bars"]), hear.Onsets(**d["onsets"]),
+                      hear.Rhythm(d["rhythm"]["slots_per_beat"], d["rhythm"]["bars"], d["rhythm"].get("beat_slots")), hear.Onsets(**d["onsets"]),
                       [hear.HeardNote(**{**n, "start_beat": Fraction(n["start_beat"]), "end_beat": Fraction(n["end_beat"])}) for n in d["notes"]],
                       d["mode"], hear.Decision(**d["decision"]) if d["decision"] else None)
 
@@ -318,23 +318,31 @@ def _listen_a(client, pid, state, t, clips, bars, mode, wait, cache_dir, snap, w
     hit = [c for c in clips if c["startSeconds"] < end_abs and c["startSeconds"] + c["lengthSeconds"] > origin]
     if not hit:
         raise BridgeError(f"track {t['name']!r} has no audio in bars {first}-{last}")
-    beat = (bg[1][1] - bg[0][1]) / tl.ppq if len(bg) > 1 else Fraction(1)
-    if beat * snap % 4:
-        raise BridgeError(f"--snap {snap}: a beat of {beat} quarters does not divide into 1/{snap} notes")
+    ticks = [tk for _, tk, _ in bg] + [end_tick]
+    lens = [_beat_len(Fraction(b - a) / tl.ppq) for a, b in zip(ticks, ticks[1:])] if len(bg) > 1 else [Fraction(1)] * len(bg)
+    beat = lens[0]
+    for ln in sorted(set(lens)):
+        if ln * snap % 4:
+            raise BridgeError(f"--snap {snap}: a beat of {ln} quarters does not divide into 1/{snap} notes")
+    spbs = [max(1, round(Fraction(snap) * ln / 4)) for ln in lens]       # slots are 16th notes (or --snap), whatever the beat
+    even = len(set(lens)) == 1
     cache = os.path.join(cache_dir or default_cache_dir(), "analysis", _key(hit, mode, grid, origin, snap, "a") + ".json")
-    compound = beat == Fraction(3, 2)
+    compound = set(lens) == {Fraction(3, 2)}
 
     def analyse() -> tuple[hear.Heard, dict]:
         x = _window(client, pid, state, t, origin, end_abs, wait, cache_dir)
-        spb = max(1, round(Fraction(snap) * beat / 4))         # slots are 16th notes (or --snap), whatever the beat
         f = timing.features(x)
         o = hear.onsets(x)
         per_bar = int(np.median([b - a for a, b in grid.bars()])) if grid.bars() else 4
         al = timing.align(o.times, grid.beats, timing.beats(f).times, o.strengths, per_bar)
         fl = timing.feel(o.times, al.played_beats, o.strengths)
         fl = _compound_feel(fl) if compound else fl
-        h = hear.hear(x, SR, timing.played_grid(al, grid), mode, spb)
-        h.rhythm = _slot_rhythm(o, al, fl, grid) if h.mode == "chords" or fl.kind != "straight16" else h.rhythm
+        h = hear.hear(x, SR, timing.played_grid(al, grid), mode, spbs[0] if even else spbs)
+        if not even:                                           # beats of different lengths: slots of the same length, not the feel's notated count
+            if h.mode == "chords":
+                h.rhythm = hear.rhythm(o, grid, spbs)
+        elif h.mode == "chords" or fl.kind != "straight16":
+            h.rhythm = _slot_rhythm(o, al, fl, grid)
         _remap_notes(h, al, fl)
         info = {"case": "a", "feel": _feel_json(fl), "align": {**{k: v for k, v in asdict(al).items() if k != "played_beats"}, "played_beats": al.played_beats}}
         return h, info
@@ -496,6 +504,11 @@ def _listen_b(client, pid, state, t, clips, bars, mode, wait, cache_dir, snap, w
     return Listened(part, h, grid, len({c["sourceHash"] for c in hit}), (first, last), t["name"], beat, tm, prop if use else None, where)
 
 
+def _beat_len(gap: Fraction) -> Fraction:
+    """A beat's length in quarters, from the gap to the next beat: a free bar's single 'beat' is its whole length, so cap it."""
+    return min(gap, Fraction(2))
+
+
 def _part(h: hear.Heard, grid: hear.Grid, q: list[Fraction], beat: Fraction, track: str, first: int, tm: HeardTiming,
           bar_q: Fraction | None = None, skip_pickup: bool = False) -> HeardPart:
     """The analysis in score time (quarter notes): `q` is the start of every beat of the grid and then the end of the last, in
@@ -518,14 +531,17 @@ def _part(h: hear.Heard, grid: hear.Grid, q: list[Fraction], beat: Fraction, tra
     edges = grid.edges()
     notes = [HeardNote(at(n.start_beat), at(n.end_beat), n.pitch, n.velocity, n.confidence,
                        round(float(np.interp(n.raw_onset_s, edges, [float(x) for x in q])), 3)) for n in h.notes]
-    spb = h.rhythm.slots_per_beat
+    spbs = h.rhythm.beat_slots or [h.rhythm.slots_per_beat] * len(grid.beats)
     bars = grid.bars()
     starts = [q[a] for a, _ in bars]
+    beats = [_beat_len(q[a + 1] - q[a]) for a, _ in bars]       # each bar's own beat and slot: the meter can change in a take
+    slots = [bt / spbs[a] for (a, _), bt in zip(bars, beats)]
     rows = h.rhythm.bars
     if skip_pickup and len(rows) == len(bars) > 1:
-        starts[0] = bar_q if bar_q is not None else starts[0]
-        rows, chords = _free_bar(rows, chords, starts[0], starts[1], beat / spb)
-    rhythm = Rhythm(beat / spb, beat, dict(zip(starts, rows))) if rows and len(starts) == len(rows) else None
+        starts[0], beats[0], slots[0] = bar_q if bar_q is not None else starts[0], beat, beat / spbs[0]
+        rows, chords = _free_bar(rows, chords, starts[0], starts[1], slots[0])
+    rhythm = (Rhythm(slots[0], beats[0], dict(zip(starts, rows)), {a: x for a, x in zip(starts, slots) if x != slots[0]},
+                     {a: x for a, x in zip(starts, beats) if x != beats[0]}) if rows and len(starts) == len(rows) else None)
     return HeardPart(track, f"{_clean_name(track) or 'track'} (heard)", h.key.name, round(h.tuning_cents), _where(tm),
                      first, chords, rhythm, h.mode, notes, tm)
 

@@ -411,6 +411,63 @@ class TestCaseB(unittest.TestCase):
         self.assertIsNone(res.proposal)
         self.assertIn("no steady beat", res.timing.warnings[0])
 
+@unittest.skipIf(np is None, "numpy/soundfile not installed")
+class TestSlotsPerBar(unittest.TestCase):
+    """A heard part's rhythm has its own slot (and beat) for each bar, so a take across a meter change is not mislabelled."""
+
+    def part(self, regions, to_bar):
+        tl = Timeline({"meta": {"ppq": PPQ}, "regions": regions})
+        bg = tl.beat_grid(1, to_bar, compound=True)
+        ticks = [tk for _, tk, _ in bg] + [tl.bar_start(to_bar)]
+        grid = L.hear.Grid([s - bg[0][0] for s, _, _ in bg], [b for *_, b in bg], tl.seconds_at(ticks[-1]) - bg[0][0])
+        lens = [L._beat_len(F(b - a) / PPQ) for a, b in zip(ticks, ticks[1:])]
+        spbs = [round(4 * ln) for ln in lens]
+        h = L.hear.Heard(0.0, L.hear.Key(0, "major", "C major", 1.0, 1.0), L.hear.GridCheck(0, 0, 0, True), [],
+                         L.hear.rhythm(L.hear.Onsets([], []), grid, spbs))
+        q = [F(t) / PPQ for t in ticks]
+        return L._part(h, grid, q, lens[0], "Guitar", 1, HeardTiming("a")), bg
+
+    def test_a_meter_change_gives_each_bar_its_own_slot(self):
+        part, bg = self.part([{"id": "a", "kind": "metered", "bar": 1, "bpm": 90, "meter": "4/4"},
+                              {"id": "b", "kind": "metered", "bar": 2, "bpm": 90, "meter": "6/8"}], 4)
+        r = part.rhythm
+        self.assertEqual([tk for _, tk, _ in bg], [0, 960, 1920, 2880, 3840, 5280, 6720, 8160])
+        self.assertEqual((r.slot, r.beat, r.slots, r.beats), (F(1, 4), F(1), {}, {F(4): F(3, 2), F(7): F(3, 2)}))
+        self.assertEqual({a: len(v) for a, v in r.bars.items()}, {F(0): 16, F(4): 12, F(7): 12})
+        self.assertEqual(r.beat_at(F(5)), F(3, 2))
+        self.assertEqual(r.slot_at(F(5)), F(1, 4), "6/8 keeps 16th notes: six to the dotted quarter")
+        self.assertEqual(r.bar_spans(), [(F(0), F(4)), (F(4), F(7)), (F(7), F(10))])
+        # a serialized rhythm reads back the same, and one without the per-bar fields is the old single-slot form
+        self.assertEqual(eval(r.source(), {"Rhythm": type(r), "Fraction": F}).beats, r.beats)
+        old = type(r)(F(1, 4), 1, {F(0): [1.0, 0, 0, 0]})
+        self.assertEqual((old.slots, old.beats, old.slot_at(F(2)), old.beat_at(F(2))), ({}, {}, F(1, 4), F(1)))
+        self.assertNotIn("slots=", old.source())
+
+    def test_slots_of_a_denominator_change(self):
+        part, _ = self.part([{"id": "a", "kind": "metered", "bar": 1, "bpm": 90, "meter": "4/4"},
+                             {"id": "b", "kind": "metered", "bar": 2, "bpm": 90, "meter": "6/8", "groups": [3, 3]}], 3)
+        r = part.rhythm
+        self.assertEqual((r.slot_of(F(0)), r.slot_of(F(4))), (F(1, 4), F(1, 4)))
+        self.assertEqual((r.beat_at(F(0)), r.beat_at(F(4))), (F(1), F(3, 2)))
+
+    def test_irregular_groups_are_beats(self):
+        part, bg = self.part([{"id": "a", "kind": "metered", "bar": 1, "bpm": 90, "meter": "7/8", "groups": [2, 2, 3]}], 3)
+        self.assertEqual([tk for _, tk, _ in bg][:3], [0, 960, 1920], "a beat per group: 2 + 2 + 3 eighths")
+        self.assertEqual(len(bg), 6)
+        r = part.rhythm
+        self.assertEqual(len(r.bars[F(0)]), 14, "sixteen-note slots: 4 + 4 + 6")
+        self.assertEqual((r.slot, r.beat), (F(1, 4), F(1)))
+
+    def test_bass_follows_the_bar_it_is_in(self):
+        part, _ = self.part([{"id": "a", "kind": "metered", "bar": 1, "bpm": 90, "meter": "4/4"},
+                             {"id": "b", "kind": "metered", "bar": 2, "bpm": 90, "meter": "6/8"}], 4)
+        c = bass.HeardChord(F(0), F(10), "C", 0, 0, "M")
+        ons, t = [], F(0)
+        for n in bass.line([c], part.rhythm, "root-fifth").notes:
+            ons.append(t)
+            t += n.dur
+        self.assertEqual(ons, [F(k) for k in range(4)] + [F(4), F(11, 2), F(7), F(17, 2)], "quarters in 4/4, dotted quarters in 6/8")
+
 
 if __name__ == "__main__":
     unittest.main()

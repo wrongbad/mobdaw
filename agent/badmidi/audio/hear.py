@@ -72,9 +72,11 @@ class Onsets:
 
 @dataclass
 class Rhythm:
-    """Onset strength (0..1) per slot, one list per bar."""
+    """Onset strength (0..1) per slot, one list per bar. `beat_slots`: the slots of each beat of the grid when they differ
+    (beats of different lengths: 4/4 into 6/8); `slots_per_beat` is then the first beat's."""
     slots_per_beat: int
     bars: list[list[float]]
+    beat_slots: list[int] | None = None
 
 
 @dataclass
@@ -294,13 +296,20 @@ def onsets(x: np.ndarray) -> Onsets:
     return Onsets(((start * hop - lead) / SR - ONSET_DELAY).tolist(), np.minimum(st / max(np.percentile(st, 90), 1e-9), 1.0).tolist())
 
 
-def _slot_times(grid: Grid, spb: int) -> np.ndarray:
+def _beat_slots(grid: Grid, spb: "int | list[int]") -> list[int]:
+    """Slots in each beat of the grid: `spb` itself when it is a list (one per beat), else that many in every beat."""
+    return [int(x) for x in spb] if not isinstance(spb, int) else [spb] * len(grid.beats)
+
+
+def _slot_times(grid: Grid, spb: "int | list[int]") -> np.ndarray:
     e = grid.edges()
-    return (e[:-1, None] + (e[1:] - e[:-1])[:, None] * np.arange(spb)[None] / spb).ravel()
+    n = _beat_slots(grid, spb)
+    return np.concatenate([e[i] + (e[i + 1] - e[i]) * np.arange(k) / k for i, k in enumerate(n)]) if n else np.zeros(0)
 
 
-def rhythm(x_or_onsets, grid: Grid, slots_per_beat: int = 4, shift: float = 0.0) -> Rhythm:
-    """Onset strength per slot (default 16ths) for each bar of the grid. `shift` is subtracted from onset times."""
+def rhythm(x_or_onsets, grid: Grid, slots_per_beat: "int | list[int]" = 4, shift: float = 0.0) -> Rhythm:
+    """Onset strength per slot (default 16ths) for each bar of the grid. `slots_per_beat` is one number or one per beat.
+    `shift` is subtracted from onset times."""
     o = x_or_onsets if isinstance(x_or_onsets, Onsets) else onsets(x_or_onsets)
     slots = _slot_times(grid, slots_per_beat)
     acc = np.zeros(len(slots))
@@ -310,7 +319,9 @@ def rhythm(x_or_onsets, grid: Grid, slots_per_beat: int = 4, shift: float = 0.0)
         j = np.where(np.abs(slots[np.minimum(j + 1, len(slots) - 1)] - t) < np.abs(slots[j] - t), j + 1, j)
         ok = (t >= slots[0] - 0.05) & (t < grid.edges()[-1] + 0.05)
         np.maximum.at(acc, j[ok], np.asarray(o.strengths)[ok])
-    return Rhythm(slots_per_beat, [acc[a * slots_per_beat:b * slots_per_beat].round(3).tolist() for a, b in grid.bars()])
+    n = _beat_slots(grid, slots_per_beat)
+    cum = [0] + list(np.cumsum(n))
+    return Rhythm(n[0] if n else 4, [acc[cum[a]:cum[b]].round(3).tolist() for a, b in grid.bars()], None if len(set(n)) <= 1 else n)
 
 
 def _drift(t: np.ndarray, off: np.ndarray, slot: float) -> float:
@@ -874,9 +885,9 @@ def _split_on_onsets(segs, db, on_idx, rms_rise: float = 5.0):
     return out
 
 
-def hear_notes(x: np.ndarray, sr: int, grid: Grid, snap: int = 4, track: F0Track | None = None) -> Heard:
+def hear_notes(x: np.ndarray, sr: int, grid: Grid, snap: "int | list[int]" = 4, track: F0Track | None = None) -> Heard:
     """A sung or single-note line: tuning, key, grid check, notes (quantized to `snap` slots per beat, 4 = 16ths in a
-    quarter-note beat), rhythm. The notes' `raw_onset_s` are the unquantized onsets."""
+    quarter-note beat; a list: one per beat), rhythm. The notes' `raw_onset_s` are the unquantized onsets."""
     x = prepare(x, sr)
     tr = track or f0_track(x)
     hop = F0_HOP / SR
@@ -922,11 +933,16 @@ def hear_notes(x: np.ndarray, sr: int, grid: Grid, snap: int = 4, track: F0Track
     return Heard(cents, key, gc, guess_chords(notes, grid, key), rh, on, notes, "notes")
 
 
-def _quantize(raw, grid: Grid, snap: int, shift: float, ref_db: float) -> list[HeardNote]:
+def _quantize(raw, grid: Grid, snap: "int | list[int]", shift: float, ref_db: float) -> list[HeardNote]:
     """Onsets and ends to the nearest slot; a note is at least a slot long, never past the next note's start, and a gap
     of under a slot and 60 ms to the next note is closed (legato)."""
     slots = np.append(_slot_times(grid, snap), grid.edges()[-1])
     nslots = len(slots) - 1
+    cum = np.cumsum([0] + _beat_slots(grid, snap))
+
+    def beat_of(k: int) -> Fraction:                           # slot index to beats (a Fraction)
+        i = min(int(np.searchsorted(cum, k, side="right")) - 1, len(cum) - 2)
+        return Fraction(i) + Fraction(k - int(cum[i]), int(cum[i + 1] - cum[i]))
     q = []
     for t0, t1, pitch, db, conf in raw:
         if t0 - shift < slots[0] - 0.05 or t0 - shift >= slots[-1]:
@@ -946,7 +962,7 @@ def _quantize(raw, grid: Grid, snap: int, shift: float, ref_db: float) -> list[H
         e = min(max(e, s + 1), nslots)
         if s >= nslots:
             continue
-        out.append(HeardNote(Fraction(s, snap), Fraction(e, snap), pitch, vel, round(conf, 2), round(t0, 4)))
+        out.append(HeardNote(beat_of(s), beat_of(e), pitch, vel, round(conf, 2), round(t0, 4)))
     return out
 
 
@@ -1010,7 +1026,7 @@ def guess_chords(notes: list[HeardNote], grid: Grid, key: Key) -> list[ChordSpan
     return out
 
 
-def hear(x: np.ndarray, sr: int, grid: Grid, mode: str = "auto", snap: int = 4) -> Heard:
+def hear(x: np.ndarray, sr: int, grid: Grid, mode: str = "auto", snap: "int | list[int]" = 4) -> Heard:
     """Chords or notes: `mode` 'auto' decides by voicing (see `decide`), or force 'chords' / 'notes'."""
     if mode == "chords":
         return hear_chords(x, sr, grid)
@@ -1074,10 +1090,15 @@ def format_chart(h: Heard, grid: Grid, name: str = "audio", first_bar: int = 1, 
         lines.append("(guess: the key's triad covering most of the bar's notes, strong beats counting more; a rough starting point "
                      "for bass.line, NOT heard. ? = unsure pitch, ~ = tied on)")
     if h.rhythm.bars:
-        spb = h.rhythm.slots_per_beat
+        per_beat = iter(h.rhythm.beat_slots or [])
         runs: list[list] = []                                    # [first bar, last bar, text]
         for n, row in enumerate(h.rhythm.bars, first_bar):
-            text = " ".join("".join("x" if v >= 0.5 else "o" if v >= 0.2 else "." for v in row[i:i + spb]) for i in range(0, len(row), spb))
+            cells, i = [], 0
+            while i < len(row):
+                k = next(per_beat, h.rhythm.slots_per_beat)
+                cells.append("".join("x" if v >= 0.5 else "o" if v >= 0.2 else "." for v in row[i:i + k]))
+                i += k
+            text = " ".join(cells)
             if runs and runs[-1][2] == text and runs[-1][1] == n - 1:
                 runs[-1][1] = n
             else:

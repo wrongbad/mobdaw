@@ -50,10 +50,10 @@ class _Voice:
         return self.prev
 
 
-def _step(rhythm: Rhythm | None) -> Fraction:
-    """The pulse's step in quarters: an 8th, or a third of the beat when the heard rhythm is in thirds (a triplet feel)."""
-    if rhythm and rhythm.slot and rhythm.beat / rhythm.slot in (3, 6):
-        return rhythm.beat / 3
+def _step(rhythm: Rhythm | None, t: Fraction) -> Fraction:
+    """The pulse's step in quarters at t: an 8th, or a third of the beat when the heard rhythm is in thirds (a triplet feel)."""
+    if rhythm and rhythm.slot_at(t) and rhythm.beat_at(t) / rhythm.slot_at(t) in (3, 6):
+        return rhythm.beat_at(t) / 3
     return Fraction(1, 2)
 
 
@@ -103,13 +103,14 @@ def line(chords, rhythm: Rhythm | None = None, style: str = "roots", key=None, r
     kick = sorted(Fraction(k) for k in kick or [])
     lo, hi = as_pitch(range[0]).midi, as_pitch(range[1]).midi
     t0, end = chords[0].start, chords[-1].end
-    beat = rhythm.beat if rhythm else Fraction(1)
+    def beat_at(t: Fraction) -> Fraction:
+        return rhythm.beat_at(t) if rhythm else Fraction(1)
     bars = _bars(t0, end, rhythm)
-    step = _step(rhythm)
     sw = Fraction(min(max(round((swing or 0.5) * 48), 24), 40), 48)            # where the off-beat 8th falls in its beat
 
     def swung(t: Fraction) -> Fraction:
         """An off-beat 8th (halfway through a beat of the bar) moved to where the take swung it."""
+        beat = beat_at(t)
         u = (t - _bar_start(t, bars)) / beat
         return t + (sw - Fraction(1, 2)) * beat if sw != Fraction(1, 2) and u - (u.numerator // u.denominator) == Fraction(1, 2) else t
 
@@ -129,15 +130,15 @@ def line(chords, rhythm: Rhythm | None = None, style: str = "roots", key=None, r
             k = 0
             t = c.start
             while t < c.end:
-                k = int((t - max(c.start, _bar_start(t, bars))) / beat)
+                k = int((t - max(c.start, _bar_start(t, bars))) / beat_at(t))
                 out.append((t, v.pick(c.bass if k % 2 == 0 else fifth), False))
-                t += beat
+                t += beat_at(t)
         elif style == "pulse":
             grid = []
             t = c.start
             while t < c.end:
                 grid.append(t)
-                t += step
+                t += _step(rhythm, t)
             heard = rhythm.onsets(c.start, c.end, STRONG) if rhythm else []
             hits = {t for t, _ in heard} | {k for k in kick if c.start <= k < c.end}
             pitch = v.pick(c.bass)
@@ -145,6 +146,7 @@ def line(chords, rhythm: Rhythm | None = None, style: str = "roots", key=None, r
             for t in sorted(on):
                 out.append((t, pitch, on[t]))
         else:                                                  # walk
+            beat = beat_at(c.start)
             n = max(1, -((c.start - c.end) // beat))
             third, fifth = c.third(), c.fifth()
             mids = [fifth] if n == 3 else ([third, fifth, c.root, fifth] * n)
