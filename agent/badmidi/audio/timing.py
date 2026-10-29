@@ -96,7 +96,7 @@ class Reading:
 
 @dataclass
 class Meter:
-    beats_per_bar: int           # of the beats given: 2, 3 or 4
+    beats_per_bar: int           # of the beats given: 2 to 5
     unit: str                    # '4' simple (the beat is a quarter, split in two) or '8' compound (a dotted quarter, split in three)
     downbeat_index: int          # index of the first downbeat in the beats given (the beats before it are a pickup)
     first_downbeat_s: float
@@ -491,11 +491,12 @@ def _soft(t: float) -> float:
     return t if t > 0 else 0.3 * t
 
 
+ODD_PRIOR = 0.4                                                   # 5 beats to a bar must beat 2-4 by this much (it is a rarer meter)
 FEATURE_W = {"acc": (0.6, 0.1), "low": (0.6, 0.1), "lvl": (1.0, 1.0), "chord": (1.2, 0.04)}      # weight, floor of the spread (envelope units)
 
 
 def meter(x, beat_times, feel_: Feel | None = None, chord_changes=None) -> Meter:
-    """Beats per bar (2, 3 or 4), unit and the first downbeat of the beats given. Every (beats per bar, phase) is scored by how
+    """Beats per bar (2 to 5), unit and the first downbeat of the beats given. Every (beats per bar, phase) is scored by how
     much more the beats on its bar lines carry: an onset, bass energy, a change of harmony (cheap beat chroma, or `chord_changes`,
     seconds). `feel_` with a triplet subdivision makes the beat a dotted quarter (6/8, 9/8, 12/8). Confidence: how far the best
     stands over noise and over the runner-up."""
@@ -506,11 +507,11 @@ def meter(x, beat_times, feel_: Feel | None = None, chord_changes=None) -> Meter
     if feel_ is None:
         feel_ = feel(_env_onsets(f.env), B)
     feats = _beat_features(f, B, chord_changes)
-    cand = [(P, ph) for P in (4, 3, 2) for ph in range(P)]
+    cand = [(P, ph) for P in (4, 3, 2, 5) for ph in range(P)]
     T = {k: np.array([_tstat(feats[k], P, ph, fl) for P, ph in cand]) for k, (w, fl) in FEATURE_W.items()}
     use = [k for k in T if T[k].max() >= 3.0] or list(T)              # only the features that say something count; the rest is noise
     tot = sum(FEATURE_W[k][0] * np.where(T[k] > 0, T[k], 0.3 * T[k]) for k in use) / np.sqrt(sum(FEATURE_W[k][0] ** 2 for k in use))
-    sc = {c: float(v) for c, v in zip(cand, tot)}
+    sc = {c: float(v) - ODD_PRIOR * (c[0] == 5) for c, v in zip(cand, tot)}
     order = sorted(sc, key=lambda k: -sc[k])
     (P, ph), best = order[0], sc[order[0]]
     ru = next(k for k in order[1:])
@@ -765,12 +766,12 @@ def override_meter(mt: Meter, beat_times, meter_text: str | None = None, downbea
             num, den = (int(v) for v in meter_text.split("/"))
         except ValueError:
             raise ValueError(f"meter {meter_text!r}: write it as 3/4 or 6/8") from None
-        if den == 4 and num in (2, 3, 4):
+        if den == 4 and num in (2, 3, 4, 5):
             bpb, unit = num, "4"
         elif den == 8 and num in (6, 9, 12):
             bpb, unit = num // 3, "8"
         else:
-            raise ValueError(f"meter {meter_text!r}: use 2/4, 3/4, 4/4, 6/8, 9/8 or 12/8")
+            raise ValueError(f"meter {meter_text!r}: use 2/4, 3/4, 4/4, 5/4, 6/8, 9/8 or 12/8")
         d, conf, ru = d % bpb, 1.0, None
     d += downbeat_beat
     if d < 0 or n_beats - d < 2:

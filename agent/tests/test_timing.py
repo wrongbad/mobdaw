@@ -175,6 +175,11 @@ class TestMeter(unittest.TestCase):
         self.assertGreater(t.meter.confidence, 0.4)
         self.assertIsNotNone(t.meter.runner_up)                               # 6/8 vs 2/4 is named
 
+    def test_54(self):
+        t, _ = self.read(per_bar=5)
+        self.assertEqual((t.meter.signature, t.meter.downbeat_index), ((5, 4), 0))
+        self.assertGreater(t.meter.confidence, timing.UNSURE)
+
     def test_pickup(self):
         x, clock = take(pickup=2)
         t = timing.analyze(x)
@@ -385,12 +390,15 @@ class TestOverrideMeter(unittest.TestCase):
         m = timing.override_meter(self.READ, self.BEATS, downbeat_beat=1)
         self.assertEqual((m.downbeat_index, m.first_downbeat_s, m.confidence), (1, 0.5, 0.3))
 
+    def test_five_four_is_accepted(self):
+        self.assertEqual(timing.override_meter(self.READ, self.BEATS, "5/4").signature, (5, 4))
+
     def test_meter_keeps_the_pickup_within_the_new_bar(self):
         m = timing.override_meter(timing.Meter(4, "4", 3, 1.5, 0.9), self.BEATS, "3/4")
         self.assertEqual(m.downbeat_index, 0)
 
     def test_nonsense_is_refused(self):
-        for kw in ({"meter_text": "5/4"}, {"meter_text": "waltz"}, {"downbeat_beat": -1}, {"downbeat_beat": 23}):
+        for kw in ({"meter_text": "7/4"}, {"meter_text": "waltz"}, {"downbeat_beat": -1}, {"downbeat_beat": 23}):
             with self.subTest(kw), self.assertRaises(ValueError):
                 timing.override_meter(self.READ, self.BEATS, **kw)
 

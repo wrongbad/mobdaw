@@ -578,7 +578,7 @@ def _where(tm: HeardTiming) -> str:
 
 
 def add_meter_args(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--meter", metavar="N/D", help="case b: the meter, when the audio's reading is wrong (2/4, 3/4, 4/4, 6/8, 9/8, 12/8); the tracked beat is its beat")
+    ap.add_argument("--meter", metavar="N/D", help="case b: the meter, when the audio's reading is wrong (2/4, 3/4, 4/4, 5/4, 6/8, 9/8, 12/8); the tracked beat is its beat")
     ap.add_argument("--downbeat-beat", type=int, default=0, metavar="N",
                     help="case b: the first bar line is N tracked beats later than the audio's reading has it (negative: earlier)")
 
